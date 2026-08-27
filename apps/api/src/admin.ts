@@ -10,6 +10,7 @@ import {
   PrismaClient,
   TransactionType,
   WithdrawalStatus,
+  CharityAgentRole,
 } from '@trustme/db';
 import {
   decimalFromMicroUsdt,
@@ -18,6 +19,10 @@ import {
   readSolvency,
   rejectWithdrawal,
   withSerializableRetry,
+  createCharity,
+  updateCharity,
+  addCharityAgent,
+  revokeCharityAgent,
 } from '@trustme/core';
 import type { QueueLike } from './app.js';
 import { adminClaims, createAdminJwt, requireAdmin, requireRole, verifyAdminPassword } from './admin-auth.js';
@@ -70,6 +75,9 @@ const statusSchema = z.nativeEnum(WithdrawalStatus).optional();
 const limitSchema = z.coerce.number().int().min(1).max(100).default(50);
 const cursorSchema = z.string().min(1).optional();
 const dateSchema = z.string().datetime().optional();
+const charityCreateSchema = z.object({ name: z.string().trim().min(1), description: z.string().trim().optional(), contactEmail: z.string().email().optional(), isActive: z.boolean().optional() });
+const charityPatchSchema = charityCreateSchema.partial();
+const charityAgentSchema = z.object({ barcodeId: z.string().min(1), role: z.nativeEnum(CharityAgentRole).default(CharityAgentRole.AGENT) });
 
 function jsonValue(value: unknown): string {
   const secretKeys = new Set(['code', 'password', 'passwordHash', 'privateKey', 'HOT_WALLET_PRIVATE_KEY', 'ADMIN_JWT_SECRET', 'authorization', 'token', 'jwt']);
@@ -360,6 +368,74 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
         },
       });
       response.json({ id: rejected.id, status: rejected.status });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/charities', requireRole(AdminRole.ADMIN), async (request, response, next) => {
+    try {
+      const body = charityCreateSchema.parse(request.body);
+      const charity = await createCharity(prisma, {
+        name: body.name,
+        adminUserId: adminId(request),
+        ...(body.description === undefined ? {} : { description: body.description }),
+        ...(body.contactEmail === undefined ? {} : { contactEmail: body.contactEmail }),
+        ...(body.isActive === undefined ? {} : { isActive: body.isActive }),
+      });
+      response.status(201).json(charity);
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        next(new HttpError(409, 'charity already exists'));
+        return;
+      }
+      next(error);
+    }
+  });
+
+  router.patch('/charities/:id', requireRole(AdminRole.ADMIN), async (request, response, next) => {
+    try {
+      const body = charityPatchSchema.parse(request.body);
+      const charity = await updateCharity(prisma, {
+        charityId: z.string().uuid().parse(request.params.id),
+        adminUserId: adminId(request),
+        ...(body.name === undefined ? {} : { name: body.name }),
+        ...(body.description === undefined ? {} : { description: body.description }),
+        ...(body.contactEmail === undefined ? {} : { contactEmail: body.contactEmail }),
+        ...(body.isActive === undefined ? {} : { isActive: body.isActive }),
+      });
+      response.json(charity);
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        next(new HttpError(409, 'charity already exists'));
+        return;
+      }
+      next(error);
+    }
+  });
+
+  router.post('/charities/:id/agents', requireRole(AdminRole.ADMIN), async (request, response, next) => {
+    try {
+      const body = charityAgentSchema.parse(request.body);
+      const agent = await addCharityAgent(prisma, { charityId: z.string().uuid().parse(request.params.id), adminUserId: adminId(request), ...body });
+      response.status(201).json(agent);
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        next(new HttpError(409, 'agent already exists'));
+        return;
+      }
+      next(error);
+    }
+  });
+
+  router.delete('/charities/:id/agents/:userId', requireRole(AdminRole.ADMIN), async (request, response, next) => {
+    try {
+      const agent = await revokeCharityAgent(prisma, {
+        charityId: z.string().uuid().parse(request.params.id),
+        userId: z.string().uuid().parse(request.params.userId),
+        adminUserId: adminId(request),
+      });
+      response.json(agent);
     } catch (error) {
       next(error);
     }

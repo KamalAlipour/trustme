@@ -29,6 +29,7 @@ export const apiConfigSchema = z.object({
   rateLimitWindowMs: integer.default(60_000),
   rateLimitMax: integer.default(60),
   failoverMarkerPath: z.string().default('/etc/trustme/FAILED_OVER'),
+  mediaStorageDir: z.string().default('/var/lib/trustme/media'),
 });
 
 export type ApiConfig = z.infer<typeof apiConfigSchema>;
@@ -60,6 +61,7 @@ export function loadApiConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     rateLimitWindowMs: env.API_RATE_LIMIT_WINDOW_MS,
     rateLimitMax: env.API_RATE_LIMIT_MAX,
     failoverMarkerPath: env.FAILOVER_MARKER_PATH,
+    mediaStorageDir: env.MEDIA_STORAGE_DIR,
   });
   if (config.nodeEnv === 'production' && config.emailDelivery === 'log') {
     throw new Error('EMAIL_DELIVERY=log is not allowed in production');

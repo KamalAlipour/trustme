@@ -1,4 +1,6 @@
+import { randomUUID } from 'node:crypto';
 import express from 'express';
+import rateLimit from 'express-rate-limit';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import {
@@ -26,12 +28,22 @@ import {
   repayLoan,
   requestWithdrawal,
   transferCoupons,
+  approveRefund,
+  createRefundRequest,
+  rejectRefund,
+  createAidRequest,
+  attachAidDocuments,
+  approveAidRequest,
+  rejectAidRequest,
+  requestAidDocuments,
+  donateToCharity,
 } from '@trustme/core';
 import { DomainError } from '@trustme/core';
 import type { QueueLike } from './app.js';
 import { HttpError } from './http-error.js';
 import { isWeakPin, issueEmailCode, memberClaims, serializeMember, smtpSender, verifyAndSetEmail, verifyMemberPin } from './member-auth.js';
 import type { ApiConfig } from './config.js';
+import { deleteMediaFile, mediaPath, uploadMedia } from './media.js';
 
 export type MemberRouterDependencies = {
   config: ApiConfig;
@@ -68,6 +80,14 @@ const contactSchema = z.object({ barcodeId: barcodeIdSchema, alias: z.string().t
 const contactPatchSchema = z.object({ alias: z.string().trim().min(1).max(128) });
 const transactionQuerySchema = z.object({ cursor: z.string().min(1).optional(), limit: z.coerce.number().int().min(1).max(100).default(25) });
 const contactsQuerySchema = z.object({ query: z.string().optional(), sort: z.enum(['alias', 'recent']).default('alias') });
+const refundSchema = z.object({ transactionId: z.string().uuid(), amountCoupons: couponsSchema, reason: z.string().trim().min(1), mediaIds: z.array(z.string().uuid()).max(10).optional() });
+const refundQuerySchema = z.object({ role: z.enum(['buyer', 'seller']).default('buyer'), status: z.enum(['PENDING', 'APPROVED', 'REJECTED']).optional() });
+const charityDonationSchema = z.object({ amountCoupons: couponsSchema, pin: fourDigitCodeSchema });
+const aidRequestSchema = z.object({ charityId: z.string().uuid(), amountCoupons: couponsSchema, description: z.string().trim().min(1), loanId: z.string().uuid().optional(), mediaIds: z.array(z.string().uuid()).max(10).optional() });
+const aidDocumentsSchema = z.object({ mediaIds: z.array(z.string().uuid()).min(1).max(10) });
+const charityQuerySchema = z.object({ status: z.enum(['PENDING', 'DOCUMENTS_REQUESTED', 'APPROVED', 'REJECTED']).optional() });
+const aidApprovalSchema = z.object({ approvedCoupons: couponsSchema.optional(), note: z.string().trim().optional(), pin: fourDigitCodeSchema });
+const noteSchema = z.object({ note: z.string().trim().min(1) });
 const idSchema = z.string().uuid();
 
 function parseCoupons(value: string): bigint {
@@ -213,10 +233,86 @@ function nextCursor(createdAt: Date, id: string): string {
   return Buffer.from(`${createdAt.toISOString()}|${id}`).toString('base64url');
 }
 
+function serializeRefund(request: {
+  id: string;
+  amountCoupons: bigint;
+  reason: string;
+  status: string;
+  decisionNote: string | null;
+  createdAt: Date;
+  decidedAt: Date | null;
+  buyerId: string;
+  sellerId: string;
+  buyer: { displayName: string | null; barcodeId: string };
+  seller: { displayName: string | null; barcodeId: string };
+  transaction: { amountCoupons: bigint; createdAt: Date };
+  media: Array<{ id: string }>;
+}, currentUserId: string, refundable: bigint) {
+  const counterparty = request.buyerId === currentUserId ? request.seller : request.buyer;
+  return {
+    id: request.id,
+    amountCoupons: request.amountCoupons.toString(),
+    reason: request.reason,
+    status: request.status,
+    decisionNote: request.decisionNote,
+    createdAt: request.createdAt,
+    decidedAt: request.decidedAt,
+    counterparty,
+    originalAmountCoupons: request.transaction.amountCoupons.toString(),
+    originalTransactionDate: request.transaction.createdAt,
+    refundableAmountCoupons: refundable.toString(),
+    mediaIds: request.media.map((asset) => asset.id),
+  };
+}
+
+function serializeAid(request: {
+  id: string;
+  charityId: string;
+  applicantId: string;
+  loanId: string | null;
+  amountCoupons: bigint;
+  approvedCoupons: bigint | null;
+  description: string;
+  status: string;
+  decisionNote: string | null;
+  decidedById: string | null;
+  disbursementTransactionId: string | null;
+  createdAt: Date;
+  decidedAt: Date | null;
+  media: Array<{ id: string }>;
+  applicant?: { displayName: string | null; barcodeId: string };
+  charity?: { name: string };
+  loan?: { id: string; principalCoupons: bigint; outstandingCoupons: bigint; status: string } | null;
+}) {
+  return {
+    id: request.id,
+    charityId: request.charityId,
+    charityName: request.charity?.name,
+    applicant: request.applicant,
+    amountCoupons: request.amountCoupons.toString(),
+    approvedCoupons: request.approvedCoupons?.toString() ?? null,
+    description: request.description,
+    status: request.status,
+    decisionNote: request.decisionNote,
+    decidedById: request.decidedById,
+    disbursementTransactionId: request.disbursementTransactionId,
+    loan: request.loan === undefined || request.loan === null ? null : {
+      id: request.loan.id,
+      principalCoupons: request.loan.principalCoupons.toString(),
+      outstandingCoupons: request.loan.outstandingCoupons.toString(),
+      status: request.loan.status,
+    },
+    createdAt: request.createdAt,
+    decidedAt: request.decidedAt,
+    mediaIds: request.media.map((asset) => asset.id),
+  };
+}
+
 export function createMemberRouter(dependencies: MemberRouterDependencies): express.Router {
   const { prisma, queue } = dependencies;
   const sender = dependencies.emailSender ?? smtpSender(dependencies.config);
   const router = express.Router();
+  const mediaLimiter = rateLimit({ windowMs: 60 * 60_000, limit: 20, keyGenerator: (request) => memberClaims(request).sub });
 
   router.get('/', async (request, response, next) => {
     try {
@@ -672,6 +768,278 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
         declined: true,
       });
       response.json(serializeGuarantee(declined));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/media', mediaLimiter, async (request, response, next) => {
+    let uploaded: Awaited<ReturnType<typeof uploadMedia>> | undefined;
+    try {
+      uploaded = await uploadMedia(request, dependencies.config.mediaStorageDir);
+      const asset = await prisma.mediaAsset.create({
+        data: {
+          ownerId: memberClaims(request).sub,
+          kind: uploaded.kind,
+          mimeType: uploaded.mimeType,
+          byteSize: uploaded.byteSize,
+          sha256: uploaded.sha256,
+          storageKey: uploaded.storageKey,
+        },
+      });
+      response.status(201).json({ id: asset.id, kind: asset.kind, mimeType: asset.mimeType, byteSize: asset.byteSize });
+    } catch (error) {
+      if (uploaded !== undefined) {
+        await deleteMediaFile(dependencies.config.mediaStorageDir, uploaded.storageKey);
+      }
+      next(error);
+    }
+  });
+
+  router.get('/media/:id', async (request, response, next) => {
+    try {
+      const asset = await prisma.mediaAsset.findUnique({
+        where: { id: pathId(request.params.id) },
+        include: {
+          refundRequest: { select: { buyerId: true, sellerId: true } },
+          aidRequest: { include: { charity: { include: { agents: { where: { revokedAt: null }, select: { userId: true } } } } } },
+        },
+      });
+      if (asset === null) throw new HttpError(404, 'resource not found');
+      const userId = memberClaims(request).sub;
+      const isRefundParty = asset.refundRequest !== null && (asset.refundRequest.buyerId === userId || asset.refundRequest.sellerId === userId);
+      const isCharityAgent = asset.aidRequest?.charity.agents.some((agent) => agent.userId === userId) === true;
+      if (asset.ownerId !== userId && !isRefundParty && !isCharityAgent) throw new HttpError(404, 'resource not found');
+      const file = await mediaPath(dependencies.config.mediaStorageDir, asset.storageKey);
+      response.setHeader('Content-Disposition', 'attachment');
+      response.setHeader('X-Content-Type-Options', 'nosniff');
+      response.setHeader('Cache-Control', 'no-store');
+      response.type(asset.mimeType);
+      response.sendFile(file, (error) => {
+        if (error !== undefined && !response.headersSent) next(new HttpError(404, 'resource not found'));
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/refunds', async (request, response, next) => {
+    try {
+      const body = refundSchema.parse(request.body);
+      const created = await createRefundRequest(prisma, {
+        transactionId: body.transactionId,
+        buyerId: memberClaims(request).sub,
+        amountCoupons: parseCoupons(body.amountCoupons),
+        reason: body.reason,
+        ...(body.mediaIds === undefined ? {} : { mediaIds: body.mediaIds }),
+      });
+      response.status(201).json({ id: created.id, status: created.status, amountCoupons: created.amountCoupons.toString(), reason: created.reason, createdAt: created.createdAt });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        next(new HttpError(409, 'refund is already pending'));
+        return;
+      }
+      next(error);
+    }
+  });
+
+  router.get('/refunds', async (request, response, next) => {
+    try {
+      const userId = memberClaims(request).sub;
+      const query = refundQuerySchema.parse(request.query);
+      const rows = await prisma.refundRequest.findMany({
+        where: {
+          ...(query.role === 'buyer' ? { buyerId: userId } : { sellerId: userId }),
+          ...(query.status === undefined ? {} : { status: query.status }),
+        },
+        include: {
+          buyer: { select: { displayName: true, barcodeId: true } },
+          seller: { select: { displayName: true, barcodeId: true } },
+          transaction: { select: { amountCoupons: true, createdAt: true } },
+          media: { select: { id: true } },
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      });
+      if (query.role === 'seller') {
+        rows.sort((left, right) => Number(right.status === 'PENDING') - Number(left.status === 'PENDING'));
+      }
+      const items = await Promise.all(rows.map(async (row) => {
+        const approved = await prisma.refundRequest.aggregate({ where: { transactionId: row.transactionId, status: 'APPROVED' }, _sum: { amountCoupons: true } });
+        return serializeRefund(row, userId, row.transaction.amountCoupons - (approved._sum.amountCoupons ?? 0n));
+      }));
+      response.json({ items });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/refunds/:id', async (request, response, next) => {
+    try {
+      const userId = memberClaims(request).sub;
+      const row = await prisma.refundRequest.findUnique({
+        where: { id: pathId(request.params.id) },
+        include: {
+          buyer: { select: { displayName: true, barcodeId: true } },
+          seller: { select: { displayName: true, barcodeId: true } },
+          transaction: { select: { amountCoupons: true, createdAt: true } },
+          media: { select: { id: true } },
+        },
+      });
+      if (row === null || (row.buyerId !== userId && row.sellerId !== userId)) throw new HttpError(404, 'resource not found');
+      const approved = await prisma.refundRequest.aggregate({ where: { transactionId: row.transactionId, status: 'APPROVED' }, _sum: { amountCoupons: true } });
+      response.json(serializeRefund(row, userId, row.transaction.amountCoupons - (approved._sum.amountCoupons ?? 0n)));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/refunds/:id/approve', async (request, response, next) => {
+    try {
+      const body = z.object({ pin: fourDigitCodeSchema }).parse(request.body);
+      const userId = memberClaims(request).sub;
+      await verifyMemberPin(prisma, userId, body.pin);
+      const approved = await approveRefund(prisma, { refundRequestId: pathId(request.params.id), sellerId: userId });
+      response.json({ id: approved.id, status: approved.status, refundTransactionId: approved.refundTransactionId });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/refunds/:id/reject', async (request, response, next) => {
+    try {
+      const body = noteSchema.parse(request.body);
+      const rejected = await rejectRefund(prisma, { refundRequestId: pathId(request.params.id), sellerId: memberClaims(request).sub, note: body.note });
+      response.json({ id: rejected.id, status: rejected.status, decisionNote: rejected.decisionNote });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/charities', async (_request, response, next) => {
+    try {
+      const charities = await prisma.charity.findMany({ where: { isActive: true }, select: { id: true, name: true, description: true }, orderBy: { name: 'asc' } });
+      response.json({ items: charities });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/charities/:id/donations', async (request, response, next) => {
+    try {
+      const body = charityDonationSchema.parse(request.body);
+      const userId = memberClaims(request).sub;
+      await verifyMemberPin(prisma, userId, body.pin);
+      const charity = await prisma.charity.findUnique({ where: { id: pathId(request.params.id) } });
+      if (charity === null || !charity.isActive) throw new HttpError(404, 'charity not found');
+      const transaction = await donateToCharity(prisma, {
+        memberId: userId,
+        memberAccountId: (await couponAccount(prisma, userId)).id,
+        charityAccountId: (await prisma.ledgerAccount.findFirstOrThrow({ where: { charityId: charity.id, type: AccountType.CHARITY_COUPON, asset: Asset.COUPON } })).id,
+        amountCoupons: parseCoupons(body.amountCoupons),
+        externalRef: `api:me:charity:${charity.id}:${randomUUID()}`,
+      });
+      response.status(201).json({ transactionId: transaction.id, status: transaction.status });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/aid-requests', async (request, response, next) => {
+    try {
+      const body = aidRequestSchema.parse(request.body);
+      const created = await createAidRequest(prisma, {
+        applicantId: memberClaims(request).sub,
+        charityId: body.charityId,
+        amountCoupons: parseCoupons(body.amountCoupons),
+        description: body.description,
+        ...(body.loanId === undefined ? {} : { loanId: body.loanId }),
+        ...(body.mediaIds === undefined ? {} : { mediaIds: body.mediaIds }),
+      });
+      response.status(201).json(serializeAid({ ...created, media: [] }));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/aid-requests/:id/documents', async (request, response, next) => {
+    try {
+      const body = aidDocumentsSchema.parse(request.body);
+      const updated = await attachAidDocuments(prisma, { aidRequestId: pathId(request.params.id), applicantId: memberClaims(request).sub, mediaIds: body.mediaIds });
+      response.json(serializeAid({ ...updated, media: [] }));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/aid-requests', async (request, response, next) => {
+    try {
+      const rows = await prisma.aidRequest.findMany({
+        where: { applicantId: memberClaims(request).sub },
+        include: { media: { select: { id: true } }, charity: { select: { name: true } }, loan: { select: { id: true, principalCoupons: true, outstandingCoupons: true, status: true } } },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      });
+      response.json({ items: rows.map(serializeAid) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/charity-requests', async (request, response, next) => {
+    try {
+      const query = charityQuerySchema.parse(request.query);
+      const agents = await prisma.charityAgent.findMany({ where: { userId: memberClaims(request).sub, revokedAt: null }, select: { charityId: true } });
+      if (agents.length === 0) {
+        response.json({ items: [] });
+        return;
+      }
+      const rows = await prisma.aidRequest.findMany({
+        where: { charityId: { in: agents.map((agent) => agent.charityId) }, ...(query.status === undefined ? {} : { status: query.status }) },
+        include: {
+          media: { select: { id: true } },
+          applicant: { select: { displayName: true, barcodeId: true } },
+          charity: { select: { name: true } },
+          loan: { select: { id: true, principalCoupons: true, outstandingCoupons: true, status: true } },
+        },
+        orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
+      });
+      response.json({ items: rows.map(serializeAid) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/charity-requests/:id/approve', async (request, response, next) => {
+    try {
+      const body = aidApprovalSchema.parse(request.body);
+      const userId = memberClaims(request).sub;
+      await verifyMemberPin(prisma, userId, body.pin);
+      const approved = await approveAidRequest(prisma, {
+        aidRequestId: pathId(request.params.id),
+        agentId: userId,
+        ...(body.approvedCoupons === undefined ? {} : { approvedCoupons: parseCoupons(body.approvedCoupons) }),
+        ...(body.note === undefined ? {} : { note: body.note }),
+      });
+      response.json({ id: approved.id, status: approved.status, approvedCoupons: approved.approvedCoupons?.toString() ?? null, disbursementTransactionId: approved.disbursementTransactionId });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/charity-requests/:id/reject', async (request, response, next) => {
+    try {
+      const body = noteSchema.parse(request.body);
+      const rejected = await rejectAidRequest(prisma, { aidRequestId: pathId(request.params.id), agentId: memberClaims(request).sub, note: body.note });
+      response.json({ id: rejected.id, status: rejected.status, decisionNote: rejected.decisionNote });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/charity-requests/:id/request-documents', async (request, response, next) => {
+    try {
+      const body = noteSchema.parse(request.body);
+      const updated = await requestAidDocuments(prisma, { aidRequestId: pathId(request.params.id), agentId: memberClaims(request).sub, note: body.note });
+      response.json({ id: updated.id, status: updated.status, decisionNote: updated.decisionNote });
     } catch (error) {
       next(error);
     }
