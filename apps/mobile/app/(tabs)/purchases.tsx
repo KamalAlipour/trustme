@@ -9,7 +9,7 @@ import { fa } from '../../src/i18n/fa';
 import { styles } from '../../src/styles';
 import { RefundSheet } from '../../src/components/RefundSheet';
 import { SellerRefundPanel } from '../../src/components/SellerRefundPanel';
-import { canRequestRefund } from '../../src/lib/refunds';
+import { canRequestRefund, refundableRemainder } from '../../src/lib/refunds';
 
 export default function Purchases() {
   const [search, setSearch] = React.useState('');
@@ -56,9 +56,9 @@ export default function Purchases() {
           {item.refund?.status === 'APPROVED' ? <Text style={styles.notice}>🟢 {fa.refundApproved}</Text> : null}
           {item.refund?.status === 'REJECTED' ? <Text style={styles.danger}>🔴 {fa.refundRejected}</Text> : null}
           {canRequestRefund(item)
-            ? <Pressable onPress={() => item.refundableTransactionId === null ? undefined : setRefundItem({ id: item.refundableTransactionId, amount: item.amountCoupons })} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{fa.requestRefund}</Text></Pressable>
+            ? <Pressable onPress={() => item.refundableTransactionId === null ? undefined : setRefundItem({ id: item.refundableTransactionId, amount: refundableRemainder(item) })} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{item.refund === null ? fa.requestRefund : fa.requestAnotherRefund}</Text></Pressable>
             : null}
-          {item.refundableTransactionId !== null && item.direction === 'out' && item.refund !== null && item.refund.status !== 'PENDING' && hasRefundRemainder(item.refund.amountCoupons, item.amountCoupons)
+          {item.refundableTransactionId !== null && item.direction === 'out' && item.refund !== null && item.refund.status !== 'PENDING' && refundableRemainder(item) !== '0'
             ? <Text style={styles.muted}>{fa.requestAnotherRefund}</Text>
             : null}
         </View>
@@ -74,8 +74,4 @@ function compareCoupons(left: string, right: string): number {
   const normalizedRight = right.replace(/^0+(?=\d)/, '');
   if (normalizedLeft.length !== normalizedRight.length) return normalizedLeft.length - normalizedRight.length;
   return normalizedLeft === normalizedRight ? 0 : normalizedLeft > normalizedRight ? 1 : -1;
-}
-
-function hasRefundRemainder(refunded: string, purchase: string): boolean {
-  try { return BigInt(refunded) < BigInt(purchase); } catch { return false; }
 }

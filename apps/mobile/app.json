@@ -11,19 +11,20 @@
       "expo-local-authentication",
       "expo-secure-store",
       "expo-camera",
-      ["expo-image-picker", { "photosPermission": "برای انتخاب مدرک تصویری به دسترسی عکس‌ها نیاز است." }],
+      ["expo-image-picker", { "photosPermission": "برای انتخاب مدرک تصویری به دسترسی عکس‌ها نیاز است.", "cameraPermission": "برای ثبت مدرک تصویری به دسترسی دوربین نیاز است." }],
       ["expo-audio", { "microphonePermission": "برای ضبط مدرک صوتی به دسترسی میکروفون نیاز است." }]
     ],
     "ios": {
       "bundleIdentifier": "as.komasi.trustcoupon",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "برای ضبط مدرک صوتی به دسترسی میکروفون نیاز است.",
-        "NSPhotoLibraryUsageDescription": "برای انتخاب مدرک تصویری به دسترسی عکس‌ها نیاز است."
+        "NSPhotoLibraryUsageDescription": "برای انتخاب مدرک تصویری به دسترسی عکس‌ها نیاز است.",
+        "NSCameraUsageDescription": "برای ثبت مدرک تصویری به دسترسی دوربین نیاز است."
       }
     },
     "android": {
       "package": "as.komasi.trustcoupon",
-      "permissions": ["RECORD_AUDIO"]
+      "permissions": ["RECORD_AUDIO", "CAMERA"]
     }
   }
 }

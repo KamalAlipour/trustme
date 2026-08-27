@@ -7,7 +7,7 @@ import type { MediaAsset, MediaKind } from '../api/types';
 import { fa } from '../i18n/fa';
 import { styles } from '../styles';
 
-type EvidenceItem = { localUri: string; kind: MediaKind; mimeType: string; name: string; media: MediaAsset | null; state: 'uploading' | 'ready' | 'failed' };
+type EvidenceItem = { localUri: string; kind: MediaKind; mimeType: string; media: MediaAsset | null; state: 'uploading' | 'ready' | 'failed' };
 
 export function EvidencePicker({ mediaIds, onChange }: { mediaIds: string[]; onChange: (ids: string[]) => void }) {
   const [items, setItems] = React.useState<EvidenceItem[]>([]);
@@ -24,12 +24,12 @@ export function EvidencePicker({ mediaIds, onChange }: { mediaIds: string[]; onC
   });
   const recorderState = useAudioRecorderState(recorder);
 
-  const upload = async (uri: string, kind: MediaKind, mimeType: string, name: string) => {
+  const upload = async (uri: string, kind: MediaKind, mimeType: string) => {
     setItems((current) => current.some((item) => item.localUri === uri)
       ? current.map((item) => item.localUri === uri ? { ...item, state: 'uploading' } : item)
-      : [...current, { localUri: uri, kind, mimeType, name, media: null, state: 'uploading' }]);
+      : [...current, { localUri: uri, kind, mimeType, media: null, state: 'uploading' }]);
     try {
-      const media = await uploadMedia({ uri, kind, mimeType, name });
+      const media = await uploadMedia({ uri, kind, mimeType });
       setItems((current) => current.map((item) => item.localUri === uri ? { ...item, media, state: 'ready' } : item));
       onChange(mediaIds.includes(media.id) ? mediaIds : [...mediaIds, media.id]);
     } catch {
@@ -38,14 +38,18 @@ export function EvidencePicker({ mediaIds, onChange }: { mediaIds: string[]; onC
     }
   };
 
-  const pick = async (kind: 'IMAGE' | 'VIDEO') => {
+  const pick = async (kind: 'IMAGE' | 'VIDEO', source: 'library' | 'camera') => {
     setError('');
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) { setError(fa.permissionDenied); return; }
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: kind === 'IMAGE' ? ['images'] : ['videos'], quality: 1 });
+    const permission = source === 'camera'
+      ? await ImagePicker.requestCameraPermissionsAsync()
+      : await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) { setError(source === 'camera' ? fa.cameraPermissionDenied : fa.permissionDenied); return; }
+    const result = source === 'camera'
+      ? await ImagePicker.launchCameraAsync({ mediaTypes: kind === 'IMAGE' ? ['images'] : ['videos'], quality: 1 })
+      : await ImagePicker.launchImageLibraryAsync({ mediaTypes: kind === 'IMAGE' ? ['images'] : ['videos'], quality: 1 });
     if (!result.canceled && result.assets[0] !== undefined) {
       const asset = result.assets[0];
-      await upload(asset.uri, kind, asset.mimeType ?? (kind === 'IMAGE' ? 'image/jpeg' : 'video/mp4'), kind === 'IMAGE' ? 'evidence.jpg' : 'evidence.mp4');
+      await upload(asset.uri, kind, asset.mimeType ?? (kind === 'IMAGE' ? 'image/jpeg' : 'video/mp4'));
     }
   };
 
@@ -53,7 +57,7 @@ export function EvidencePicker({ mediaIds, onChange }: { mediaIds: string[]; onC
     setError('');
     if (recorderState.isRecording) {
       await recorder.stop();
-      if (recorder.uri !== null) await upload(recorder.uri, 'AUDIO', 'audio/mp4', 'evidence.m4a');
+      if (recorder.uri !== null) await upload(recorder.uri, 'AUDIO', 'audio/mp4');
       return;
     }
     const permission = await requestRecordingPermissionsAsync();
@@ -73,13 +77,17 @@ export function EvidencePicker({ mediaIds, onChange }: { mediaIds: string[]; onC
       <Text style={styles.heading}>{fa.evidence}</Text>
       <View style={styles.row}>
         <Pressable disabled={items.length >= 10} onPress={() => void toggleRecording()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{recorderState.isRecording ? `${fa.stopRecording} (${Math.floor(recorderState.durationMillis / 1000)} ثانیه)` : fa.captureAudio}</Text></Pressable>
-        <Pressable disabled={items.length >= 10} onPress={() => void pick('IMAGE')} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{fa.captureImage}</Text></Pressable>
-        <Pressable disabled={items.length >= 10} onPress={() => void pick('VIDEO')} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{fa.captureVideo}</Text></Pressable>
+        <Pressable disabled={items.length >= 10} onPress={() => void pick('IMAGE', 'library')} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{fa.captureImage}</Text></Pressable>
+        <Pressable disabled={items.length >= 10} onPress={() => void pick('VIDEO', 'library')} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{fa.captureVideo}</Text></Pressable>
+      </View>
+      <View style={styles.row}>
+        <Pressable disabled={items.length >= 10} onPress={() => void pick('IMAGE', 'camera')} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{fa.captureCameraImage}</Text></Pressable>
+        <Pressable disabled={items.length >= 10} onPress={() => void pick('VIDEO', 'camera')} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{fa.captureCameraVideo}</Text></Pressable>
       </View>
       {items.map((item, index) => <View key={`${item.localUri}-${index}`} style={styles.row}>
         <Text style={item.state === 'failed' ? styles.danger : styles.muted}>{item.state === 'uploading' ? 'در حال بارگذاری…' : item.state === 'failed' ? fa.uploadFailed : 'بارگذاری شد'}</Text>
         {item.kind === 'AUDIO' && item.state === 'ready' ? <Pressable onPress={() => { setPreviewUri(item.localUri); player.replace(item.localUri); player.play(); }}><Text style={styles.secondaryButtonText}>▶️ پخش</Text></Pressable> : null}
-        {item.state === 'failed' ? <Pressable onPress={() => void upload(item.localUri, item.kind, item.mimeType, item.name)}><Text style={styles.secondaryButtonText}>{fa.retryUpload}</Text></Pressable> : null}
+        {item.state === 'failed' ? <Pressable onPress={() => void upload(item.localUri, item.kind, item.mimeType)}><Text style={styles.secondaryButtonText}>{fa.retryUpload}</Text></Pressable> : null}
         <Pressable onPress={() => remove(index)}><Text style={styles.secondaryButtonText}>{fa.removeEvidence}</Text></Pressable>
       </View>)}
       {error ? <Text style={styles.danger}>{error}</Text> : null}

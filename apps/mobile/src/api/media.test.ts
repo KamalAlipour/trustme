@@ -26,7 +26,7 @@ describe('authenticated media upload', () => {
 
   it('assembles multipart form data without a JSON content type', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ id: 'media-id', kind: 'IMAGE', mimeType: 'image/jpeg', byteSize: 100 }), { status: 201 }));
-    await uploadMedia({ uri: 'file:///private/path/photo.jpg', kind: 'IMAGE', name: 'evidence.jpg', mimeType: 'image/jpeg' });
+    await uploadMedia({ uri: 'file:///private/path/photo.jpg', kind: 'IMAGE', mimeType: 'image/jpeg' });
     const [, init] = fetchMock.mock.calls[0] as [RequestInfo | URL, RequestInit];
     expect(init.headers).toEqual({ accept: 'application/json', authorization: 'Bearer member-token' });
     expect(init.body).toBeInstanceOf(FormData);
@@ -37,11 +37,11 @@ describe('authenticated media upload', () => {
 
   it('preserves HTTP 413 for oversized media', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ error: 'media file is too large' }), { status: 413 }));
-    await expect(uploadMedia({ uri: 'file:///video.mp4', kind: 'VIDEO', name: 'evidence.mp4', mimeType: 'video/mp4' })).rejects.toMatchObject({ status: 413 });
+    await expect(uploadMedia({ uri: 'file:///video.mp4', kind: 'VIDEO', mimeType: 'video/mp4' })).rejects.toMatchObject({ status: 413 });
   });
 
   it('preserves HTTP 415 for unsupported media', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ error: 'unsupported media type' }), { status: 415 }));
-    await expect(uploadMedia({ uri: 'file:///photo.jpg', kind: 'IMAGE', name: 'evidence.jpg', mimeType: 'image/jpeg' })).rejects.toEqual(expect.any(ApiError));
+    await expect(uploadMedia({ uri: 'file:///photo.jpg', kind: 'IMAGE', mimeType: 'image/jpeg' })).rejects.toEqual(expect.any(ApiError));
   });
 });

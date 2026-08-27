@@ -10,7 +10,6 @@ export type UploadedMedia = MediaAsset;
 export async function uploadMedia(input: {
   uri: string;
   kind: MediaKind;
-  name: string;
   mimeType: string;
 }): Promise<UploadedMedia> {
   const info = await FileSystem.getInfoAsync(input.uri, { size: true });
