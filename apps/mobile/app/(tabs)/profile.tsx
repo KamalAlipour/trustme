@@ -23,6 +23,7 @@ export default function Profile() {
   const [emailCode, setEmailCode] = useState('');
   const [currentPin, setCurrentPin] = useState('');
   const [newPin, setNewPin] = useState('');
+  const [eligibleAt, setEligibleAt] = useState<string | null>(null);
   const [error, setError] = useState('');
   const devices = useQuery({
     queryKey: ['devices'],
@@ -36,8 +37,8 @@ export default function Profile() {
     try {
       const stepUp = pin || await getStepUpPin();
       if (!stepUp) { setError('رمز برای این عملیات لازم است.'); return; }
-      await request('/v1/me/withdrawals', { method: 'POST', body: { destinationAddress: destination, couponsGross: withdrawAmount, pin: stepUp } });
-      setPin(''); setError('درخواست برداشت ثبت شد. واجد شرایط بودن از ۱۶۸ ساعت دیگر بررسی می‌شود.'); await invalidate();
+      const withdrawal = await request<{ eligibleAt: string }>('/v1/me/withdrawals', { method: 'POST', body: { destinationAddress: destination, couponsGross: withdrawAmount, pin: stepUp } });
+      setPin(''); setEligibleAt(withdrawal.eligibleAt); setError('درخواست برداشت ثبت شد.'); await invalidate();
     } catch (cause) { setError(cause instanceof LockedError ? `${cause.message} (${cause.retryAfter} ثانیه)` : cause instanceof ApiError ? cause.message : fa.unknownError); }
   };
   const requestEmail = async () => {
@@ -100,6 +101,7 @@ export default function Profile() {
         <TextInput value={destination} onChangeText={setDestination} placeholder="آدرس مقصد" style={styles.input} />
         <TextInput value={pin} onChangeText={(value) => setPin(value.replace(/\D/g, '').slice(0, 4))} placeholder={fa.pin} style={styles.input} keyboardType="number-pad" secureTextEntry />
         <Pressable onPress={() => void withdraw()} style={styles.button}><Text style={styles.buttonText}>ثبت درخواست برداشت</Text></Pressable>
+        {eligibleAt ? <Text style={styles.muted}>زمان واجد شرایط شدن: {formatDate(eligibleAt)}</Text> : null}
       </View>
       <View style={styles.card}><Text style={styles.muted}>{fa.kycLater}</Text></View>
       {error ? <Text style={styles.danger}>{error}</Text> : null}
