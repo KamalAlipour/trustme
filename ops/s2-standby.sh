@@ -22,7 +22,7 @@ TRUSTME_REPLICATION_PASSWORD="${TRUSTME_REPLICATION_PASSWORD:-}"
 TRUSTME_REPLICATION_SLOT="${TRUSTME_REPLICATION_SLOT:-}"
 TRUSTME_PG_PORT="${TRUSTME_PG_PORT:-}"
 TRUSTME_REDIS_PORT="${TRUSTME_REDIS_PORT:-}"
-TRUSTME_API_PORT="${TRUSTME_API_PORT:-}"
+API_PORT="${API_PORT:-}"
 TRUSTME_ADMIN_PORT="${TRUSTME_ADMIN_PORT:-}"
 for variable in TRUSTME_PRIMARY_HOST TRUSTME_SSH_USER TRUSTME_SSH_KEY \
   TRUSTME_REPLICATION_ROLE TRUSTME_REPLICATION_PASSWORD TRUSTME_REPLICATION_SLOT \
@@ -32,7 +32,7 @@ done
 require_value TRUSTME_REDIS_PASSWORD
 [[ "$TRUSTME_PG_PORT" == "$TRUSTME_EXPECTED_PG_PORT" ]] || { printf 'TRUSTME_PG_PORT must be %s\n' "$TRUSTME_EXPECTED_PG_PORT" >&2; exit 1; }
 [[ "$TRUSTME_REDIS_PORT" == "$TRUSTME_EXPECTED_REDIS_PORT" ]] || { printf 'TRUSTME_REDIS_PORT must be %s\n' "$TRUSTME_EXPECTED_REDIS_PORT" >&2; exit 1; }
-[[ "$TRUSTME_API_PORT" == "$TRUSTME_EXPECTED_API_PORT" ]] || { printf 'TRUSTME_API_PORT must be %s\n' "$TRUSTME_EXPECTED_API_PORT" >&2; exit 1; }
+[[ "$API_PORT" == "$TRUSTME_EXPECTED_API_PORT" ]] || { printf 'API_PORT must be %s\n' "$TRUSTME_EXPECTED_API_PORT" >&2; exit 1; }
 [[ "$TRUSTME_ADMIN_PORT" == "$TRUSTME_EXPECTED_ADMIN_PORT" ]] || { printf 'TRUSTME_ADMIN_PORT must be %s\n' "$TRUSTME_EXPECTED_ADMIN_PORT" >&2; exit 1; }
 valid_identifier "$TRUSTME_REPLICATION_ROLE" ||
   { printf 'invalid replication role name\n' >&2; exit 1; }
@@ -66,8 +66,15 @@ if ! pg_lsclusters --no-header | awk '$2 == "trustme" { found = 1 } END { exit !
   pg_createcluster "$TRUSTME_PG_VERSION" trustme --port "$TRUSTME_PG_PORT" --start
 fi
 pg_conftool "$TRUSTME_PG_VERSION" trustme set listen_addresses 127.0.0.1
+PG_CONF="/etc/postgresql/${TRUSTME_PG_VERSION}/trustme/postgresql.conf"
+sed -i -E "s|^listen_addresses = .*|listen_addresses = '127.0.0.1'|" "$PG_CONF"
 pg_conftool "$TRUSTME_PG_VERSION" trustme set hot_standby on
-PG_DATA="$(pg_conftool "$TRUSTME_PG_VERSION" trustme show data_directory)"
+PG_DATA="$(pg_conftool "$TRUSTME_PG_VERSION" trustme show data_directory |
+  sed -n "s/^data_directory = '\\(.*\\)'$/\\1/p")"
+[[ -n "$PG_DATA" && -d "$PG_DATA" ]] || {
+  printf 'could not locate TrustMe PostgreSQL data directory\n' >&2
+  exit 1
+}
 systemctl stop "$(pg_service_name)" || true
 
 install -d -o postgres -g postgres -m 0700 /var/lib/postgresql
@@ -99,7 +106,8 @@ RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=true
+ProtectHome=false
+ReadWritePaths=/root/.ssh
 
 [Install]
 WantedBy=multi-user.target
@@ -116,11 +124,12 @@ remote_ssh=(ssh -i "$TRUSTME_SSH_KEY" -o BatchMode=yes
   -o StrictHostKeyChecking=accept-new "${TRUSTME_SSH_USER}@${TRUSTME_PRIMARY_HOST}")
 escaped_replication_password="${TRUSTME_REPLICATION_PASSWORD//\'/\'\'}"
 {
+  printf "\\set trustme_replication_role '%s'\n" "$TRUSTME_REPLICATION_ROLE"
   printf "\\set trustme_replication_password '%s'\n" "$escaped_replication_password"
-  printf 'do $$ begin if not exists (select 1 from pg_roles where rolname = '
-  printf "'%s') then create role \"%s\" replication login password :" \
-    "$TRUSTME_REPLICATION_ROLE" "$TRUSTME_REPLICATION_ROLE"
-  printf '%s\n' "'trustme_replication_password'; end if; end \$\$;"
+  printf "select format('create role %%I replication login password %%L', "
+  printf ":'trustme_replication_role', :'trustme_replication_password') "
+  printf "where not exists (select 1 from pg_roles where rolname = "
+  printf ":'trustme_replication_role')\\\\gexec\n"
 } | "${remote_ssh[@]}" "sudo -u postgres psql -p ${TRUSTME_PG_PORT} -d postgres -v ON_ERROR_STOP=1"
 unset escaped_replication_password
 "${remote_ssh[@]}" "sudo -u postgres psql -p ${TRUSTME_PG_PORT} -d postgres -v ON_ERROR_STOP=1 -c \"select pg_create_physical_replication_slot('${TRUSTME_REPLICATION_SLOT}') where not exists (select 1 from pg_replication_slots where slot_name = '${TRUSTME_REPLICATION_SLOT}')\""
@@ -131,6 +140,14 @@ if [[ ! -e "$PG_DATA/standby.signal" ]]; then
     -U "$TRUSTME_REPLICATION_ROLE" -D "$PG_DATA" -X stream \
     -S "$TRUSTME_REPLICATION_SLOT" -R -P
 fi
+PG_AUTO_CONF="$PG_DATA/postgresql.auto.conf"
+PRIMARY_CONNINFO="host=127.0.0.1 port=${TUNNEL_PORT} user=${TRUSTME_REPLICATION_ROLE} application_name=trustme-standby passfile=${PGPASS_FILE}"
+if grep -q '^primary_conninfo = ' "$PG_AUTO_CONF"; then
+  sed -i -E "s|^primary_conninfo = .*|primary_conninfo = '${PRIMARY_CONNINFO}'|" "$PG_AUTO_CONF"
+else
+  printf "primary_conninfo = '%s'\n" "$PRIMARY_CONNINFO" >> "$PG_AUTO_CONF"
+fi
+chown postgres:postgres "$PG_AUTO_CONF"
 systemctl start "$(pg_service_name)"
 sudo -u postgres psql -p "$TRUSTME_PG_PORT" -d postgres -Atqc \
   'select pg_is_in_recovery()' | grep -qx t
@@ -142,7 +159,7 @@ umask 0077
   printf 'bind 127.0.0.1\nport %s\nprotected-mode yes\n' "$TRUSTME_REDIS_PORT"
   printf 'dir %s\nappendonly yes\nrequirepass %s\n' "$REDIS_DATA_DIR" "$TRUSTME_REDIS_PASSWORD"
 } > /etc/trustme/redis.conf
-chown trustme:trustme /etc/trustme/redis.conf
+chown root:trustme /etc/trustme/redis.conf
 chmod 0640 /etc/trustme/redis.conf
 install_trustme_units "$(pg_service_name)"
 for unit in api worker admin redis; do

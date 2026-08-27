@@ -16,19 +16,21 @@ load_trustme_env
 TRUSTME_PG_VERSION="${TRUSTME_PG_VERSION:-}"
 TRUSTME_PG_PORT="${TRUSTME_PG_PORT:-}"
 TRUSTME_REDIS_PORT="${TRUSTME_REDIS_PORT:-}"
-TRUSTME_API_PORT="${TRUSTME_API_PORT:-}"
+API_PORT="${API_PORT:-}"
 TRUSTME_ADMIN_PORT="${TRUSTME_ADMIN_PORT:-}"
 TRUSTME_PG_DATABASE="${TRUSTME_PG_DATABASE:-trustme}"
 TRUSTME_PG_ROLE="${TRUSTME_PG_ROLE:-trustme}"
 TRUSTME_PG_PASSWORD="${TRUSTME_PG_PASSWORD:-}"
+TRUSTME_REPLICATION_ROLE="${TRUSTME_REPLICATION_ROLE:-}"
 require_value TRUSTME_PG_VERSION
 require_value TRUSTME_PG_PASSWORD
+require_value TRUSTME_REPLICATION_ROLE
 require_value TRUSTME_REDIS_PASSWORD
 require_value TRUSTME_API_HOST
 require_value TRUSTME_ADMIN_HOST
 [[ "$TRUSTME_PG_PORT" == "$TRUSTME_EXPECTED_PG_PORT" ]] || { printf 'TRUSTME_PG_PORT must be %s\n' "$TRUSTME_EXPECTED_PG_PORT" >&2; exit 1; }
 [[ "$TRUSTME_REDIS_PORT" == "$TRUSTME_EXPECTED_REDIS_PORT" ]] || { printf 'TRUSTME_REDIS_PORT must be %s\n' "$TRUSTME_EXPECTED_REDIS_PORT" >&2; exit 1; }
-[[ "$TRUSTME_API_PORT" == "$TRUSTME_EXPECTED_API_PORT" ]] || { printf 'TRUSTME_API_PORT must be %s\n' "$TRUSTME_EXPECTED_API_PORT" >&2; exit 1; }
+[[ "$API_PORT" == "$TRUSTME_EXPECTED_API_PORT" ]] || { printf 'API_PORT must be %s\n' "$TRUSTME_EXPECTED_API_PORT" >&2; exit 1; }
 [[ "$TRUSTME_ADMIN_PORT" == "$TRUSTME_EXPECTED_ADMIN_PORT" ]] || { printf 'TRUSTME_ADMIN_PORT must be %s\n' "$TRUSTME_EXPECTED_ADMIN_PORT" >&2; exit 1; }
 valid_identifier "$TRUSTME_PG_DATABASE" || { printf 'invalid database name\n' >&2; exit 1; }
 valid_identifier "$TRUSTME_PG_ROLE" || { printf 'invalid role name\n' >&2; exit 1; }
@@ -69,9 +71,12 @@ if ! pg_lsclusters --no-header | awk '$2 == "trustme" { found = 1 } END { exit !
   pg_createcluster "$TRUSTME_PG_VERSION" trustme --port "$TRUSTME_PG_PORT" --start
 fi
 pg_conftool "$TRUSTME_PG_VERSION" trustme set listen_addresses 127.0.0.1
+PG_CONF="/etc/postgresql/${TRUSTME_PG_VERSION}/trustme/postgresql.conf"
+sed -i -E "s|^listen_addresses = .*|listen_addresses = '127.0.0.1'|" "$PG_CONF"
 pg_conftool "$TRUSTME_PG_VERSION" trustme set wal_level replica
 pg_conftool "$TRUSTME_PG_VERSION" trustme set max_wal_senders 4
 pg_conftool "$TRUSTME_PG_VERSION" trustme set max_replication_slots 2
+systemctl start "$(pg_service_name)"
 
 if ! sudo -u postgres psql -p "$TRUSTME_PG_PORT" -d postgres -Atqc \
   "select 1 from pg_roles where rolname = '${TRUSTME_PG_ROLE}'" | grep -q 1; then
@@ -96,9 +101,14 @@ if ! sudo -u postgres psql -p "$TRUSTME_PG_PORT" -d postgres -Atqc \
   sudo -u postgres createdb -p "$TRUSTME_PG_PORT" -O "$TRUSTME_PG_ROLE" \
     "$TRUSTME_PG_DATABASE"
 fi
-PG_HBA="$(pg_conftool "$TRUSTME_PG_VERSION" trustme show hba_file)"
-grep -Fqx "host replication ${TRUSTME_PG_ROLE} 127.0.0.1/32 scram-sha-256" "$PG_HBA" ||
-  printf '%s\n' "host replication ${TRUSTME_PG_ROLE} 127.0.0.1/32 scram-sha-256" >> "$PG_HBA"
+PG_HBA="$(pg_conftool "$TRUSTME_PG_VERSION" trustme show hba_file |
+  sed -n "s/^hba_file = '\\(.*\\)'$/\\1/p")"
+[[ -n "$PG_HBA" && -f "$PG_HBA" ]] || {
+  printf 'could not locate TrustMe pg_hba.conf\n' >&2
+  exit 1
+}
+grep -Fqx "host replication ${TRUSTME_REPLICATION_ROLE} 127.0.0.1/32 scram-sha-256" "$PG_HBA" ||
+  printf '%s\n' "host replication ${TRUSTME_REPLICATION_ROLE} 127.0.0.1/32 scram-sha-256" >> "$PG_HBA"
 systemctl restart "$(pg_service_name)"
 
 REDIS_DATA_DIR="${TRUSTME_REDIS_DATA_DIR:-/var/lib/trustme-redis}"
@@ -108,7 +118,7 @@ umask 0077
   printf 'bind 127.0.0.1\nport %s\nprotected-mode yes\n' "$TRUSTME_REDIS_PORT"
   printf 'dir %s\nappendonly yes\nrequirepass %s\n' "$REDIS_DATA_DIR" "$TRUSTME_REDIS_PASSWORD"
 } > /etc/trustme/redis.conf
-chown trustme:trustme /etc/trustme/redis.conf
+chown root:trustme /etc/trustme/redis.conf
 chmod 0640 /etc/trustme/redis.conf
 
 install_trustme_units "$(pg_service_name)"
