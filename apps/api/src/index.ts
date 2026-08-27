@@ -1,12 +1,15 @@
 import { loadApiConfig } from './config.js';
 import { createApiRuntime } from './app.js';
+import { assertActiveNode } from './startup-guard.js';
 
 export * from './config.js';
 export * from './openapi.js';
 export * from './app.js';
+export * from './startup-guard.js';
 
 export async function startApi(): Promise<void> {
   const config = loadApiConfig();
+  assertActiveNode(config.failoverMarkerPath);
   const runtime = await createApiRuntime(config);
   runtime.app.listen(config.port, () => undefined);
 }

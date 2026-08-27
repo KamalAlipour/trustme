@@ -1,0 +1,25 @@
+[Unit]
+Description=TrustMe admin UI
+After=network-online.target trustme-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=trustme
+Group=trustme
+WorkingDirectory=/opt/trustme/current/apps/admin
+EnvironmentFile=/etc/trustme/trustme.env
+UnsetEnvironment=HOT_WALLET_PRIVATE_KEY
+ExecStartPre=/bin/sh -c 'test ! -e "$${FAILOVER_MARKER_PATH:-/etc/trustme/FAILED_OVER}"'
+ExecStart=/usr/bin/npm run start -- --hostname 127.0.0.1 --port 3122
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/trustme/shared
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

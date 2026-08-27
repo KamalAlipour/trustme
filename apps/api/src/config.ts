@@ -17,6 +17,7 @@ export const apiConfigSchema = z.object({
   bodyLimit: z.string().default('32kb'),
   rateLimitWindowMs: integer.default(60_000),
   rateLimitMax: integer.default(60),
+  failoverMarkerPath: z.string().default('/etc/trustme/FAILED_OVER'),
 });
 
 export type ApiConfig = z.infer<typeof apiConfigSchema>;
@@ -36,5 +37,6 @@ export function loadApiConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     bodyLimit: env.API_BODY_LIMIT,
     rateLimitWindowMs: env.API_RATE_LIMIT_WINDOW_MS,
     rateLimitMax: env.API_RATE_LIMIT_MAX,
+    failoverMarkerPath: env.FAILOVER_MARKER_PATH,
   });
 }

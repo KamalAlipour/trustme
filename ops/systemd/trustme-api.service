@@ -1,0 +1,25 @@
+[Unit]
+Description=TrustMe API
+After=network-online.target postgresql.service trustme-redis.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=trustme
+Group=trustme
+WorkingDirectory=/opt/trustme/current
+EnvironmentFile=/etc/trustme/trustme.env
+UnsetEnvironment=HOT_WALLET_PRIVATE_KEY
+ExecStartPre=/bin/sh -c 'test ! -e "$${FAILOVER_MARKER_PATH:-/etc/trustme/FAILED_OVER}"'
+ExecStart=/usr/bin/node /opt/trustme/current/apps/api/dist/index.js
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/trustme/shared
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

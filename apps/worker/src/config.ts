@@ -16,7 +16,7 @@ export const workerConfigSchema = z.object({
   confirmations: integer.default(12),
   maxBlockRange: integer.default(2_000).refine((value) => value > 0),
   reorgRewindBlocks: integer.default(64).refine((value) => value > 0),
-  failoverMarkerPath: z.string().default('/root/mirror/FAILED_OVER'),
+  failoverMarkerPath: z.string().default('/etc/trustme/FAILED_OVER'),
 });
 
 export type WorkerConfig = z.infer<typeof workerConfigSchema>;

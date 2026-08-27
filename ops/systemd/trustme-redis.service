@@ -1,0 +1,23 @@
+[Unit]
+Description=TrustMe isolated Redis
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=trustme
+Group=trustme
+EnvironmentFile=/etc/trustme/trustme.env
+ExecStart=/usr/bin/redis-server /etc/trustme/redis.conf --supervised systemd
+ExecStop=/usr/bin/env REDISCLI_AUTH=${TRUSTME_REDIS_PASSWORD} /usr/bin/redis-cli -h 127.0.0.1 -p 6380 shutdown
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/trustme-redis
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
