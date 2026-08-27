@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { evmAddressSchema } from '@trustme/core';
 
 const integer = z.coerce.number().int().positive();
 
@@ -7,6 +8,11 @@ export const apiConfigSchema = z.object({
   redisUrl: z.string().min(1),
   apiServiceToken: z.string().min(1),
   depositXpub: z.string().min(1),
+  adminJwtSecret: z.string().min(32),
+  adminJwtTtlSeconds: integer.default(3600),
+  polygonRpcUrl: z.string().url(),
+  usdtContractAddress: evmAddressSchema,
+  hotWalletAddress: evmAddressSchema,
   port: integer.default(3000),
   bodyLimit: z.string().default('32kb'),
   rateLimitWindowMs: integer.default(60_000),
@@ -21,6 +27,11 @@ export function loadApiConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     redisUrl: env.REDIS_URL,
     apiServiceToken: env.API_SERVICE_TOKEN,
     depositXpub: env.DEPOSIT_XPUB,
+    adminJwtSecret: env.ADMIN_JWT_SECRET,
+    adminJwtTtlSeconds: env.ADMIN_JWT_TTL_SECONDS,
+    polygonRpcUrl: env.POLYGON_RPC_URL,
+    usdtContractAddress: env.USDT_CONTRACT_ADDRESS,
+    hotWalletAddress: env.HOT_WALLET_ADDRESS,
     port: env.API_PORT,
     bodyLimit: env.API_BODY_LIMIT,
     rateLimitWindowMs: env.API_RATE_LIMIT_WINDOW_MS,

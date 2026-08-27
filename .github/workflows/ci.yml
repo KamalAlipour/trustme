@@ -28,6 +28,7 @@ jobs:
     env:
       DATABASE_URL: postgresql://trustme:trustme-ci@localhost:5432/trustme?schema=public
       REDIS_URL: redis://localhost:56379
+      TRUSTME_API_URL: http://localhost:3000
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

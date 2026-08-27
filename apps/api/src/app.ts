@@ -27,12 +27,17 @@ import {
   transferCoupons,
   withSerializableRetry,
   evmAddressSchema,
+  DomainError,
 } from '@trustme/core';
 import { type ApiConfig } from './config.js';
 import { openapiDocument } from './openapi.js';
+import { createAdminRouter, EthersAdminChainProvider, type AdminChainProvider } from './admin.js';
+import { HttpError } from './http-error.js';
+
+export { HttpError } from './http-error.js';
 
 type RedisLike = { ping(): Promise<string> };
-type QueueLike = Pick<Queue, 'add'>;
+export type QueueLike = Pick<Queue, 'add'>;
 
 const couponsSchema = z.string().regex(/^[1-9]\d*$/, 'amountCoupons must be a positive decimal string');
 const userBodySchema = z.object({
@@ -66,6 +71,7 @@ export type ApiDependencies = {
   prisma: PrismaClient;
   queue: QueueLike;
   redis: RedisLike;
+  chainProvider?: AdminChainProvider;
 };
 
 function serviceTokenMatches(expected: string, provided: string | undefined): boolean {
@@ -77,7 +83,7 @@ function serviceTokenMatches(expected: string, provided: string | undefined): bo
 
 async function userWithAccounts(prisma: PrismaClient, barcodeId: string) {
   const user = await prisma.user.findUnique({ where: { barcodeId } });
-  if (!user) throw new Error('member not found');
+  if (!user) throw new HttpError(404, 'member not found');
   const account = await prisma.ledgerAccount.findFirstOrThrow({ where: { userId: user.id, type: AccountType.USER_COUPON, asset: Asset.COUPON } });
   return { user, account };
 }
@@ -96,7 +102,24 @@ function serializeUser(user: { id: string; phoneNumber: string; barcodeId: strin
 
 export function createApp(dependencies: ApiDependencies): express.Express {
   const { config, prisma, queue, redis } = dependencies;
-  const logger = pino({ redact: ['code', 'privateKey', 'HOT_WALLET_PRIVATE_KEY', 'authorization', 'token'] });
+  const logger = pino({
+    redact: [
+      'code',
+      'password',
+      'passwordHash',
+      'privateKey',
+      'HOT_WALLET_PRIVATE_KEY',
+      'ADMIN_JWT_SECRET',
+      'authorization',
+      'token',
+      'jwt',
+      'req.headers.authorization',
+      'req.body.code',
+      'req.body.password',
+      'req.body.token',
+      'res.body.token',
+    ],
+  });
   const app = express();
   app.use(helmet());
   app.use(express.json({ limit: config.bodyLimit }));
@@ -112,6 +135,7 @@ export function createApp(dependencies: ApiDependencies): express.Express {
     }
     next();
   });
+  app.use('/admin', createAdminRouter({ config, prisma, queue, chainProvider: dependencies.chainProvider }));
 
   app.get('/healthz', (_request, response) => response.json({ status: 'ok' }));
   app.get('/readyz', async (_request, response) => {
@@ -246,13 +270,32 @@ export function createApp(dependencies: ApiDependencies): express.Express {
     }
   });
 
-  app.use((error: unknown, _request: Request, response: Response, next: NextFunction) => {
+  app.use((error: unknown, request: Request, response: Response, next: NextFunction) => {
     void next;
-    if (error instanceof Error && error.name === 'ZodError') {
-      response.status(400).json({ error: error.message });
+    if (error instanceof z.ZodError) {
+      response.status(400).json({
+        error: 'validation failed',
+        fields: error.issues.map((issue) => ({
+          path: issue.path.map((part) => String(part)).join('.'),
+          message: issue.message,
+        })),
+      });
       return;
     }
-    response.status(400).json({ error: error instanceof Error ? error.message : 'request failed' });
+    if (error instanceof HttpError) {
+      response.status(error.status).json({ error: error.message });
+      return;
+    }
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+      response.status(404).json({ error: 'resource not found' });
+      return;
+    }
+    if (error instanceof DomainError) {
+      response.status(error.status).json({ error: error.message });
+      return;
+    }
+    request.log.error({ err: error }, 'request failed');
+    response.status(500).json({ error: 'internal server error' });
   });
   return app;
 }
@@ -268,5 +311,5 @@ export async function createApiRuntime(config: ApiConfig): Promise<{ app: expres
   const prisma = new PrismaClient({ datasources: { db: { url: config.databaseUrl } } });
   const redis = new Redis(config.redisUrl);
   const queue = new Queue('trustme-withdrawal-dispatch', { connection: redis });
-  return { app: createApp({ config, prisma, queue, redis }), prisma, redis, queue };
+  return { app: createApp({ config, prisma, queue, redis, chainProvider: new EthersAdminChainProvider(config.polygonRpcUrl) }), prisma, redis, queue };
 }
