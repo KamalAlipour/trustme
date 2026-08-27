@@ -28,6 +28,14 @@ import {
   withSerializableRetry,
   evmAddressSchema,
   DomainError,
+  activateGuarantee,
+  approveGuarantee,
+  cancelGuarantee,
+  claimGuarantees,
+  createLoanRequest,
+  disburseLoan,
+  readWithdrawalAvailability,
+  repayLoan,
 } from '@trustme/core';
 import { type ApiConfig } from './config.js';
 import { openapiDocument } from './openapi.js';
@@ -65,6 +73,22 @@ const withdrawalBodySchema = z.object({
   destinationAddress: evmAddressSchema,
   couponsGross: couponsSchema,
 });
+const loanInstallmentSchema = z.object({ dueAt: z.string().datetime(), amountCoupons: couponsSchema });
+const loanGuarantorSchema = z.object({
+  barcodeId: barcodeIdSchema.optional(),
+  guarantorId: z.string().uuid().optional(),
+  amountCoupons: couponsSchema,
+}).refine((value) => value.barcodeId !== undefined || value.guarantorId !== undefined, 'guarantor identity is required');
+const loanBodySchema = z.object({
+  barcodeId: barcodeIdSchema,
+  principalCoupons: couponsSchema,
+  installments: z.array(loanInstallmentSchema).min(1),
+  guarantors: z.array(loanGuarantorSchema).min(1),
+});
+const codeBodySchema = z.object({ code: fourDigitCodeSchema });
+const lenderBodySchema = z.object({ barcodeId: barcodeIdSchema });
+const repaymentBodySchema = z.object({ amountCoupons: couponsSchema, idempotencyKey: z.string().min(1) });
+const availabilityQuerySchema = z.object({ barcodeId: barcodeIdSchema });
 
 export type ApiDependencies = {
   config: ApiConfig;
@@ -244,7 +268,7 @@ export function createApp(dependencies: ApiDependencies): express.Express {
     try {
       const body = withdrawalBodySchema.parse(request.body);
       const member = await userWithAccounts(prisma, body.barcodeId);
-      const values = await prisma.systemSetting.findMany({ where: { key: { in: ['WITHDRAWAL_BASE_FEE_BPS', 'MIN_WITHDRAWAL_USDT', 'AUTO_APPROVAL_LIMIT_USDT'] } } });
+      const values = await prisma.systemSetting.findMany({ where: { key: { in: ['WITHDRAWAL_BASE_FEE_BPS', 'MIN_WITHDRAWAL_USDT', 'AUTO_APPROVAL_LIMIT_USDT', 'WITHDRAWAL_COOLDOWN_HOURS'] } } });
       const settings = new Map(values.map((setting) => [setting.key, setting.value]));
       const baseFeeBps = BigInt(settings.get('WITHDRAWAL_BASE_FEE_BPS') ?? (() => { throw new Error('missing fee setting'); })());
       const minimum = microUsdtFromDecimal(settings.get('MIN_WITHDRAWAL_USDT') ?? (() => { throw new Error('missing minimum setting'); })());
@@ -253,9 +277,156 @@ export function createApp(dependencies: ApiDependencies): express.Express {
       const fees = await systemAccount(prisma, AccountType.SYSTEM_FEE_COLLECTION, Asset.USDT);
       const pending = await systemAccount(prisma, AccountType.SYSTEM_WITHDRAWAL_PENDING, Asset.USDT);
       const issuance = await systemAccount(prisma, AccountType.SYSTEM_COUPON_ISSUANCE, Asset.COUPON);
-      const withdrawal = await requestWithdrawal(prisma, { userId: member.user.id, userAccountId: member.account.id, destinationAddress: evmAddressSchema.parse(body.destinationAddress), couponsGross: parseCoupons(body.couponsGross), baseFeeBps, minimumWithdrawalMicroUsdt: minimum, autoApprovalLimitMicroUsdt: autoApproval, vaultAccountId: vault.id, feeAccountId: fees.id, pendingAccountId: pending.id, issuanceAccountId: issuance.id });
+      const cooldownHours = Number(settings.get('WITHDRAWAL_COOLDOWN_HOURS') ?? '168');
+      const withdrawal = await requestWithdrawal(prisma, { userId: member.user.id, userAccountId: member.account.id, destinationAddress: evmAddressSchema.parse(body.destinationAddress), couponsGross: parseCoupons(body.couponsGross), baseFeeBps, minimumWithdrawalMicroUsdt: minimum, autoApprovalLimitMicroUsdt: autoApproval, cooldownHours, vaultAccountId: vault.id, feeAccountId: fees.id, pendingAccountId: pending.id, issuanceAccountId: issuance.id });
       if (withdrawal.status === WithdrawalStatus.APPROVED) await queue.add('dispatch', { withdrawalId: withdrawal.id }, { jobId: withdrawal.id });
       response.status(201).json(serializeWithdrawal(withdrawal));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get('/v1/withdrawals/availability', async (request, response, next) => {
+    try {
+      const { barcodeId } = availabilityQuerySchema.parse(request.query);
+      const member = await userWithAccounts(prisma, barcodeId);
+      const availability = await readWithdrawalAvailability(prisma, member.user.id);
+      response.json({
+        balanceCoupons: availability.balanceCoupons.toString(),
+        lockedGuaranteeCoupons: availability.lockedGuaranteeCoupons.toString(),
+        outstandingDebtCoupons: availability.outstandingDebtCoupons.toString(),
+        totalCollateralCoupons: availability.totalCollateralCoupons.toString(),
+        availableToWithdrawCoupons: availability.availableToWithdrawCoupons.toString(),
+        blockers: availability.blockers,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/v1/loans', async (request, response, next) => {
+    try {
+      const body = loanBodySchema.parse(request.body);
+      const borrower = await userWithAccounts(prisma, body.barcodeId);
+      const guarantors = await Promise.all(body.guarantors.map(async (guarantor) => {
+        const guarantorId = guarantor.barcodeId !== undefined
+          ? (await userWithAccounts(prisma, guarantor.barcodeId)).user.id
+          : guarantor.guarantorId!;
+        await prisma.user.findUniqueOrThrow({ where: { id: guarantorId } });
+        return { guarantorId, amountCoupons: parseCoupons(guarantor.amountCoupons) };
+      }));
+      const loan = await createLoanRequest(prisma, {
+        borrowerId: borrower.user.id,
+        principalCoupons: parseCoupons(body.principalCoupons),
+        installments: body.installments.map((installment) => ({ dueAt: new Date(installment.dueAt), amountCoupons: parseCoupons(installment.amountCoupons) })),
+        guarantors,
+      });
+      response.status(201).json(serializeLoan(loan));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get('/v1/loans', async (request, response, next) => {
+    try {
+      const { barcodeId } = availabilityQuerySchema.parse(request.query);
+      const member = await userWithAccounts(prisma, barcodeId);
+      const loans = await prisma.loan.findMany({ where: { OR: [{ borrowerId: member.user.id }, { lenderId: member.user.id }] }, include: { installments: true, guarantees: true }, orderBy: { createdAt: 'desc' } });
+      response.json({ items: loans.map(serializeLoan) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get('/v1/guarantees', async (request, response, next) => {
+    try {
+      const { barcodeId } = availabilityQuerySchema.parse(request.query);
+      const member = await userWithAccounts(prisma, barcodeId);
+      const guarantees = await prisma.guarantee.findMany({ where: { guarantorId: member.user.id }, include: { loan: true }, orderBy: { createdAt: 'desc' } });
+      response.json({ items: guarantees.map((guarantee) => ({ ...guarantee, amountCoupons: guarantee.amountCoupons.toString(), loan: serializeLoan(guarantee.loan) })) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/v1/guarantees/:id/approve', async (request, response, next) => {
+    try {
+      const body = codeBodySchema.parse(request.body);
+      const guarantee = await prisma.guarantee.findUniqueOrThrow({ where: { id: request.params.id } });
+      const guarantor = { account: await accountForUserId(prisma, guarantee.guarantorId) };
+      const lock = await systemAccount(prisma, AccountType.GUARANTEE_LOCK, Asset.COUPON);
+      const approved = await approveGuarantee(prisma, { guaranteeId: guarantee.id, code: body.code, guarantorAccountId: guarantor.account.id, guaranteeLockAccountId: lock.id });
+      response.json(serializeGuarantee(approved));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/v1/guarantees/:id/activate', async (request, response, next) => {
+    try {
+      const body = codeBodySchema.parse(request.body);
+      const activated = await activateGuarantee(prisma, { guaranteeId: request.params.id, code: body.code });
+      if (activated === null) throw new DomainError('guarantee activation failed');
+      response.json(serializeGuarantee(activated));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/v1/guarantees/:id/cancel', async (request, response, next) => {
+    try {
+      const guarantee = await prisma.guarantee.findUniqueOrThrow({ where: { id: request.params.id } });
+      const guarantor = { account: await accountForUserId(prisma, guarantee.guarantorId) };
+      const lock = await systemAccount(prisma, AccountType.GUARANTEE_LOCK, Asset.COUPON);
+      const cancelled = await cancelGuarantee(prisma, { guaranteeId: guarantee.id, guarantorAccountId: guarantor.account.id, guaranteeLockAccountId: lock.id });
+      response.json(serializeGuarantee(cancelled));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/v1/guarantees/:id/decline', async (request, response, next) => {
+    try {
+      const guarantee = await prisma.guarantee.findUniqueOrThrow({ where: { id: request.params.id } });
+      const guarantor = { account: await accountForUserId(prisma, guarantee.guarantorId) };
+      const lock = await systemAccount(prisma, AccountType.GUARANTEE_LOCK, Asset.COUPON);
+      const declined = await cancelGuarantee(prisma, { guaranteeId: guarantee.id, guarantorAccountId: guarantor.account.id, guaranteeLockAccountId: lock.id, declined: true });
+      response.json(serializeGuarantee(declined));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/v1/loans/:id/disburse', async (request, response, next) => {
+    try {
+      const body = lenderBodySchema.parse(request.body);
+      const lender = await userWithAccounts(prisma, body.barcodeId);
+      const loan = await prisma.loan.findUniqueOrThrow({ where: { id: request.params.id } });
+      const borrowerAccount = await accountForUserId(prisma, loan.borrowerId);
+      response.json(serializeLoan(await disburseLoan(prisma, { loanId: loan.id, lenderId: lender.user.id, lenderAccountId: lender.account.id, borrowerAccountId: borrowerAccount.id })));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/v1/loans/:id/repay', async (request, response, next) => {
+    try {
+      const body = repaymentBodySchema.parse(request.body);
+      const loan = await prisma.loan.findUniqueOrThrow({ where: { id: request.params.id } });
+      if (loan.lenderId === null) throw new DomainError('loan has no lender');
+      const borrowerAccount = await accountForUserId(prisma, loan.borrowerId);
+      const lenderAccount = await accountForUserId(prisma, loan.lenderId);
+      response.json(serializeLoan(await repayLoan(prisma, { loanId: loan.id, amountCoupons: parseCoupons(body.amountCoupons), borrowerAccountId: borrowerAccount.id, lenderAccountId: lenderAccount.id, externalRef: `api:loan:${loan.id}:repay:${body.idempotencyKey}` })));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/v1/loans/:id/claim', async (request, response, next) => {
+    try {
+      const body = lenderBodySchema.parse(request.body);
+      const lender = await userWithAccounts(prisma, body.barcodeId);
+      response.json(serializeLoan(await claimGuarantees(prisma, { loanId: request.params.id, lenderAccountId: lender.account.id })));
     } catch (error) {
       next(error);
     }
@@ -303,8 +474,64 @@ export function createApp(dependencies: ApiDependencies): express.Express {
 function parseCoupons(value: string): bigint {
   return BigInt(value);
 }
-function serializeWithdrawal(withdrawal: { id: string; status: WithdrawalStatus; couponsGross: bigint; grossMicroUsdt: bigint; feeMicroUsdt: bigint; netMicroUsdt: bigint; chainTxHash: string | null }) {
-  return { id: withdrawal.id, status: withdrawal.status, couponsGross: withdrawal.couponsGross.toString(), grossUsdt: decimalFromMicroUsdt(withdrawal.grossMicroUsdt), feeUsdt: decimalFromMicroUsdt(withdrawal.feeMicroUsdt), netUsdt: decimalFromMicroUsdt(withdrawal.netMicroUsdt), chainTxHash: withdrawal.chainTxHash };
+function serializeWithdrawal(withdrawal: { id: string; status: WithdrawalStatus; couponsGross: bigint; grossMicroUsdt: bigint; feeMicroUsdt: bigint; netMicroUsdt: bigint; chainTxHash: string | null; eligibleAt?: Date }) {
+  return { id: withdrawal.id, status: withdrawal.status, couponsGross: withdrawal.couponsGross.toString(), grossUsdt: decimalFromMicroUsdt(withdrawal.grossMicroUsdt), feeUsdt: decimalFromMicroUsdt(withdrawal.feeMicroUsdt), netUsdt: decimalFromMicroUsdt(withdrawal.netMicroUsdt), chainTxHash: withdrawal.chainTxHash, eligibleAt: withdrawal.eligibleAt ?? null };
+}
+
+function serializeLoan(loan: {
+  id: string;
+  borrowerId: string;
+  lenderId?: string | null;
+  principalCoupons: bigint;
+  outstandingCoupons: bigint;
+  status: string;
+  createdAt: Date;
+  fundedAt?: Date | null;
+  settledAt?: Date | null;
+  installments?: Array<{ id: string; sequence: number; dueAt: Date; amountCoupons: bigint; paidCoupons: bigint; paidAt: Date | null }>;
+  guarantees?: Array<{ id: string; guarantorId: string; amountCoupons: bigint; status: string; wrongAttempts: number; lockedAt?: Date | null; activatedAt?: Date | null; resolvedAt?: Date | null }>;
+}) {
+  return {
+    id: loan.id,
+    borrowerId: loan.borrowerId,
+    lenderId: loan.lenderId ?? null,
+    principalCoupons: loan.principalCoupons.toString(),
+    outstandingCoupons: loan.outstandingCoupons.toString(),
+    status: loan.status,
+    createdAt: loan.createdAt,
+    fundedAt: loan.fundedAt ?? null,
+    settledAt: loan.settledAt ?? null,
+    installments: loan.installments?.map((installment) => ({
+      ...installment,
+      amountCoupons: installment.amountCoupons.toString(),
+      paidCoupons: installment.paidCoupons.toString(),
+    })),
+    guarantees: loan.guarantees?.map(serializeGuarantee),
+  };
+}
+
+function serializeGuarantee(guarantee: {
+  id: string;
+  loanId?: string;
+  guarantorId: string;
+  amountCoupons: bigint;
+  status: string;
+  wrongAttempts: number;
+  lockedAt?: Date | null;
+  activatedAt?: Date | null;
+  resolvedAt?: Date | null;
+}) {
+  return {
+    id: guarantee.id,
+    loanId: guarantee.loanId,
+    guarantorId: guarantee.guarantorId,
+    amountCoupons: guarantee.amountCoupons.toString(),
+    status: guarantee.status,
+    wrongAttempts: guarantee.wrongAttempts,
+    lockedAt: guarantee.lockedAt ?? null,
+    activatedAt: guarantee.activatedAt ?? null,
+    resolvedAt: guarantee.resolvedAt ?? null,
+  };
 }
 
 export async function createApiRuntime(config: ApiConfig): Promise<{ app: express.Express; prisma: PrismaClient; redis: Redis; queue: Queue }> {

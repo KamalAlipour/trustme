@@ -11,7 +11,15 @@ export type DispatchConfig = {
   confirmations: number;
   gasSafetyMultiplierBps: number;
   gasLimitCeiling: number;
+  chainMaxBlockAgeSeconds?: number;
 };
+
+export class WithdrawalNotEligibleError extends Error {
+  public constructor() {
+    super('withdrawal cooldown has not elapsed');
+    this.name = 'WithdrawalNotEligibleError';
+  }
+}
 
 export type DispatchResult =
   | { status: 'skipped' }
@@ -24,6 +32,7 @@ async function claimApprovedWithdrawal(prisma: PrismaClient, withdrawalId: strin
     const withdrawal = await tx.withdrawal.findUniqueOrThrow({ where: { id: withdrawalId } });
     if (withdrawal.chainTxHash !== null) return withdrawal;
     if (withdrawal.status !== WithdrawalStatus.APPROVED) return null;
+    if (withdrawal.eligibleAt > new Date()) throw new WithdrawalNotEligibleError();
     return tx.withdrawal.update({ where: { id: withdrawalId }, data: { status: WithdrawalStatus.PROCESSING } });
   });
 }
@@ -78,6 +87,13 @@ export async function dispatchWithdrawal(
   let signedTransaction: string;
   let txHash: string;
   try {
+    const head = await provider.getBlockNumber();
+    const cursor = await prisma.chainCursor.findUnique({ where: { id: 1 }, select: { nextBlock: true } });
+    if (cursor !== null && BigInt(head) < cursor.nextBlock) throw new Error('chain head is behind the stored cursor');
+    const blockTimestamp = await provider.getBlockTimestamp(head);
+    if (blockTimestamp === null || Math.floor(Date.now() / 1000) - blockTimestamp > (config.chainMaxBlockAgeSeconds ?? 120)) {
+      throw new Error('chain head is stale');
+    }
     const fees = await provider.estimateFees();
     const feeTransaction = feeFieldsWithType(fees);
     const transactionWithoutGas: TransactionRequest = {

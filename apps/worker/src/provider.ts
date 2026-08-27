@@ -38,6 +38,7 @@ export type FeeEstimate = {
 
 export interface ChainProvider {
   getBlockNumber(): Promise<number>;
+  getBlockTimestamp(blockNumber: number): Promise<number | null>;
   getBlockHash(blockNumber: number): Promise<string | null>;
   getLogs(filter: LogFilter): Promise<ChainLog[]>;
   getTransactionReceipt(hash: string): Promise<ChainReceipt | null>;
@@ -79,6 +80,11 @@ export class EthersChainProvider implements ChainProvider {
 
   public async getBlockNumber(): Promise<number> {
     return this.provider.getBlockNumber();
+  }
+
+  public async getBlockTimestamp(blockNumber: number): Promise<number | null> {
+    const block = await this.provider.getBlock(blockNumber);
+    return block?.timestamp ?? null;
   }
 
   public async getBlockHash(blockNumber: number): Promise<string | null> {
@@ -141,6 +147,7 @@ export function createWalletSigner(privateKey: string, provider: JsonRpcProvider
 
 export type FakeProviderOptions = {
   head?: number;
+  blockTimestamps?: Map<number, number>;
   blockHashes?: Map<number, string>;
   logs?: ChainLog[];
   receipts?: Map<string, ChainReceipt | null>;
@@ -165,6 +172,10 @@ export class FakeChainProvider implements ChainProvider {
 
   public async getBlockNumber(): Promise<number> {
     return this.options.head ?? 0;
+  }
+
+  public async getBlockTimestamp(blockNumber: number): Promise<number | null> {
+    return this.options.blockTimestamps?.get(blockNumber) ?? Math.floor(Date.now() / 1000);
   }
 
   public async getBlockHash(blockNumber: number): Promise<string | null> {

@@ -16,6 +16,7 @@ export const workerConfigSchema = z.object({
   confirmations: integer.default(12),
   maxBlockRange: integer.default(2_000).refine((value) => value > 0),
   reorgRewindBlocks: integer.default(64).refine((value) => value > 0),
+  chainMaxBlockAgeSeconds: positiveInteger.default(120),
   failoverMarkerPath: z.string().default('/etc/trustme/FAILED_OVER'),
 });
 
@@ -35,6 +36,7 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
     confirmations: env.CONFIRMATIONS,
     maxBlockRange: env.MAX_BLOCK_RANGE,
     reorgRewindBlocks: env.REORG_REWIND_BLOCKS,
+    chainMaxBlockAgeSeconds: env.CHAIN_MAX_BLOCK_AGE_SECONDS,
     failoverMarkerPath: env.FAILOVER_MARKER_PATH,
   });
 }

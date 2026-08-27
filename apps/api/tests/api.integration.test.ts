@@ -169,6 +169,48 @@ describe('member API', () => {
       await redis.quit();
     }
   });
+
+  it('runs a guarantee lifecycle over HTTP', async () => {
+    const { app } = appFixture();
+    for (const [phone, barcodeId] of [['+1555000110', 'loan-borrower'], ['+1555000111', 'loan-guarantor'], ['+1555000112', 'loan-lender']] as const) {
+      const created = await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone, barcodeId });
+      expect(created.status).toBe(201);
+    }
+    const systems = await addSystemAccounts();
+    const lock = await account(AccountType.GUARANTEE_LOCK, Asset.COUPON);
+    const members = await Promise.all(['loan-borrower', 'loan-guarantor', 'loan-lender'].map((barcodeId) => prisma.user.findUniqueOrThrow({ where: { barcodeId } })));
+    const accounts = await Promise.all(members.map((member) => prisma.ledgerAccount.findFirstOrThrow({ where: { userId: member.id, type: AccountType.USER_COUPON, asset: Asset.COUPON } })));
+    for (let index = 1; index < accounts.length; index += 1) {
+      await postDeposit(prisma, {
+        externalRef: `loan-http-fund:${index}`,
+        userId: members[index]!.id,
+        userCouponAccountId: accounts[index]!.id,
+        externalOnchainAccountId: systems.external.id,
+        vaultAccountId: systems.vault.id,
+        issuanceAccountId: systems.issuance.id,
+        amountMicroUsdt: 10_000_000n,
+      });
+    }
+    const loanResponse = await request(app).post('/v1/loans').set('Authorization', `Bearer ${token}`).send({
+      barcodeId: 'loan-borrower',
+      principalCoupons: '100',
+      installments: [{ amountCoupons: '100', dueAt: new Date(Date.now() + 86_400_000).toISOString() }],
+      guarantors: [{ barcodeId: 'loan-guarantor', amountCoupons: '100' }],
+    });
+    expect(loanResponse.status).toBe(201);
+    const loanId = loanResponse.body.id as string;
+    const guaranteeId = loanResponse.body.guarantees[0].id as string;
+    const approved = await request(app).post(`/v1/guarantees/${guaranteeId}/approve`).set('Authorization', `Bearer ${token}`).send({ code: '1234' });
+    expect(approved.status, JSON.stringify(approved.body)).toBe(200);
+    const activated = await request(app).post(`/v1/guarantees/${guaranteeId}/activate`).set('Authorization', `Bearer ${token}`).send({ code: '1234' });
+    expect(activated.status).toBe(200);
+    const disbursed = await request(app).post(`/v1/loans/${loanId}/disburse`).set('Authorization', `Bearer ${token}`).send({ barcodeId: 'loan-lender' });
+    expect(disbursed.status).toBe(200);
+    const repaid = await request(app).post(`/v1/loans/${loanId}/repay`).set('Authorization', `Bearer ${token}`).send({ amountCoupons: '100', idempotencyKey: 'full' });
+    expect(repaid.status).toBe(200);
+    expect(repaid.body.status).toBe('SETTLED');
+    expect(lock.id).toBeDefined();
+  });
 });
 
 describe('admin API', () => {
