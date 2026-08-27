@@ -11,7 +11,7 @@ export async function startApi(): Promise<void> {
   const config = loadApiConfig();
   assertActiveNode(config.failoverMarkerPath);
   const runtime = await createApiRuntime(config);
-  runtime.app.listen(config.port, () => undefined);
+  runtime.app.listen(config.port, config.bindHost, () => undefined);
 }
 
 if (process.argv[1]?.endsWith('/index.js')) {
