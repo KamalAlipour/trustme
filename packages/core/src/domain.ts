@@ -163,7 +163,7 @@ export async function releaseEscrow(
       });
       return { hold: null, error: wrongAttempts >= 5 ? 'escrow locked' : 'invalid escrow code' };
     }
-    await postWithClient(tx, {
+    const release = await postWithClient(tx, {
       type: TransactionType.ESCROW_RELEASE,
       externalRef: `escrow:${hold.id}:release`,
       userId: hold.recipientId,
@@ -171,7 +171,7 @@ export async function releaseEscrow(
       amountCoupons: hold.amountCoupons,
       legs: [{ fromAccountId: hold.escrowAccountId, toAccountId: input.recipientAccountId, amount: hold.amountCoupons, asset: Asset.COUPON }],
     });
-    await tx.escrowHold.update({ where: { id: hold.id }, data: { status: EscrowStatus.RELEASED } });
+    await tx.escrowHold.update({ where: { id: hold.id }, data: { status: EscrowStatus.RELEASED, releaseTransactionId: release.id } });
     return { hold: await tx.escrowHold.findUniqueOrThrow({ where: { id: hold.id } }), error: null };
   });
   if (result.error) throw new DomainError(result.error);

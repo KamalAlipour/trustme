@@ -11,10 +11,24 @@ type RefundInput = {
   mediaIds?: readonly string[];
 };
 
-async function userCouponAccount(tx: Prisma.TransactionClient, userId: string) {
-  const account = await tx.ledgerAccount.findFirstOrThrow({ where: { userId, type: AccountType.USER_COUPON, asset: Asset.COUPON } });
-  await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "LedgerAccount" WHERE "id" = ${account.id}::uuid FOR UPDATE`);
-  return tx.ledgerAccount.findUniqueOrThrow({ where: { id: account.id } });
+async function userCouponAccountId(tx: Prisma.TransactionClient, userId: string) {
+  return tx.ledgerAccount.findFirstOrThrow({
+    where: { userId, type: AccountType.USER_COUPON, asset: Asset.COUPON },
+    select: { id: true },
+  });
+}
+
+async function lockedUserCouponAccounts(tx: Prisma.TransactionClient, sellerId: string, buyerId: string) {
+  const sellerIdRow = await userCouponAccountId(tx, sellerId);
+  const buyerIdRow = await userCouponAccountId(tx, buyerId);
+  const ids = [...new Set([sellerIdRow.id, buyerIdRow.id])];
+  await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "LedgerAccount" WHERE "id" IN (${Prisma.join(ids.map((id) => Prisma.sql`${id}::uuid`))}) ORDER BY "id" FOR UPDATE`);
+  const accounts = await tx.ledgerAccount.findMany({ where: { id: { in: ids } } });
+  const byId = new Map(accounts.map((account) => [account.id, account]));
+  return {
+    seller: byId.get(sellerIdRow.id)!,
+    buyer: byId.get(buyerIdRow.id)!,
+  };
 }
 
 export async function createRefundRequest(prisma: PrismaClient, input: RefundInput) {
@@ -26,7 +40,7 @@ export async function createRefundRequest(prisma: PrismaClient, input: RefundInp
     await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "Transaction" WHERE "id" = ${input.transactionId}::uuid FOR UPDATE`);
     const original = await tx.transaction.findUnique({
       where: { id: input.transactionId },
-      include: { entries: { include: { fromAccount: true, toAccount: true } } },
+      include: { entries: { include: { fromAccount: true, toAccount: true } }, escrowHold: true },
     });
     if (
       original === null ||
@@ -56,9 +70,7 @@ export async function createRefundRequest(prisma: PrismaClient, input: RefundInp
       entry.toAccount.type === AccountType.USER_COUPON &&
       entry.toAccount.userId !== null
     ) {
-      const parts = original.externalRef.split(':');
-      const holdId = parts.length === 3 && parts[0] === 'escrow' && parts[2] === 'release' ? parts[1] : null;
-      const hold = holdId === null || holdId === undefined ? null : await tx.escrowHold.findUnique({ where: { id: holdId } });
+      const hold = original.escrowHold;
       if (hold !== null && hold.recipientId === entry.toAccount.userId) {
         buyerId = hold.senderId;
         sellerId = hold.recipientId;
@@ -108,8 +120,7 @@ export async function approveRefund(prisma: PrismaClient, input: { refundRequest
     if (request.sellerId !== input.sellerId) throw new DomainError('resource not found', 404);
     if (request.status === RefundStatus.APPROVED) return request;
     if (request.status !== RefundStatus.PENDING) throw new DomainError('refund is not pending', 409);
-    const seller = await userCouponAccount(tx, request.sellerId);
-    const buyer = await userCouponAccount(tx, request.buyerId);
+    const { seller, buyer } = await lockedUserCouponAccounts(tx, request.sellerId, request.buyerId);
     if (seller.balance < request.amountCoupons) throw new DomainError('insufficient balance for refund', 409);
     const transaction = await postWithClient(tx, {
       type: TransactionType.REFUND,

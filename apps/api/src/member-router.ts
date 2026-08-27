@@ -504,7 +504,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       const destination = await userByBarcode(prisma, body.toBarcodeId);
       const transaction = await transferCoupons(prisma, {
         userId: user.id,
-        externalRef: `api:me:transfer:${body.idempotencyKey}`,
+        externalRef: `api:me:transfer:${user.id}:${body.idempotencyKey}`,
         fromAccountId: (await couponAccount(prisma, user.id)).id,
         toAccountId: (await couponAccount(prisma, destination.id)).id,
         amountCoupons: parseCoupons(body.amountCoupons),
@@ -538,7 +538,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
         amountCoupons: parseCoupons(body.amountCoupons),
         code: body.code,
         expiresAt: new Date(body.expiresAt),
-        ...(body.idempotencyKey === undefined ? {} : { externalRef: `api:me:escrow:${body.idempotencyKey}` }),
+        ...(body.idempotencyKey === undefined ? {} : { externalRef: `api:me:escrow:${sender.id}:${body.idempotencyKey}` }),
       });
       response.status(201).json({ id: hold.id, status: hold.status, amountCoupons: hold.amountCoupons.toString(), expiresAt: hold.expiresAt });
     } catch (error) {
@@ -980,7 +980,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
         memberAccountId: (await couponAccount(prisma, userId)).id,
         charityAccountId: (await prisma.ledgerAccount.findFirstOrThrow({ where: { charityId: charity.id, type: AccountType.CHARITY_COUPON, asset: Asset.COUPON } })).id,
         amountCoupons: parseCoupons(body.amountCoupons),
-        externalRef: `api:me:charity:${charity.id}:${body.idempotencyKey ?? randomUUID()}`,
+        externalRef: `api:me:charity:${charity.id}:${userId}:${body.idempotencyKey ?? randomUUID()}`,
       });
       response.status(201).json({ transactionId: transaction.id, status: transaction.status });
     } catch (error) {

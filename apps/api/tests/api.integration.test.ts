@@ -341,6 +341,11 @@ describe('member API', () => {
     expect(balanceA.body.coupons).toBe('9999');
     const reverse = await request(app).post('/v1/me/transfers').set('Authorization', `Bearer ${tokenB}`).send({ toBarcodeId: 'member-a', amountCoupons: '1', idempotencyKey: 'reverse', pin: '2468' });
     expect(reverse.status).toBe(201);
+    const sharedKeyA = await request(app).post('/v1/me/transfers').set('Authorization', `Bearer ${tokenA}`).send({ toBarcodeId: 'member-b', amountCoupons: '1', idempotencyKey: 'shared-key', pin: '2468' });
+    const sharedKeyB = await request(app).post('/v1/me/transfers').set('Authorization', `Bearer ${tokenB}`).send({ toBarcodeId: 'member-a', amountCoupons: '1', idempotencyKey: 'shared-key', pin: '2468' });
+    expect(sharedKeyA.status).toBe(201);
+    expect(sharedKeyB.status).toBe(201);
+    expect(sharedKeyB.body.transactionId).not.toBe(sharedKeyA.body.transactionId);
     const history = await request(app).get('/v1/me/transactions?limit=1').set('Authorization', `Bearer ${tokenA}`);
     expect(history.status).toBe(200);
     expect(history.body.items[0]).toMatchObject({ direction: 'in', amountCoupons: '1', counterparty: { displayName: 'Bob', barcodeId: 'member-b' } });

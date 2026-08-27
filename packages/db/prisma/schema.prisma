@@ -272,7 +272,8 @@ model Transaction {
   createdAt             DateTime          @default(now())
   user                  User?             @relation(fields: [userId], references: [id])
   entries               LedgerEntry[]
-  escrowHold            EscrowHold?
+  escrowHold            EscrowHold?       @relation("EscrowRelease")
+  escrowHoldTransaction EscrowHold?       @relation("EscrowHoldTransaction")
   withdrawal            Withdrawal?
   loanDisbursement      Loan?             @relation("LoanDisbursement")
   guaranteeLock         Guarantee?        @relation("GuaranteeLockTransaction")
@@ -290,21 +291,23 @@ model SystemSetting {
 }
 
 model EscrowHold {
-  id              String        @id @default(uuid()) @db.Uuid
-  senderId        String        @db.Uuid
-  recipientId     String        @db.Uuid
-  escrowAccountId String        @db.Uuid
-  transactionId   String        @unique @db.Uuid
-  amountCoupons   BigInt
-  codeHash        String
-  wrongAttempts   Int           @default(0)
-  expiresAt       DateTime
-  status          EscrowStatus  @default(ACTIVE)
-  createdAt       DateTime      @default(now())
-  sender          User          @relation("EscrowSender", fields: [senderId], references: [id])
-  recipient       User          @relation("EscrowRecipient", fields: [recipientId], references: [id])
-  escrowAccount   LedgerAccount @relation(fields: [escrowAccountId], references: [id])
-  transaction     Transaction   @relation(fields: [transactionId], references: [id])
+  id                   String        @id @default(uuid()) @db.Uuid
+  senderId             String        @db.Uuid
+  recipientId          String        @db.Uuid
+  escrowAccountId      String        @db.Uuid
+  transactionId        String        @unique @db.Uuid
+  releaseTransactionId String?       @unique @db.Uuid
+  amountCoupons        BigInt
+  codeHash             String
+  wrongAttempts        Int           @default(0)
+  expiresAt            DateTime
+  status               EscrowStatus  @default(ACTIVE)
+  createdAt            DateTime      @default(now())
+  sender               User          @relation("EscrowSender", fields: [senderId], references: [id])
+  recipient            User          @relation("EscrowRecipient", fields: [recipientId], references: [id])
+  escrowAccount        LedgerAccount @relation(fields: [escrowAccountId], references: [id])
+  transaction          Transaction   @relation("EscrowHoldTransaction", fields: [transactionId], references: [id])
+  releaseTransaction   Transaction?  @relation("EscrowRelease", fields: [releaseTransactionId], references: [id])
 
   @@index([senderId, status])
   @@index([expiresAt, status])
