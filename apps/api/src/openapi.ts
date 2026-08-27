@@ -31,7 +31,20 @@ export const openapiDocument = {
     '/v1/escrows/{id}/release': { post: { responses: { '200': { description: 'Escrow released' } } } },
     '/v1/escrows/{id}/cancel': { post: { responses: { '200': { description: 'Escrow cancelled' } } } },
     '/v1/withdrawals': { post: { responses: { '201': { description: 'Withdrawal requested' } } } },
+    '/v1/withdrawals/availability': { get: { responses: { '200': { description: 'Withdrawal availability and blockers' } } } },
     '/v1/withdrawals/{id}': { get: { responses: { '200': { description: 'Withdrawal status' } } } },
+    '/v1/loans': {
+      get: { responses: { '200': { description: 'Member loans' } } },
+      post: { responses: { '201': { description: 'Loan requested' } } },
+    },
+    '/v1/loans/{id}/disburse': { post: { responses: { '200': { description: 'Loan disbursed' } } } },
+    '/v1/loans/{id}/repay': { post: { responses: { '200': { description: 'Loan repayment posted' } } } },
+    '/v1/loans/{id}/claim': { post: { responses: { '200': { description: 'Guarantees claimed' } } } },
+    '/v1/guarantees': { get: { responses: { '200': { description: 'Member guarantees' } } } },
+    '/v1/guarantees/{id}/approve': { post: { responses: { '200': { description: 'Guarantee approved and locked' } } } },
+    '/v1/guarantees/{id}/activate': { post: { responses: { '200': { description: 'Guarantee activated' } } } },
+    '/v1/guarantees/{id}/cancel': { post: { responses: { '200': { description: 'Guarantee cancelled' } } } },
+    '/v1/guarantees/{id}/decline': { post: { responses: { '200': { description: 'Guarantee declined' } } } },
     '/admin/login': {
       post: {
         requestBody: {

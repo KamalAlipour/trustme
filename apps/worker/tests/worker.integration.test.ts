@@ -47,7 +47,7 @@ beforeAll(async () => {
   await prisma.$connect();
 });
 beforeEach(async () => {
-  await prisma.$executeRawUnsafe('TRUNCATE TABLE "AdminAuditLog", "AdminUser", "Withdrawal", "EscrowHold", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User", "ChainCursor" CASCADE');
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "AdminAuditLog", "AdminUser", "Withdrawal", "EscrowHold", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User", "ChainCursor" CASCADE');
 });
 afterAll(async () => {
   await prisma.$disconnect();
@@ -117,6 +117,7 @@ describe('withdrawal dispatch and confirmation', () => {
       feeAccountId: fixtureAccounts.fees.id,
       pendingAccountId: fixtureAccounts.pending.id,
       issuanceAccountId: fixtureAccounts.issuance.id,
+      cooldownHours: 0,
     });
     const signer = new FakeTransactionSigner(getAddress(`0x${'dd'.repeat(20)}`), '0x01');
     const provider = new FakeChainProvider({
@@ -165,6 +166,7 @@ describe('withdrawal dispatch and confirmation', () => {
       feeAccountId: fixtureAccounts.fees.id,
       pendingAccountId: fixtureAccounts.pending.id,
       issuanceAccountId: fixtureAccounts.issuance.id,
+      cooldownHours: 0,
     });
     const signer = new FakeTransactionSigner(getAddress(`0x${'dd'.repeat(20)}`), '0x01');
     const provider = new FakeChainProvider();
@@ -202,6 +204,7 @@ describe('withdrawal dispatch and confirmation', () => {
       feeAccountId: fixtureAccounts.fees.id,
       pendingAccountId: fixtureAccounts.pending.id,
       issuanceAccountId: fixtureAccounts.issuance.id,
+      cooldownHours: 0,
     });
     const signer = new FakeTransactionSigner(
       getAddress(`0x${'dd'.repeat(20)}`),
@@ -241,6 +244,7 @@ describe('withdrawal dispatch and confirmation', () => {
       feeAccountId: fixtureAccounts.fees.id,
       pendingAccountId: fixtureAccounts.pending.id,
       issuanceAccountId: fixtureAccounts.issuance.id,
+      cooldownHours: 0,
     });
     const first = await makeWithdrawal('e');
     const signer = new FakeTransactionSigner(getAddress(`0x${'dd'.repeat(20)}`), '0x01');
@@ -258,5 +262,68 @@ describe('withdrawal dispatch and confirmation', () => {
     await expect(dispatchWithdrawal(prisma, noNative, signer, dispatchConfig, second.id)).rejects.toThrow('insufficient native');
     expect(signer.signCount).toBe(0);
     expect((await prisma.withdrawal.findUniqueOrThrow({ where: { id: second.id } })).status).toBe(WithdrawalStatus.APPROVED);
+  });
+
+  it('does not sign when the latest node block is stale', async () => {
+    const fixtureAccounts = await fixture();
+    await postDeposit(prisma, {
+      externalRef: 'deposit:dispatch:stale',
+      userId: fixtureAccounts.user.id,
+      userCouponAccountId: fixtureAccounts.userAccount.id,
+      externalOnchainAccountId: fixtureAccounts.external.id,
+      vaultAccountId: fixtureAccounts.vault.id,
+      issuanceAccountId: fixtureAccounts.issuance.id,
+      amountMicroUsdt: 2_000_000_000n,
+    });
+    const withdrawal = await requestWithdrawal(prisma, {
+      userId: fixtureAccounts.user.id,
+      userAccountId: fixtureAccounts.userAccount.id,
+      destinationAddress: getAddress(`0x${'cc'.repeat(20)}`),
+      couponsGross: 50_000n,
+      baseFeeBps: 100n,
+      minimumWithdrawalMicroUsdt: 1n,
+      autoApprovalLimitMicroUsdt: 1_000_000_000n,
+      vaultAccountId: fixtureAccounts.vault.id,
+      feeAccountId: fixtureAccounts.fees.id,
+      pendingAccountId: fixtureAccounts.pending.id,
+      issuanceAccountId: fixtureAccounts.issuance.id,
+      cooldownHours: 0,
+    });
+    const signer = new FakeTransactionSigner(getAddress(`0x${'dd'.repeat(20)}`), '0x01');
+    const provider = new FakeChainProvider({ head: 5, blockTimestamps: new Map([[5, Math.floor(Date.now() / 1000) - 121]]) });
+    await expect(dispatchWithdrawal(prisma, provider, signer, { ...dispatchConfig, chainMaxBlockAgeSeconds: 120 }, withdrawal.id)).rejects.toThrow('chain head is stale');
+    expect(signer.signCount).toBe(0);
+    expect(await prisma.withdrawal.findUniqueOrThrow({ where: { id: withdrawal.id } })).toMatchObject({ status: WithdrawalStatus.APPROVED });
+  });
+
+  it('does not dispatch a withdrawal before its cooldown elapses', async () => {
+    const fixtureAccounts = await fixture();
+    await postDeposit(prisma, {
+      externalRef: 'deposit:dispatch:cooldown',
+      userId: fixtureAccounts.user.id,
+      userCouponAccountId: fixtureAccounts.userAccount.id,
+      externalOnchainAccountId: fixtureAccounts.external.id,
+      vaultAccountId: fixtureAccounts.vault.id,
+      issuanceAccountId: fixtureAccounts.issuance.id,
+      amountMicroUsdt: 2_000_000_000n,
+    });
+    const withdrawal = await requestWithdrawal(prisma, {
+      userId: fixtureAccounts.user.id,
+      userAccountId: fixtureAccounts.userAccount.id,
+      destinationAddress: getAddress(`0x${'cc'.repeat(20)}`),
+      couponsGross: 50_000n,
+      baseFeeBps: 100n,
+      minimumWithdrawalMicroUsdt: 1n,
+      autoApprovalLimitMicroUsdt: 1_000_000_000n,
+      cooldownHours: 168,
+      vaultAccountId: fixtureAccounts.vault.id,
+      feeAccountId: fixtureAccounts.fees.id,
+      pendingAccountId: fixtureAccounts.pending.id,
+      issuanceAccountId: fixtureAccounts.issuance.id,
+    });
+    const signer = new FakeTransactionSigner(getAddress(`0x${'dd'.repeat(20)}`), '0x01');
+    await expect(dispatchWithdrawal(prisma, new FakeChainProvider(), signer, dispatchConfig, withdrawal.id)).rejects.toThrow('cooldown has not elapsed');
+    expect(signer.signCount).toBe(0);
+    expect(await prisma.withdrawal.findUniqueOrThrow({ where: { id: withdrawal.id } })).toMatchObject({ status: WithdrawalStatus.APPROVED });
   });
 });

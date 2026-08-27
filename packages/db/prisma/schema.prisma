@@ -15,6 +15,7 @@ enum Asset {
 enum AccountType {
   USER_COUPON
   ESCROW
+  GUARANTEE_LOCK
   SYSTEM_COUPON_ISSUANCE
   SYSTEM_VAULT_USDT
   SYSTEM_WITHDRAWAL_PENDING
@@ -31,6 +32,30 @@ enum TransactionType {
   WITHDRAWAL
   REFUND
   FEE
+  GUARANTEE_LOCK
+  GUARANTEE_RELEASE
+  GUARANTEE_CLAIM
+  LOAN_DISBURSE
+  LOAN_REPAY
+}
+
+enum LoanStatus {
+  REQUESTED
+  ACTIVE
+  SETTLED
+  DEFAULTED
+  CANCELLED
+}
+
+enum GuaranteeStatus {
+  PENDING
+  CONFIRMATION_PENDING
+  CODE_LOCKED
+  ACTIVE
+  RELEASED
+  CLAIMED
+  DECLINED
+  CANCELLED
 }
 
 enum TransactionStatus {
@@ -76,6 +101,7 @@ model User {
   barcodeId       String           @unique
   aliasName       String?
   dustMicroUsdt   BigInt           @default(0)
+  activeGuaranteeCount Int          @default(0)
   createdAt       DateTime         @default(now())
   depositAddresses DepositAddress[]
   ledgerAccounts  LedgerAccount[]
@@ -83,6 +109,9 @@ model User {
   escrowHolds     EscrowHold[]     @relation("EscrowSender")
   receivedEscrows EscrowHold[]     @relation("EscrowRecipient")
   withdrawals     Withdrawal[]
+  borrowerLoans   Loan[]           @relation("LoanBorrower")
+  lenderLoans     Loan[]           @relation("LoanLender")
+  guarantees      Guarantee[]
 }
 
 model DepositAddress {
@@ -139,6 +168,8 @@ model Transaction {
   entries               LedgerEntry[]
   escrowHold            EscrowHold?
   withdrawal            Withdrawal?
+  loanDisbursement      Loan?             @relation("LoanDisbursement")
+  guaranteeLock         Guarantee?        @relation("GuaranteeLockTransaction")
   @@index([userId, createdAt])
 }
 
@@ -180,10 +211,64 @@ model Withdrawal {
   status             WithdrawalStatus @default(PENDING_APPROVAL)
   chainTxHash        String?
   broadcastedAt      DateTime?
+  eligibleAt         DateTime
   createdAt          DateTime         @default(now())
   user               User             @relation(fields: [userId], references: [id])
   transaction        Transaction      @relation(fields: [transactionId], references: [id])
   @@index([status, createdAt])
+}
+
+model Loan {
+  id                   String             @id @default(uuid()) @db.Uuid
+  borrowerId           String             @db.Uuid
+  lenderId             String?            @db.Uuid
+  principalCoupons     BigInt
+  outstandingCoupons   BigInt             @default(0)
+  status               LoanStatus         @default(REQUESTED)
+  createdAt            DateTime           @default(now())
+  fundedAt             DateTime?
+  settledAt            DateTime?
+  borrower             User               @relation("LoanBorrower", fields: [borrowerId], references: [id])
+  lender               User?              @relation("LoanLender", fields: [lenderId], references: [id])
+  installments         LoanInstallment[]
+  guarantees           Guarantee[]
+  disbursement         Transaction?       @relation("LoanDisbursement", fields: [disbursementTransactionId], references: [id])
+  disbursementTransactionId String?        @unique @db.Uuid
+  @@index([borrowerId, status])
+  @@index([lenderId, status])
+}
+
+model LoanInstallment {
+  id            String   @id @default(uuid()) @db.Uuid
+  loanId        String   @db.Uuid
+  sequence      Int
+  dueAt         DateTime
+  amountCoupons BigInt
+  paidCoupons   BigInt   @default(0)
+  paidAt        DateTime?
+  loan          Loan     @relation(fields: [loanId], references: [id])
+  @@unique([loanId, sequence])
+  @@index([loanId, dueAt])
+}
+
+model Guarantee {
+  id                 String          @id @default(uuid()) @db.Uuid
+  loanId             String          @db.Uuid
+  guarantorId        String          @db.Uuid
+  amountCoupons      BigInt
+  codeHash           String?
+  wrongAttempts      Int             @default(0)
+  status             GuaranteeStatus  @default(PENDING)
+  lockTransactionId  String?         @unique @db.Uuid
+  createdAt          DateTime        @default(now())
+  lockedAt           DateTime?
+  activatedAt        DateTime?
+  resolvedAt         DateTime?
+  loan               Loan            @relation(fields: [loanId], references: [id])
+  guarantor          User            @relation(fields: [guarantorId], references: [id])
+  lockTransaction    Transaction?    @relation("GuaranteeLockTransaction", fields: [lockTransactionId], references: [id])
+  @@unique([loanId, guarantorId])
+  @@index([guarantorId, status])
 }
 
 model ChainCursor {

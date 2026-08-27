@@ -10,11 +10,12 @@ import {
   TransactionType,
   WithdrawalStatus,
 } from '@trustme/db';
-import { postTransaction, postWithClient } from './ledger.js';
+import { postWithClient } from './ledger.js';
 import { couponsFromMicroUsdt, withdrawalQuote } from './money.js';
 import { evmAddressSchema, fourDigitCodeSchema } from './schemas.js';
 import { withSerializableRetry } from './retry.js';
 import { DomainError } from './domain-error.js';
+import { assertNotRestricted, readWithdrawalAvailabilityInTransaction } from './lending.js';
 
 export async function postDeposit(
   prisma: PrismaClient,
@@ -62,13 +63,16 @@ export async function transferCoupons(
   input: { userId?: string; externalRef: string; fromAccountId: string; toAccountId: string; amountCoupons: bigint },
 ) {
   if (input.amountCoupons <= 0n) throw new DomainError('transfer amount must be positive');
-  return postTransaction(prisma, {
-    type: TransactionType.TRANSFER,
-    externalRef: input.externalRef,
-    ...(input.userId === undefined ? {} : { userId: input.userId }),
-    status: TransactionStatus.CONFIRMED,
-    amountCoupons: input.amountCoupons,
-    legs: [{ fromAccountId: input.fromAccountId, toAccountId: input.toAccountId, amount: input.amountCoupons, asset: Asset.COUPON }],
+  return withSerializableRetry(prisma, async (tx) => {
+    if (input.userId !== undefined) await assertNotRestricted(tx, input.userId);
+    return postWithClient(tx, {
+      type: TransactionType.TRANSFER,
+      externalRef: input.externalRef,
+      ...(input.userId === undefined ? {} : { userId: input.userId }),
+      status: TransactionStatus.CONFIRMED,
+      amountCoupons: input.amountCoupons,
+      legs: [{ fromAccountId: input.fromAccountId, toAccountId: input.toAccountId, amount: input.amountCoupons, asset: Asset.COUPON }],
+    });
   });
 }
 
@@ -94,6 +98,7 @@ export async function createEscrowHold(
   return withSerializableRetry(prisma, async (tx: Prisma.TransactionClient) => {
     const existing = await tx.escrowHold.findFirst({ where: { transaction: { externalRef } } });
     if (existing) return existing;
+    await assertNotRestricted(tx, input.senderId);
     const transaction = await postWithClient(tx, {
       type: TransactionType.ESCROW_HOLD,
       externalRef,
@@ -214,6 +219,7 @@ export async function requestWithdrawal(
     feeAccountId: string;
     pendingAccountId: string;
     issuanceAccountId: string;
+    cooldownHours: number;
   },
 ) {
   evmAddressSchema.parse(input.destinationAddress);
@@ -224,6 +230,13 @@ export async function requestWithdrawal(
     : WithdrawalStatus.PENDING_APPROVAL;
   const transactionStatus = status === WithdrawalStatus.APPROVED ? TransactionStatus.APPROVED : TransactionStatus.PENDING_APPROVAL;
   return withSerializableRetry(prisma, async (tx: Prisma.TransactionClient) => {
+    await assertNotRestricted(tx, input.userId);
+    const availability = await readWithdrawalAvailabilityInTransaction(tx, input.userId);
+    if (availability.blockers.includes('pending_code')) throw new DomainError('withdrawal blocked by pending code');
+    if (availability.blockers.includes('unresolved_claim')) throw new DomainError('withdrawal blocked by unresolved claim');
+    if (input.couponsGross > availability.availableToWithdrawCoupons) throw new DomainError('withdrawal exceeds available balance');
+    if (input.cooldownHours < 0) throw new DomainError('withdrawal cooldown must be non-negative');
+    const eligibleAt = new Date(Date.now() + input.cooldownHours * 60 * 60 * 1000);
     const transaction = await postWithClient(tx, {
       type: TransactionType.WITHDRAWAL,
       externalRef: `withdrawal:${withdrawalId}:burn`,
@@ -249,6 +262,7 @@ export async function requestWithdrawal(
         feeMicroUsdt: quote.feeMicroUsdt,
         netMicroUsdt: quote.netMicroUsdt,
         status,
+        eligibleAt,
       },
     });
   });

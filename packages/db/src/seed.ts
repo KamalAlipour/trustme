@@ -6,12 +6,14 @@ const accounts = [
   { type: AccountType.SYSTEM_WITHDRAWAL_PENDING, asset: Asset.USDT },
   { type: AccountType.SYSTEM_FEE_COLLECTION, asset: Asset.USDT },
   { type: AccountType.EXTERNAL_ONCHAIN, asset: Asset.USDT },
+  { type: AccountType.GUARANTEE_LOCK, asset: Asset.COUPON },
 ] as const;
 
 const settings = [
   ['WITHDRAWAL_BASE_FEE_BPS', '100'],
   ['MIN_WITHDRAWAL_USDT', '1'],
   ['AUTO_APPROVAL_LIMIT_USDT', '1000'],
+  ['WITHDRAWAL_COOLDOWN_HOURS', '168'],
 ] as const;
 
 for (const account of accounts) {
