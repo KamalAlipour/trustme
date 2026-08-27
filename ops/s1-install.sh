@@ -68,7 +68,7 @@ install_trustme_ops
 if ! pg_lsclusters --no-header | awk '$2 == "trustme" { found = 1 } END { exit !found }'; then
   pg_createcluster "$TRUSTME_PG_VERSION" trustme --port "$TRUSTME_PG_PORT" --start
 fi
-pg_conftool "$TRUSTME_PG_VERSION" trustme set listen_addresses 127.0.0.1
+pg_conftool "$TRUSTME_PG_VERSION" trustme set listen_addresses "'127.0.0.1'"
 pg_conftool "$TRUSTME_PG_VERSION" trustme set wal_level replica
 pg_conftool "$TRUSTME_PG_VERSION" trustme set max_wal_senders 4
 pg_conftool "$TRUSTME_PG_VERSION" trustme set max_replication_slots 2
