@@ -7,6 +7,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=ops/ports.sh
 source "$SCRIPT_DIR/ports.sh"
 
+TRUSTME_REDIS_DATA_DIR="${TRUSTME_REDIS_DATA_DIR:-/var/lib/trustme-redis}"
 ALLOW_EXISTING=0
 while (($# > 0)); do
   case "$1" in
@@ -112,7 +113,8 @@ trustme_user_is_safe() {
   fi
   local owned
   owned="$(find / -xdev -user trustme -not -path '/opt/trustme' \
-    -not -path '/opt/trustme/*' -print -quit 2>/dev/null || true)"
+    -not -path '/opt/trustme/*' -not -path "$TRUSTME_REDIS_DATA_DIR" \
+    -not -path "$TRUSTME_REDIS_DATA_DIR/*" -print -quit 2>/dev/null || true)"
   [[ -z "$owned" ]]
 }
 

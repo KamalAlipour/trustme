@@ -118,7 +118,7 @@ umask 0077
   printf 'bind 127.0.0.1\nport %s\nprotected-mode yes\n' "$TRUSTME_REDIS_PORT"
   printf 'dir %s\nappendonly yes\nrequirepass %s\n' "$REDIS_DATA_DIR" "$TRUSTME_REDIS_PASSWORD"
 } > /etc/trustme/redis.conf
-chown trustme:trustme /etc/trustme/redis.conf
+chown root:trustme /etc/trustme/redis.conf
 chmod 0640 /etc/trustme/redis.conf
 
 install_trustme_units "$(pg_service_name)"
