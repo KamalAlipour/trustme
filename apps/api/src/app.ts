@@ -1,5 +1,4 @@
 import { timingSafeEqual } from 'node:crypto';
-import { HDNodeWallet } from 'ethers';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
@@ -25,7 +24,6 @@ import {
   releaseEscrow,
   cancelEscrow,
   transferCoupons,
-  withSerializableRetry,
   evmAddressSchema,
   DomainError,
   activateGuarantee,
@@ -41,6 +39,9 @@ import { type ApiConfig } from './config.js';
 import { openapiDocument } from './openapi.js';
 import { createAdminRouter, EthersAdminChainProvider, type AdminChainProvider } from './admin.js';
 import { HttpError } from './http-error.js';
+import { createMemberAuthRouter, requireMember } from './member-auth.js';
+import { createMemberRouter } from './member-router.js';
+import { provisionUser } from './user-provisioning.js';
 
 export { HttpError } from './http-error.js';
 
@@ -50,7 +51,7 @@ export type QueueLike = Pick<Queue, 'add'>;
 const couponsSchema = z.string().regex(/^[1-9]\d*$/, 'amountCoupons must be a positive decimal string');
 const userBodySchema = z.object({
   phone: z.string().min(1),
-  barcodeId: barcodeIdSchema,
+  barcodeId: barcodeIdSchema.optional(),
   alias: z.string().min(1).optional(),
 });
 const transferBodySchema = z.object({
@@ -96,6 +97,8 @@ export type ApiDependencies = {
   queue: QueueLike;
   redis: RedisLike;
   chainProvider?: AdminChainProvider;
+  emailSender?: import('./member-auth.js').EmailSender;
+  logEmailCode?: (email: string, code: string) => void;
 };
 
 function serviceTokenMatches(expected: string, provided: string | undefined): boolean {
@@ -134,11 +137,17 @@ export function createApp(dependencies: ApiDependencies): express.Express {
       'privateKey',
       'HOT_WALLET_PRIVATE_KEY',
       'ADMIN_JWT_SECRET',
+      'MEMBER_JWT_SECRET',
       'authorization',
       'token',
       'jwt',
       'req.headers.authorization',
       'req.body.code',
+      'req.body.pin',
+      'req.body.currentPin',
+      'req.body.newPin',
+      'req.body.refreshToken',
+      'emailCode',
       'req.body.password',
       'req.body.token',
       'res.body.token',
@@ -149,7 +158,20 @@ export function createApp(dependencies: ApiDependencies): express.Express {
   app.use(express.json({ limit: config.bodyLimit }));
   app.use(pinoHttp({ logger }));
   app.use('/v1', rateLimit({ windowMs: config.rateLimitWindowMs, limit: config.rateLimitMax, standardHeaders: true, legacyHeaders: false }));
-  // Member-facing authentication is deferred to a later handoff.
+  const logEmailCode = dependencies.logEmailCode ?? ((email: string, code: string) => logger.info({ email }, `member email code ${code}`));
+  app.use('/v1/auth', createMemberAuthRouter({
+    config,
+    prisma,
+    ...(dependencies.emailSender === undefined ? {} : { emailSender: dependencies.emailSender }),
+    logEmailCode,
+  }));
+  app.use('/v1/me', requireMember(config.memberJwtSecret, prisma), createMemberRouter({
+    config,
+    prisma,
+    queue,
+    ...(dependencies.emailSender === undefined ? {} : { emailSender: dependencies.emailSender }),
+    logEmailCode,
+  }));
   app.use('/v1', (request: Request, response: Response, next: NextFunction) => {
     const authorization = request.header('authorization');
     const token = authorization?.startsWith('Bearer ') ? authorization.slice(7) : undefined;
@@ -177,25 +199,27 @@ export function createApp(dependencies: ApiDependencies): express.Express {
   app.post('/v1/users', async (request, response, next) => {
     try {
       const body = userBodySchema.parse(request.body);
-      const existing = await prisma.user.findUnique({ where: { barcodeId: body.barcodeId } });
+      const existing = body.barcodeId === undefined
+        ? null
+        : await prisma.user.findUnique({ where: { barcodeId: body.barcodeId } });
       if (existing) {
         const address = await prisma.depositAddress.findFirst({ where: { userId: existing.id } });
         response.status(200).json(serializeUser(existing, address?.address ?? null));
         return;
       }
-      const user = await withSerializableRetry(prisma, async (tx: Prisma.TransactionClient) => {
-        const created = await tx.user.create({ data: { phoneNumber: body.phone, barcodeId: body.barcodeId, ...(body.alias === undefined ? {} : { aliasName: body.alias }) } });
-        await tx.ledgerAccount.create({ data: { type: AccountType.USER_COUPON, asset: Asset.COUPON, userId: created.id } });
-        await tx.ledgerAccount.create({ data: { type: AccountType.ESCROW, asset: Asset.COUPON, userId: created.id } });
-        const depositAddress = await tx.depositAddress.create({ data: { userId: created.id, address: `pending:${created.id}` } });
-        const derived = HDNodeWallet.fromExtendedKey(config.depositXpub).deriveChild(depositAddress.derivationIndex);
-        return tx.depositAddress.update({ where: { id: depositAddress.id }, data: { address: derived.address } }).then(() => created);
+      const user = await provisionUser(prisma, config, {
+        phoneNumber: body.phone,
+        ...(body.barcodeId === undefined ? {} : { barcodeId: body.barcodeId }),
+        ...(body.alias === undefined ? {} : { aliasName: body.alias }),
       });
       const address = await prisma.depositAddress.findFirstOrThrow({ where: { userId: user.id } });
       response.status(201).json(serializeUser(user, address.address));
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-        const existing = await prisma.user.findUnique({ where: { barcodeId: userBodySchema.parse(request.body).barcodeId } });
+        const body = userBodySchema.parse(request.body);
+        const existing = body.barcodeId === undefined
+          ? await prisma.user.findUnique({ where: { phoneNumber: body.phone } })
+          : await prisma.user.findFirst({ where: { OR: [{ barcodeId: body.barcodeId }, { phoneNumber: body.phone }] } });
         if (existing) {
           const address = await prisma.depositAddress.findFirst({ where: { userId: existing.id } });
           response.status(200).json(serializeUser(existing, address?.address ?? null));
@@ -454,7 +478,7 @@ export function createApp(dependencies: ApiDependencies): express.Express {
       return;
     }
     if (error instanceof HttpError) {
-      response.status(error.status).json({ error: error.message });
+      response.status(error.status).json({ error: error.message, ...(error.details ?? {}) });
       return;
     }
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {

@@ -13,6 +13,7 @@ if [[ ! -e /etc/trustme/trustme.env ]]; then
     /etc/trustme/trustme.env
 fi
 load_trustme_env
+ensure_generated_secret MEMBER_JWT_SECRET 32
 TRUSTME_PG_VERSION="${TRUSTME_PG_VERSION:-}"
 TRUSTME_PG_PORT="${TRUSTME_PG_PORT:-}"
 TRUSTME_REDIS_PORT="${TRUSTME_REDIS_PORT:-}"

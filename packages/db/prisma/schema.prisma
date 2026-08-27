@@ -95,11 +95,32 @@ enum AdminRole {
   ADMIN
 }
 
+enum KycStatus {
+  UNVERIFIED
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum EmailVerificationPurpose {
+  VERIFY_EMAIL
+  PIN_RESET
+}
+
 model User {
   id              String           @id @default(uuid()) @db.Uuid
   phoneNumber     String           @unique
   barcodeId       String           @unique
   aliasName       String?
+  displayName     String?
+  kycStatus       KycStatus        @default(UNVERIFIED)
+  email           String?          @unique
+  emailVerifiedAt DateTime?
+  pinHash         String?
+  pinUpdatedAt    DateTime?
+  pinAttempts     Int              @default(0)
+  pinLockCount    Int              @default(0)
+  pinLockedUntil  DateTime?
   dustMicroUsdt   BigInt           @default(0)
   activeGuaranteeCount Int          @default(0)
   createdAt       DateTime         @default(now())
@@ -112,6 +133,51 @@ model User {
   borrowerLoans   Loan[]           @relation("LoanBorrower")
   lenderLoans     Loan[]           @relation("LoanLender")
   guarantees      Guarantee[]
+  contacts        Contact[]        @relation("ContactOwner")
+  contactedBy     Contact[]        @relation("ContactTarget")
+  devices         MemberDevice[]
+  emailCodes      EmailVerification[]
+}
+
+model MemberDevice {
+  id               String    @id @default(uuid()) @db.Uuid
+  userId           String    @db.Uuid
+  label            String
+  refreshTokenHash String    @unique
+  createdAt        DateTime  @default(now())
+  lastSeenAt       DateTime  @default(now())
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  replacedById     String?   @db.Uuid @unique
+  user             User      @relation(fields: [userId], references: [id])
+  @@index([userId, revokedAt])
+}
+
+model EmailVerification {
+  id         String                  @id @default(uuid()) @db.Uuid
+  userId     String                  @db.Uuid
+  email      String
+  codeHash   String
+  purpose    EmailVerificationPurpose
+  attempts   Int                     @default(0)
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime                @default(now())
+  user       User                    @relation(fields: [userId], references: [id])
+  @@index([userId, purpose, createdAt])
+}
+
+model Contact {
+  id            String   @id @default(uuid()) @db.Uuid
+  ownerId       String   @db.Uuid
+  contactUserId String   @db.Uuid
+  alias         String
+  createdAt     DateTime @default(now())
+  lastActivityAt DateTime?
+  owner         User     @relation("ContactOwner", fields: [ownerId], references: [id])
+  contactUser   User     @relation("ContactTarget", fields: [contactUserId], references: [id])
+  @@unique([ownerId, contactUserId])
+  @@index([ownerId, alias])
 }
 
 model DepositAddress {

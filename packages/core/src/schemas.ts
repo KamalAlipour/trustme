@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { getAddress } from 'ethers';
 import { z } from 'zod';
 
@@ -13,6 +14,21 @@ export const positiveBigIntSchema = z.bigint().positive();
 export const phoneNumberSchema = z.string().min(1).max(32);
 export const barcodeIdSchema = z.string().min(1).max(128);
 export const fourDigitCodeSchema = z.string().regex(/^\d{4}$/, 'code must be exactly four digits');
+
+const BARCODE_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+
+export function generateBarcodeId(): string {
+  const characters: string[] = [];
+  while (characters.length < 14) {
+    const bytes = randomBytes(14 - characters.length);
+    for (const byte of bytes) {
+      if (byte >= 256 - (256 % BARCODE_ALPHABET.length)) continue;
+      characters.push(BARCODE_ALPHABET[byte % BARCODE_ALPHABET.length]!);
+      if (characters.length === 14) break;
+    }
+  }
+  return `TC${characters.join('')}`;
+}
 
 export const internalTransferInputSchema = z.object({
   fromAccountId: z.string().uuid(),
