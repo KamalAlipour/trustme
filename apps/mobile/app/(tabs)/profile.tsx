@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Pressable, Text, TextInput, View } from 'react-native';
+import { router } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 import { request, ApiError, LockedError } from '../../src/api/client';
 import { useSession } from '../../src/auth/session';
@@ -60,6 +61,9 @@ export default function Profile() {
   return (
     <Page>
       <Text style={styles.title}>{fa.profile}</Text>
+      <View style={styles.card}>
+        <Pressable onPress={() => router.push('/about')} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{fa.about}</Text></Pressable>
+      </View>
       <View style={styles.card}>
         <Text style={styles.heading}>{current?.displayName ?? 'عضو'}</Text>
         <Text style={styles.text}>تلفن: {current?.phone ? `••••${current.phone.slice(-4)}` : '••••'}</Text>

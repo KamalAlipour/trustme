@@ -97,26 +97,34 @@ type RequestOptions = {
   retried?: boolean;
 };
 
-export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+function isFormData(body: unknown): body is FormData {
+  return typeof FormData !== 'undefined' && body instanceof FormData;
+}
+
+async function authenticatedFetch(path: string, options: RequestOptions = {}): Promise<Response> {
   const auth = options.auth ?? 'member';
   if (auth === 'member' && accessToken === null) await refreshSession();
   const headers: Record<string, string> = { accept: 'application/json' };
-  if (options.body !== undefined) headers['content-type'] = 'application/json';
+  if (options.body !== undefined && !isFormData(options.body)) headers['content-type'] = 'application/json';
   if (auth === 'member' && accessToken !== null) headers.authorization = `Bearer ${accessToken}`;
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method: options.method ?? 'GET',
     headers,
-    ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+    ...(options.body === undefined ? {} : { body: isFormData(options.body) ? options.body : JSON.stringify(options.body) }),
   });
-  const body = await parseResponse(response) as { error?: string; retryAfter?: number } & T;
-  if (response.status === 423) throw new LockedError(body);
+  if (response.status === 423) throw new LockedError(await parseResponse(response) as { error?: string; retryAfter?: number });
   if (response.status === 401 && auth === 'member' && options.retried !== true) {
     await refreshSession();
-    return request<T>(path, { ...options, retried: true });
+    return authenticatedFetch(path, { ...options, retried: true });
   }
   if (response.status === 401 && auth === 'member') return expireSession();
-  if (!response.ok) throw new ApiError(response.status, body);
-  return body;
+  if (!response.ok) throw new ApiError(response.status, await parseResponse(response) as { error?: string; retryAfter?: number });
+  return response;
+}
+
+export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const response = await authenticatedFetch(path, options);
+  return await parseResponse(response) as T;
 }
 
 export async function authenticate(path: '/v1/auth/login' | '/v1/auth/register', body: Record<string, unknown>): Promise<AuthResponse> {

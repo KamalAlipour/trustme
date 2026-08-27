@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { greaterThan, nextInstallmentAmount } from './coupons';
+import { approvedAmountWithinRequest, greaterThan, nextInstallmentAmount } from './coupons';
 
 describe('coupon arithmetic', () => {
   it('compares decimal strings with BigInt beyond the safe integer range', () => {
@@ -19,5 +19,10 @@ describe('coupon arithmetic', () => {
 
   it('rejects non-numeric coupon values', () => {
     expect(() => greaterThan('10x', '1')).toThrow('invalid coupon amount');
+  });
+
+  it('caps approved aid amounts without Number coercion', () => {
+    expect(approvedAmountWithinRequest('900719925474099312345678900', '900719925474099312345678901')).toBe(true);
+    expect(approvedAmountWithinRequest('900719925474099312345678902', '900719925474099312345678901')).toBe(false);
   });
 });

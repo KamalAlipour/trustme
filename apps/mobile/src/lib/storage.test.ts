@@ -3,12 +3,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const secureStore = vi.hoisted(() => ({
   WHEN_UNLOCKED_THIS_DEVICE_ONLY: 'when-unlocked',
   setItemAsync: vi.fn(async () => undefined),
-  getItemAsync: vi.fn(async () => 'refresh'),
+  getItemAsync: vi.fn(async (): Promise<string | null> => 'refresh'),
   deleteItemAsync: vi.fn(async () => undefined),
 }));
 vi.mock('expo-secure-store', () => secureStore);
 
-import { clearCredentials, hasStoredCredentials, saveCredentials } from './storage';
+import { clearCredentials, hasSeenManifesto, hasStoredCredentials, markManifestoSeen, saveCredentials } from './storage';
 
 describe('secure credential storage', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -28,5 +28,13 @@ describe('secure credential storage', () => {
     secureStore.getItemAsync.mockResolvedValueOnce('1');
     expect(await hasStoredCredentials()).toBe(true);
     expect(secureStore.getItemAsync).toHaveBeenCalledWith('trustcoupon.session');
+  });
+  it('persists the manifesto flag without protected storage options', async () => {
+    secureStore.getItemAsync.mockResolvedValueOnce(null);
+    expect(await hasSeenManifesto()).toBe(false);
+    await markManifestoSeen();
+    expect(secureStore.setItemAsync).toHaveBeenCalledWith('trustcoupon.manifestoSeen', '1');
+    secureStore.getItemAsync.mockResolvedValueOnce('1');
+    expect(await hasSeenManifesto()).toBe(true);
   });
 });
