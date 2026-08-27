@@ -39,6 +39,7 @@ const config = {
   rateLimitMax: 100,
   bindHost: '127.0.0.1',
   failoverMarkerPath: '/tmp/trustme-marker',
+  mediaStorageDir: '/tmp/trustme-media',
 };
 
 async function account(type: AccountType, asset: Asset, userId?: string) {
@@ -123,7 +124,7 @@ beforeAll(async () => {
   await prisma.$connect();
 });
 beforeEach(async () => {
-  await prisma.$executeRawUnsafe('TRUNCATE TABLE "AdminAuditLog", "AdminUser", "Withdrawal", "EscrowHold", "EmailVerification", "MemberDevice", "Contact", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User", "ChainCursor", "SystemSetting" CASCADE');
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "MediaAsset", "RefundRequest", "AidRequest", "CharityAgent", "Charity", "AdminAuditLog", "AdminUser", "Withdrawal", "EscrowHold", "EmailVerification", "MemberDevice", "Contact", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User", "ChainCursor", "SystemSetting" CASCADE');
   await prisma.systemSetting.createMany({ data: [
     { key: 'WITHDRAWAL_BASE_FEE_BPS', value: '100' },
     { key: 'MIN_WITHDRAWAL_USDT', value: '1' },
@@ -340,6 +341,11 @@ describe('member API', () => {
     expect(balanceA.body.coupons).toBe('9999');
     const reverse = await request(app).post('/v1/me/transfers').set('Authorization', `Bearer ${tokenB}`).send({ toBarcodeId: 'member-a', amountCoupons: '1', idempotencyKey: 'reverse', pin: '2468' });
     expect(reverse.status).toBe(201);
+    const sharedKeyA = await request(app).post('/v1/me/transfers').set('Authorization', `Bearer ${tokenA}`).send({ toBarcodeId: 'member-b', amountCoupons: '1', idempotencyKey: 'shared-key', pin: '2468' });
+    const sharedKeyB = await request(app).post('/v1/me/transfers').set('Authorization', `Bearer ${tokenB}`).send({ toBarcodeId: 'member-a', amountCoupons: '1', idempotencyKey: 'shared-key', pin: '2468' });
+    expect(sharedKeyA.status).toBe(201);
+    expect(sharedKeyB.status).toBe(201);
+    expect(sharedKeyB.body.transactionId).not.toBe(sharedKeyA.body.transactionId);
     const history = await request(app).get('/v1/me/transactions?limit=1').set('Authorization', `Bearer ${tokenA}`);
     expect(history.status).toBe(200);
     expect(history.body.items[0]).toMatchObject({ direction: 'in', amountCoupons: '1', counterparty: { displayName: 'Bob', barcodeId: 'member-b' } });
@@ -526,6 +532,119 @@ describe('member API', () => {
     expect(repaid.status).toBe(200);
     expect(repaid.body.status).toBe('SETTLED');
     expect(lock.id).toBeDefined();
+  });
+
+  it('uploads evidence, creates a refund, and lets the counterparty approve it', async () => {
+    const { app } = appFixture();
+    const seller = await request(app).post('/v1/auth/register').send({ phone: '+1555000301', pin: '2468' });
+    const buyer = await request(app).post('/v1/auth/register').send({ phone: '+1555000302', pin: '2468' });
+    const systems = await addSystemAccounts();
+    const sellerUser = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000301' } });
+    const sellerAccount = await prisma.ledgerAccount.findFirstOrThrow({ where: { userId: sellerUser.id, type: AccountType.USER_COUPON, asset: Asset.COUPON } });
+    await postDeposit(prisma, { externalRef: 'refund-http-deposit', userId: sellerUser.id, userCouponAccountId: sellerAccount.id, externalOnchainAccountId: systems.external.id, vaultAccountId: systems.vault.id, issuanceAccountId: systems.issuance.id, amountMicroUsdt: 1_000_000n });
+    const evidence = await request(app).post('/v1/me/media').set('Authorization', `Bearer ${seller.body.tokens.accessToken}`).field('kind', 'image').attach('file', Buffer.from([0xff, 0xd8, 0xff, 0xd9]), 'proof.bin');
+    expect(evidence.status).toBe(201);
+    const transfer = await request(app).post('/v1/me/transfers').set('Authorization', `Bearer ${seller.body.tokens.accessToken}`).send({ toBarcodeId: buyer.body.member.barcodeId, amountCoupons: '100', idempotencyKey: 'refund-transfer', pin: '2468' });
+    expect(transfer.status).toBe(201);
+    const created = await request(app).post('/v1/me/refunds').set('Authorization', `Bearer ${seller.body.tokens.accessToken}`).send({ transactionId: transfer.body.transactionId, amountCoupons: '100', reason: 'returned', mediaIds: [evidence.body.id] });
+    expect(created.status).toBe(201);
+    const approved = await request(app).post(`/v1/me/refunds/${created.body.id}/approve`).set('Authorization', `Bearer ${buyer.body.tokens.accessToken}`).send({ pin: '2468' });
+    expect(approved.status).toBe(200);
+    const downloaded = await request(app).get(`/v1/me/media/${evidence.body.id}`).set('Authorization', `Bearer ${buyer.body.tokens.accessToken}`);
+    expect(downloaded.status).toBe(200);
+    expect(downloaded.headers['x-content-type-options']).toBe('nosniff');
+  });
+
+  it('creates charity accounts, audits agent writes, and disburses donated coupons', async () => {
+    const { app } = appFixture();
+    const admin = await createAdmin(AdminRole.ADMIN);
+    const adminJwt = await adminToken(app, admin.username);
+    const donor = await request(app).post('/v1/auth/register').send({ phone: '+1555000303', pin: '2468' });
+    const applicant = await request(app).post('/v1/auth/register').send({ phone: '+1555000304', pin: '2468' });
+    const agent = await request(app).post('/v1/auth/register').send({ phone: '+1555000305', pin: '2468' });
+    const systems = await addSystemAccounts();
+    const donorUser = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000303' } });
+    const donorAccount = await prisma.ledgerAccount.findFirstOrThrow({ where: { userId: donorUser.id, type: AccountType.USER_COUPON, asset: Asset.COUPON } });
+    await postDeposit(prisma, { externalRef: 'charity-http-deposit', userId: donorUser.id, userCouponAccountId: donorAccount.id, externalOnchainAccountId: systems.external.id, vaultAccountId: systems.vault.id, issuanceAccountId: systems.issuance.id, amountMicroUsdt: 1_000_000n });
+    const charity = await request(app).post('/admin/charities').set('Authorization', `Bearer ${adminJwt}`).send({ name: 'HTTP Help' });
+    expect(charity.status).toBe(201);
+    const added = await request(app).post(`/admin/charities/${charity.body.id}/agents`).set('Authorization', `Bearer ${adminJwt}`).send({ barcodeId: agent.body.member.barcodeId, role: 'AGENT' });
+    expect(added.status).toBe(201);
+    expect(await prisma.adminAuditLog.count({ where: { entityType: 'Charity' } })).toBe(1);
+    const donation = await request(app).post(`/v1/me/charities/${charity.body.id}/donations`).set('Authorization', `Bearer ${donor.body.tokens.accessToken}`).send({ amountCoupons: '50', pin: '2468' });
+    expect(donation.status).toBe(201);
+    const donationRetry = await request(app).post(`/v1/me/charities/${charity.body.id}/donations`).set('Authorization', `Bearer ${donor.body.tokens.accessToken}`).send({ amountCoupons: '50', pin: '2468', idempotencyKey: 'donation-once' });
+    const donationRetryAgain = await request(app).post(`/v1/me/charities/${charity.body.id}/donations`).set('Authorization', `Bearer ${donor.body.tokens.accessToken}`).send({ amountCoupons: '50', pin: '2468', idempotencyKey: 'donation-once' });
+    expect(donationRetry.status).toBe(201);
+    expect(donationRetryAgain.status).toBe(201);
+    expect(donationRetryAgain.body.transactionId).toBe(donationRetry.body.transactionId);
+    const aid = await request(app).post('/v1/me/aid-requests').set('Authorization', `Bearer ${applicant.body.tokens.accessToken}`).send({ charityId: charity.body.id, amountCoupons: '20', description: 'food' });
+    expect(aid.status).toBe(201);
+    await request(app).post('/v1/auth/register').send({ phone: '+1555000310', pin: '2468' });
+    await request(app).post('/v1/auth/register').send({ phone: '+1555000311', pin: '2468' });
+    const foreignUser = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000310' } });
+    const foreignGuarantorUser = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000311' } });
+    const foreignLoan = await createLoanRequest(prisma, {
+      borrowerId: foreignUser.id,
+      principalCoupons: 5n,
+      installments: [{ amountCoupons: 5n, dueAt: new Date(Date.now() + 60_000) }],
+      guarantors: [{ guarantorId: foreignGuarantorUser.id, amountCoupons: 5n }],
+    });
+    const foreignLoanAid = await request(app).post('/v1/me/aid-requests').set('Authorization', `Bearer ${applicant.body.tokens.accessToken}`).send({ charityId: charity.body.id, amountCoupons: '5', description: 'foreign loan', loanId: foreignLoan.id });
+    expect(foreignLoanAid.status).toBe(404);
+    const approval = await request(app).post(`/v1/me/charity-requests/${aid.body.id}/approve`).set('Authorization', `Bearer ${agent.body.tokens.accessToken}`).send({ approvedCoupons: '15', pin: '2468' });
+    expect(approval.status).toBe(200);
+    expect(approval.body.approvedCoupons).toBe('15');
+    expect((await request(app).post(`/v1/me/charity-requests/${aid.body.id}/approve`).set('Authorization', `Bearer ${donor.body.tokens.accessToken}`).send({ pin: '2468' })).status).toBe(404);
+    const updated = await request(app).patch(`/admin/charities/${charity.body.id}`).set('Authorization', `Bearer ${adminJwt}`).send({ description: 'Updated help' });
+    expect(updated.status).toBe(200);
+    const revoked = await request(app).delete(`/admin/charities/${charity.body.id}/agents/${agent.body.member.id}`).set('Authorization', `Bearer ${adminJwt}`);
+    expect(revoked.status).toBe(200);
+    expect((await request(app).get('/v1/me/charity-requests').set('Authorization', `Bearer ${agent.body.tokens.accessToken}`)).body.items).toHaveLength(0);
+    expect((await request(app).post(`/v1/me/charity-requests/${aid.body.id}/approve`).set('Authorization', `Bearer ${agent.body.tokens.accessToken}`).send({ pin: '2468' })).status).toBe(404);
+    expect(await prisma.adminAuditLog.count({ where: { entityType: 'Charity' } })).toBe(2);
+    expect(await prisma.adminAuditLog.count({ where: { entityType: 'CharityAgent' } })).toBe(2);
+  });
+
+  it('enforces refund ownership and magic-byte media rules', async () => {
+    const { app } = appFixture();
+    const payer = await request(app).post('/v1/auth/register').send({ phone: '+1555000306', pin: '2468' });
+    const payee = await request(app).post('/v1/auth/register').send({ phone: '+1555000307', pin: '2468' });
+    const unrelated = await request(app).post('/v1/auth/register').send({ phone: '+1555000308', pin: '2468' });
+    const systems = await addSystemAccounts();
+    const payerUser = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000306' } });
+    const payerAccount = await prisma.ledgerAccount.findFirstOrThrow({ where: { userId: payerUser.id, type: AccountType.USER_COUPON, asset: Asset.COUPON } });
+    const deposit = await postDeposit(prisma, { externalRef: 'refund-rules-deposit', userId: payerUser.id, userCouponAccountId: payerAccount.id, externalOnchainAccountId: systems.external.id, vaultAccountId: systems.vault.id, issuanceAccountId: systems.issuance.id, amountMicroUsdt: 1_000_000n });
+    const invalidTransaction = await request(app).post('/v1/me/refunds').set('Authorization', `Bearer ${payer.body.tokens.accessToken}`).send({ transactionId: deposit.id, amountCoupons: '10', reason: 'not a transfer' });
+    expect(invalidTransaction.status).toBe(400);
+    const disguised = await request(app).post('/v1/me/media').set('Authorization', `Bearer ${payer.body.tokens.accessToken}`).field('kind', 'image').attach('file', Buffer.from('not an image'), 'proof.jpg');
+    expect(disguised.status).toBe(415);
+    const oversized = await request(app).post('/v1/me/media').set('Authorization', `Bearer ${payer.body.tokens.accessToken}`).field('kind', 'image').attach('file', Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.alloc(10 * 1024 * 1024)]), 'large.jpg');
+    expect(oversized.status).toBe(413);
+    const evidence = await request(app).post('/v1/me/media').set('Authorization', `Bearer ${payer.body.tokens.accessToken}`).field('kind', 'image').attach('file', Buffer.from([0xff, 0xd8, 0xff, 0xd9]), 'proof.jpg');
+    expect(evidence.status).toBe(201);
+    const foreignEvidence = await request(app).post('/v1/me/media').set('Authorization', `Bearer ${unrelated.body.tokens.accessToken}`).field('kind', 'image').attach('file', Buffer.from([0xff, 0xd8, 0xff, 0xd9]), 'foreign.jpg');
+    expect(foreignEvidence.status).toBe(201);
+    const transfer = await request(app).post('/v1/me/transfers').set('Authorization', `Bearer ${payer.body.tokens.accessToken}`).send({ toBarcodeId: payee.body.member.barcodeId, amountCoupons: '10', idempotencyKey: 'refund-rules-transfer', pin: '2468' });
+    expect(transfer.status).toBe(201);
+    const nonPayer = await request(app).post('/v1/me/refunds').set('Authorization', `Bearer ${unrelated.body.tokens.accessToken}`).send({ transactionId: transfer.body.transactionId, amountCoupons: '10', reason: 'not mine' });
+    expect(nonPayer.status).toBe(400);
+    const foreignMedia = await request(app).post('/v1/me/refunds').set('Authorization', `Bearer ${payer.body.tokens.accessToken}`).send({ transactionId: transfer.body.transactionId, amountCoupons: '10', reason: 'foreign evidence', mediaIds: [foreignEvidence.body.id] });
+    expect(foreignMedia.status).toBe(400);
+    const created = await request(app).post('/v1/me/refunds').set('Authorization', `Bearer ${payer.body.tokens.accessToken}`).send({ transactionId: transfer.body.transactionId, amountCoupons: '10', reason: 'returned', mediaIds: [evidence.body.id] });
+    expect(created.status).toBe(201);
+    expect((await request(app).get(`/v1/me/media/${evidence.body.id}`).set('Authorization', `Bearer ${unrelated.body.tokens.accessToken}`)).status).toBe(404);
+    expect((await request(app).post(`/v1/me/refunds/${created.body.id}/approve`).set('Authorization', `Bearer ${unrelated.body.tokens.accessToken}`).send({ pin: '2468' })).status).toBe(404);
+    expect((await request(app).post(`/v1/me/refunds/${created.body.id}/approve`).set('Authorization', `Bearer ${payee.body.tokens.accessToken}`).send({})).status).toBe(400);
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      expect((await request(app).post(`/v1/me/refunds/${created.body.id}/approve`).set('Authorization', `Bearer ${payee.body.tokens.accessToken}`).send({ pin: '1357' })).status).toBe(401);
+    }
+    expect((await request(app).post(`/v1/me/refunds/${created.body.id}/approve`).set('Authorization', `Bearer ${payee.body.tokens.accessToken}`).send({ pin: '1357' })).status).toBe(423);
+    const paged = await request(app).get(`/v1/me/refunds?role=seller&status=PENDING&limit=1`).set('Authorization', `Bearer ${payee.body.tokens.accessToken}`);
+    expect(paged.status).toBe(200);
+    expect(paged.body.items).toHaveLength(1);
+    expect(paged.body.nextCursor).toBeNull();
+    expect((await request(app).get('/v1/me/refunds?role=buyer').set('Authorization', `Bearer ${unrelated.body.tokens.accessToken}`)).body.items).toHaveLength(0);
   });
 });
 

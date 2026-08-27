@@ -18,6 +18,7 @@ export const workerConfigSchema = z.object({
   reorgRewindBlocks: integer.default(64).refine((value) => value > 0),
   chainMaxBlockAgeSeconds: positiveInteger.default(120),
   failoverMarkerPath: z.string().default('/etc/trustme/FAILED_OVER'),
+  mediaStorageDir: z.string().default('/var/lib/trustme/media'),
 });
 
 export type WorkerConfig = z.infer<typeof workerConfigSchema>;
@@ -38,5 +39,6 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
     reorgRewindBlocks: env.REORG_REWIND_BLOCKS,
     chainMaxBlockAgeSeconds: env.CHAIN_MAX_BLOCK_AGE_SECONDS,
     failoverMarkerPath: env.FAILOVER_MARKER_PATH,
+    mediaStorageDir: env.MEDIA_STORAGE_DIR,
   });
 }

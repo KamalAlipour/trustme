@@ -7,6 +7,7 @@ import { createEthersProvider, createWalletSigner } from './provider.js';
 import { loadWorkerConfig, type WorkerConfig } from './config.js';
 import { ingestOnce } from './ingest.js';
 import { confirmWithdrawal, dispatchWithdrawal } from './dispatch.js';
+import { cleanupUnattachedMedia } from './media-cleanup.js';
 import { CONFIRMATION_QUEUE, createQueues, DISPATCH_QUEUE, INGEST_QUEUE, type WorkerQueues } from './queues.js';
 
 export { loadWorkerConfig } from './config.js';
@@ -36,7 +37,7 @@ export async function startWorker(config: WorkerConfig = loadWorkerConfig()): Pr
   const queues = createQueues(config.redisUrl);
   const ingestWorker = new BullWorker(
     INGEST_QUEUE,
-    async () => ingestOnce(prisma, provider, config, logger),
+    async (job) => job.name === 'media-cleanup' ? cleanupUnattachedMedia(prisma, config.mediaStorageDir) : ingestOnce(prisma, provider, config, logger),
     { connection: queues.connection, concurrency: 1 },
   );
   const dispatchWorker = new BullWorker(
@@ -65,6 +66,7 @@ export async function startWorker(config: WorkerConfig = loadWorkerConfig()): Pr
   );
   const workers = [ingestWorker, dispatchWorker, confirmationWorker];
   await queues.ingest.add('scan', {}, { jobId: 'chain-ingest-repeat', repeat: { every: 15_000 } });
+  await queues.ingest.add('media-cleanup', {}, { jobId: 'media-cleanup-repeat', repeat: { every: 60 * 60_000 } });
   const inFlight = await prisma.withdrawal.findMany({
     where: { status: WithdrawalStatus.PROCESSING, chainTxHash: { not: null } },
     select: { id: true },

@@ -14,6 +14,7 @@ enum Asset {
 
 enum AccountType {
   USER_COUPON
+  CHARITY_COUPON
   ESCROW
   GUARANTEE_LOCK
   SYSTEM_COUPON_ISSUANCE
@@ -107,36 +108,67 @@ enum EmailVerificationPurpose {
   PIN_RESET
 }
 
+enum MediaKind {
+  AUDIO
+  IMAGE
+  VIDEO
+  DOCUMENT
+}
+
+enum RefundStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum CharityAgentRole {
+  AGENT
+  MANAGER
+}
+
+enum AidRequestStatus {
+  PENDING
+  DOCUMENTS_REQUESTED
+  APPROVED
+  REJECTED
+}
+
 model User {
-  id              String           @id @default(uuid()) @db.Uuid
-  phoneNumber     String           @unique
-  barcodeId       String           @unique
-  aliasName       String?
-  displayName     String?
-  kycStatus       KycStatus        @default(UNVERIFIED)
-  email           String?          @unique
-  emailVerifiedAt DateTime?
-  pinHash         String?
-  pinUpdatedAt    DateTime?
-  pinAttempts     Int              @default(0)
-  pinLockCount    Int              @default(0)
-  pinLockedUntil  DateTime?
-  dustMicroUsdt   BigInt           @default(0)
-  activeGuaranteeCount Int          @default(0)
-  createdAt       DateTime         @default(now())
-  depositAddresses DepositAddress[]
-  ledgerAccounts  LedgerAccount[]
-  transactions    Transaction[]
-  escrowHolds     EscrowHold[]     @relation("EscrowSender")
-  receivedEscrows EscrowHold[]     @relation("EscrowRecipient")
-  withdrawals     Withdrawal[]
-  borrowerLoans   Loan[]           @relation("LoanBorrower")
-  lenderLoans     Loan[]           @relation("LoanLender")
-  guarantees      Guarantee[]
-  contacts        Contact[]        @relation("ContactOwner")
-  contactedBy     Contact[]        @relation("ContactTarget")
-  devices         MemberDevice[]
-  emailCodes      EmailVerification[]
+  id                   String              @id @default(uuid()) @db.Uuid
+  phoneNumber          String              @unique
+  barcodeId            String              @unique
+  aliasName            String?
+  displayName          String?
+  kycStatus            KycStatus           @default(UNVERIFIED)
+  email                String?             @unique
+  emailVerifiedAt      DateTime?
+  pinHash              String?
+  pinUpdatedAt         DateTime?
+  pinAttempts          Int                 @default(0)
+  pinLockCount         Int                 @default(0)
+  pinLockedUntil       DateTime?
+  dustMicroUsdt        BigInt              @default(0)
+  activeGuaranteeCount Int                 @default(0)
+  createdAt            DateTime            @default(now())
+  depositAddresses     DepositAddress[]
+  ledgerAccounts       LedgerAccount[]
+  transactions         Transaction[]
+  escrowHolds          EscrowHold[]        @relation("EscrowSender")
+  receivedEscrows      EscrowHold[]        @relation("EscrowRecipient")
+  withdrawals          Withdrawal[]
+  borrowerLoans        Loan[]              @relation("LoanBorrower")
+  lenderLoans          Loan[]              @relation("LoanLender")
+  guarantees           Guarantee[]
+  contacts             Contact[]           @relation("ContactOwner")
+  contactedBy          Contact[]           @relation("ContactTarget")
+  devices              MemberDevice[]
+  emailCodes           EmailVerification[]
+  charityAgents        CharityAgent[]
+  aidRequests          AidRequest[]        @relation("AidApplicant")
+  decidedAidRequests   AidRequest[]        @relation("AidDecider")
+  mediaAssets          MediaAsset[]
+  buyerRefunds         RefundRequest[]     @relation("RefundBuyer")
+  sellerRefunds        RefundRequest[]     @relation("RefundSeller")
 }
 
 model MemberDevice {
@@ -148,34 +180,37 @@ model MemberDevice {
   lastSeenAt       DateTime  @default(now())
   expiresAt        DateTime
   revokedAt        DateTime?
-  replacedById     String?   @db.Uuid @unique
+  replacedById     String?   @unique @db.Uuid
   user             User      @relation(fields: [userId], references: [id])
+
   @@index([userId, revokedAt])
 }
 
 model EmailVerification {
-  id         String                  @id @default(uuid()) @db.Uuid
-  userId     String                  @db.Uuid
+  id         String                   @id @default(uuid()) @db.Uuid
+  userId     String                   @db.Uuid
   email      String
   codeHash   String
   purpose    EmailVerificationPurpose
-  attempts   Int                     @default(0)
+  attempts   Int                      @default(0)
   expiresAt  DateTime
   consumedAt DateTime?
-  createdAt  DateTime                @default(now())
-  user       User                    @relation(fields: [userId], references: [id])
+  createdAt  DateTime                 @default(now())
+  user       User                     @relation(fields: [userId], references: [id])
+
   @@index([userId, purpose, createdAt])
 }
 
 model Contact {
-  id            String   @id @default(uuid()) @db.Uuid
-  ownerId       String   @db.Uuid
-  contactUserId String   @db.Uuid
-  alias         String
-  createdAt     DateTime @default(now())
+  id             String    @id @default(uuid()) @db.Uuid
+  ownerId        String    @db.Uuid
+  contactUserId  String    @db.Uuid
+  alias          String
+  createdAt      DateTime  @default(now())
   lastActivityAt DateTime?
-  owner         User     @relation("ContactOwner", fields: [ownerId], references: [id])
-  contactUser   User     @relation("ContactTarget", fields: [contactUserId], references: [id])
+  owner          User      @relation("ContactOwner", fields: [ownerId], references: [id])
+  contactUser    User      @relation("ContactTarget", fields: [contactUserId], references: [id])
+
   @@unique([ownerId, contactUserId])
   @@index([ownerId, alias])
 }
@@ -183,24 +218,28 @@ model Contact {
 model DepositAddress {
   id              String   @id @default(uuid()) @db.Uuid
   userId          String   @db.Uuid
-  derivationIndex Int      @default(autoincrement()) @unique
+  derivationIndex Int      @unique @default(autoincrement())
   address         String   @unique
   createdAt       DateTime @default(now())
   user            User     @relation(fields: [userId], references: [id])
 }
 
 model LedgerAccount {
-  id             String        @id @default(uuid()) @db.Uuid
-  type           AccountType
-  asset          Asset
-  userId         String?       @db.Uuid
-  balance        BigInt        @default(0)
-  createdAt      DateTime      @default(now())
-  user           User?         @relation(fields: [userId], references: [id])
-  outgoing       LedgerEntry[] @relation("LedgerFrom")
-  incoming       LedgerEntry[] @relation("LedgerTo")
-  escrowHolds    EscrowHold[]
+  id          String        @id @default(uuid()) @db.Uuid
+  type        AccountType
+  asset       Asset
+  userId      String?       @db.Uuid
+  charityId   String?       @db.Uuid
+  balance     BigInt        @default(0)
+  createdAt   DateTime      @default(now())
+  user        User?         @relation(fields: [userId], references: [id])
+  charity     Charity?      @relation(fields: [charityId], references: [id])
+  outgoing    LedgerEntry[] @relation("LedgerFrom")
+  incoming    LedgerEntry[] @relation("LedgerTo")
+  escrowHolds EscrowHold[]
+
   @@unique([type, userId, asset])
+  @@unique([type, charityId, asset])
   @@index([type, asset])
 }
 
@@ -215,6 +254,7 @@ model LedgerEntry {
   transaction   Transaction   @relation(fields: [transactionId], references: [id])
   fromAccount   LedgerAccount @relation("LedgerFrom", fields: [fromAccountId], references: [id])
   toAccount     LedgerAccount @relation("LedgerTo", fields: [toAccountId], references: [id])
+
   @@index([transactionId])
 }
 
@@ -232,10 +272,15 @@ model Transaction {
   createdAt             DateTime          @default(now())
   user                  User?             @relation(fields: [userId], references: [id])
   entries               LedgerEntry[]
-  escrowHold            EscrowHold?
+  escrowHold            EscrowHold?       @relation("EscrowRelease")
+  escrowHoldTransaction EscrowHold?       @relation("EscrowHoldTransaction")
   withdrawal            Withdrawal?
   loanDisbursement      Loan?             @relation("LoanDisbursement")
   guaranteeLock         Guarantee?        @relation("GuaranteeLockTransaction")
+  originalRefunds       RefundRequest[]   @relation("OriginalRefundTransaction")
+  refundRequest         RefundRequest?    @relation("RefundTransaction")
+  aidDisbursement       AidRequest?       @relation("AidDisbursementTransaction")
+
   @@index([userId, createdAt])
 }
 
@@ -246,21 +291,24 @@ model SystemSetting {
 }
 
 model EscrowHold {
-  id                String       @id @default(uuid()) @db.Uuid
-  senderId          String       @db.Uuid
-  recipientId       String       @db.Uuid
-  escrowAccountId   String       @db.Uuid
-  transactionId     String       @unique @db.Uuid
-  amountCoupons     BigInt
-  codeHash          String
-  wrongAttempts     Int          @default(0)
-  expiresAt         DateTime
-  status            EscrowStatus @default(ACTIVE)
-  createdAt         DateTime     @default(now())
-  sender            User         @relation("EscrowSender", fields: [senderId], references: [id])
-  recipient         User         @relation("EscrowRecipient", fields: [recipientId], references: [id])
-  escrowAccount     LedgerAccount @relation(fields: [escrowAccountId], references: [id])
-  transaction       Transaction  @relation(fields: [transactionId], references: [id])
+  id                   String        @id @default(uuid()) @db.Uuid
+  senderId             String        @db.Uuid
+  recipientId          String        @db.Uuid
+  escrowAccountId      String        @db.Uuid
+  transactionId        String        @unique @db.Uuid
+  releaseTransactionId String?       @unique @db.Uuid
+  amountCoupons        BigInt
+  codeHash             String
+  wrongAttempts        Int           @default(0)
+  expiresAt            DateTime
+  status               EscrowStatus  @default(ACTIVE)
+  createdAt            DateTime      @default(now())
+  sender               User          @relation("EscrowSender", fields: [senderId], references: [id])
+  recipient            User          @relation("EscrowRecipient", fields: [recipientId], references: [id])
+  escrowAccount        LedgerAccount @relation(fields: [escrowAccountId], references: [id])
+  transaction          Transaction   @relation("EscrowHoldTransaction", fields: [transactionId], references: [id])
+  releaseTransaction   Transaction?  @relation("EscrowRelease", fields: [releaseTransactionId], references: [id])
+
   @@index([senderId, status])
   @@index([expiresAt, status])
 }
@@ -281,75 +329,173 @@ model Withdrawal {
   createdAt          DateTime         @default(now())
   user               User             @relation(fields: [userId], references: [id])
   transaction        Transaction      @relation(fields: [transactionId], references: [id])
+
   @@index([status, createdAt])
 }
 
 model Loan {
-  id                   String             @id @default(uuid()) @db.Uuid
-  borrowerId           String             @db.Uuid
-  lenderId             String?            @db.Uuid
-  principalCoupons     BigInt
-  outstandingCoupons   BigInt             @default(0)
-  status               LoanStatus         @default(REQUESTED)
-  createdAt            DateTime           @default(now())
-  fundedAt             DateTime?
-  settledAt            DateTime?
-  borrower             User               @relation("LoanBorrower", fields: [borrowerId], references: [id])
-  lender               User?              @relation("LoanLender", fields: [lenderId], references: [id])
-  installments         LoanInstallment[]
-  guarantees           Guarantee[]
-  disbursement         Transaction?       @relation("LoanDisbursement", fields: [disbursementTransactionId], references: [id])
-  disbursementTransactionId String?        @unique @db.Uuid
+  id                        String            @id @default(uuid()) @db.Uuid
+  borrowerId                String            @db.Uuid
+  lenderId                  String?           @db.Uuid
+  principalCoupons          BigInt
+  outstandingCoupons        BigInt            @default(0)
+  status                    LoanStatus        @default(REQUESTED)
+  createdAt                 DateTime          @default(now())
+  fundedAt                  DateTime?
+  settledAt                 DateTime?
+  borrower                  User              @relation("LoanBorrower", fields: [borrowerId], references: [id])
+  lender                    User?             @relation("LoanLender", fields: [lenderId], references: [id])
+  installments              LoanInstallment[]
+  guarantees                Guarantee[]
+  aidRequests               AidRequest[]
+  disbursement              Transaction?      @relation("LoanDisbursement", fields: [disbursementTransactionId], references: [id])
+  disbursementTransactionId String?           @unique @db.Uuid
+
   @@index([borrowerId, status])
   @@index([lenderId, status])
 }
 
 model LoanInstallment {
-  id            String   @id @default(uuid()) @db.Uuid
-  loanId        String   @db.Uuid
+  id            String    @id @default(uuid()) @db.Uuid
+  loanId        String    @db.Uuid
   sequence      Int
   dueAt         DateTime
   amountCoupons BigInt
-  paidCoupons   BigInt   @default(0)
+  paidCoupons   BigInt    @default(0)
   paidAt        DateTime?
-  loan          Loan     @relation(fields: [loanId], references: [id])
+  loan          Loan      @relation(fields: [loanId], references: [id])
+
   @@unique([loanId, sequence])
   @@index([loanId, dueAt])
 }
 
 model Guarantee {
-  id                 String          @id @default(uuid()) @db.Uuid
-  loanId             String          @db.Uuid
-  guarantorId        String          @db.Uuid
-  amountCoupons      BigInt
-  codeHash           String?
-  wrongAttempts      Int             @default(0)
-  status             GuaranteeStatus  @default(PENDING)
-  lockTransactionId  String?         @unique @db.Uuid
-  createdAt          DateTime        @default(now())
-  lockedAt           DateTime?
-  activatedAt        DateTime?
-  resolvedAt         DateTime?
-  loan               Loan            @relation(fields: [loanId], references: [id])
-  guarantor          User            @relation(fields: [guarantorId], references: [id])
-  lockTransaction    Transaction?    @relation("GuaranteeLockTransaction", fields: [lockTransactionId], references: [id])
+  id                String          @id @default(uuid()) @db.Uuid
+  loanId            String          @db.Uuid
+  guarantorId       String          @db.Uuid
+  amountCoupons     BigInt
+  codeHash          String?
+  wrongAttempts     Int             @default(0)
+  status            GuaranteeStatus @default(PENDING)
+  lockTransactionId String?         @unique @db.Uuid
+  createdAt         DateTime        @default(now())
+  lockedAt          DateTime?
+  activatedAt       DateTime?
+  resolvedAt        DateTime?
+  loan              Loan            @relation(fields: [loanId], references: [id])
+  guarantor         User            @relation(fields: [guarantorId], references: [id])
+  lockTransaction   Transaction?    @relation("GuaranteeLockTransaction", fields: [lockTransactionId], references: [id])
+
   @@unique([loanId, guarantorId])
   @@index([guarantorId, status])
 }
 
+model MediaAsset {
+  id              String         @id @default(uuid()) @db.Uuid
+  ownerId         String         @db.Uuid
+  kind            MediaKind
+  mimeType        String
+  byteSize        Int
+  sha256          String
+  storageKey      String         @unique
+  refundRequestId String?        @db.Uuid
+  aidRequestId    String?        @db.Uuid
+  createdAt       DateTime       @default(now())
+  owner           User           @relation(fields: [ownerId], references: [id])
+  refundRequest   RefundRequest? @relation(fields: [refundRequestId], references: [id])
+  aidRequest      AidRequest?    @relation(fields: [aidRequestId], references: [id])
+
+  @@index([ownerId, createdAt])
+  @@index([refundRequestId])
+  @@index([aidRequestId])
+}
+
+model RefundRequest {
+  id                  String       @id @default(uuid()) @db.Uuid
+  transactionId       String       @db.Uuid
+  buyerId             String       @db.Uuid
+  sellerId            String       @db.Uuid
+  amountCoupons       BigInt
+  reason              String
+  status              RefundStatus @default(PENDING)
+  decisionNote        String?
+  refundTransactionId String?      @unique @db.Uuid
+  createdAt           DateTime     @default(now())
+  decidedAt           DateTime?
+  transaction         Transaction  @relation("OriginalRefundTransaction", fields: [transactionId], references: [id])
+  buyer               User         @relation("RefundBuyer", fields: [buyerId], references: [id])
+  seller              User         @relation("RefundSeller", fields: [sellerId], references: [id])
+  refundTransaction   Transaction? @relation("RefundTransaction", fields: [refundTransactionId], references: [id])
+  media               MediaAsset[]
+
+  @@index([sellerId, status, createdAt])
+  @@index([buyerId, createdAt])
+}
+
+model Charity {
+  id             String          @id @default(uuid()) @db.Uuid
+  name           String          @unique
+  description    String?
+  contactEmail   String?
+  isActive       Boolean         @default(true)
+  createdAt      DateTime        @default(now())
+  agents         CharityAgent[]
+  aidRequests    AidRequest[]
+  ledgerAccounts LedgerAccount[]
+}
+
+model CharityAgent {
+  id        String           @id @default(uuid()) @db.Uuid
+  charityId String           @db.Uuid
+  userId    String           @db.Uuid
+  role      CharityAgentRole @default(AGENT)
+  revokedAt DateTime?
+  createdAt DateTime         @default(now())
+  charity   Charity          @relation(fields: [charityId], references: [id])
+  user      User             @relation(fields: [userId], references: [id])
+
+  @@unique([charityId, userId])
+  @@index([userId, revokedAt])
+}
+
+model AidRequest {
+  id                        String           @id @default(uuid()) @db.Uuid
+  charityId                 String           @db.Uuid
+  applicantId               String           @db.Uuid
+  loanId                    String?          @db.Uuid
+  amountCoupons             BigInt
+  approvedCoupons           BigInt?
+  description               String
+  status                    AidRequestStatus @default(PENDING)
+  decisionNote              String?
+  decidedById               String?          @db.Uuid
+  disbursementTransactionId String?          @unique @db.Uuid
+  createdAt                 DateTime         @default(now())
+  decidedAt                 DateTime?
+  charity                   Charity          @relation(fields: [charityId], references: [id])
+  applicant                 User             @relation("AidApplicant", fields: [applicantId], references: [id])
+  loan                      Loan?            @relation(fields: [loanId], references: [id])
+  decidedBy                 User?            @relation("AidDecider", fields: [decidedById], references: [id])
+  disbursementTransaction   Transaction?     @relation("AidDisbursementTransaction", fields: [disbursementTransactionId], references: [id])
+  media                     MediaAsset[]
+
+  @@index([charityId, status, createdAt])
+  @@index([applicantId, createdAt])
+}
+
 model ChainCursor {
-  id              Int      @id @default(1)
-  nextBlock       BigInt
-  lastBlockHash   String?
-  updatedAt       DateTime @updatedAt
+  id            Int      @id @default(1)
+  nextBlock     BigInt
+  lastBlockHash String?
+  updatedAt     DateTime @updatedAt
 }
 
 model AdminUser {
-  id           String    @id @default(uuid()) @db.Uuid
-  username     String    @unique
+  id           String          @id @default(uuid()) @db.Uuid
+  username     String          @unique
   passwordHash String
   role         AdminRole
-  createdAt    DateTime  @default(now())
+  createdAt    DateTime        @default(now())
   auditLogs    AdminAuditLog[]
 }
 
@@ -363,5 +509,6 @@ model AdminAuditLog {
   newValue    String?
   createdAt   DateTime  @default(now())
   adminUser   AdminUser @relation(fields: [adminUserId], references: [id])
+
   @@index([entityType, entityId])
 }
