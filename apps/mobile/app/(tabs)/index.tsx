@@ -6,7 +6,8 @@ import { useSession } from '../../src/auth/session';
 import { Page, LoadingScreen } from '../../src/components/Screen';
 import { useBalance, useInvalidateMoney, useMember } from '../../src/hooks';
 import { fa } from '../../src/i18n/fa';
-import { formatCoupons } from '../../src/lib/pin';
+import { randomFourDigitCode } from '../../src/lib/code';
+import { formatCoupons } from '../../src/lib/format';
 import { styles } from '../../src/styles';
 
 export default function Home() {
@@ -37,7 +38,7 @@ export default function Home() {
   const submitEscrow = async () => {
     setError('');
     try {
-      const code = escrowCode || createEscrowCode();
+      const code = await randomFourDigitCode();
       const stepUp = pin || await getStepUpPin();
       if (!stepUp) { setError('رمز برای این عملیات لازم است.'); return; }
       await request('/v1/me/escrows', { method: 'POST', body: {
@@ -75,13 +76,4 @@ export default function Home() {
       </View>
     </Page>
   );
-}
-
-function createEscrowCode(): string {
-  const values = new Uint32Array(4);
-  if (globalThis.crypto?.getRandomValues) {
-    globalThis.crypto.getRandomValues(values);
-    return Array.from(values, (value) => String(value % 10)).join('');
-  }
-  return String(Date.now()).slice(-4).padStart(4, '0');
 }

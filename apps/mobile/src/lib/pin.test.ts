@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { formatCoupons, isWeakPin } from './pin';
+import { isWeakPin } from './pin';
+import { formatCoupons } from './format';
 
 describe('PIN and coupon helpers', () => {
   it.each(['0000', '1111', '0123', '1234', '3210', '4321'])('rejects weak PIN %s', (pin) => {

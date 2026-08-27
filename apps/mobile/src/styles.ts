@@ -26,6 +26,7 @@ export const styles = StyleSheet.create({
   secondaryButton: { borderColor: colors.primary, borderWidth: 1, borderRadius: 12, padding: 13, alignItems: 'center' },
   secondaryButtonText: { color: colors.primary, fontSize: 16, fontWeight: '700' },
   danger: { color: colors.danger, fontSize: 14, textAlign: 'right' },
+  notice: { color: colors.success, fontSize: 14, textAlign: 'right' },
   row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 },
   pill: { borderRadius: 99, backgroundColor: '#E5F2F5', paddingHorizontal: 10, paddingVertical: 5 },
   divider: { height: 1, backgroundColor: colors.border },
