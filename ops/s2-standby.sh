@@ -69,7 +69,12 @@ pg_conftool "$TRUSTME_PG_VERSION" trustme set listen_addresses 127.0.0.1
 PG_CONF="/etc/postgresql/${TRUSTME_PG_VERSION}/trustme/postgresql.conf"
 sed -i -E "s|^listen_addresses = .*|listen_addresses = '127.0.0.1'|" "$PG_CONF"
 pg_conftool "$TRUSTME_PG_VERSION" trustme set hot_standby on
-PG_DATA="$(pg_conftool "$TRUSTME_PG_VERSION" trustme show data_directory)"
+PG_DATA="$(pg_conftool "$TRUSTME_PG_VERSION" trustme show data_directory |
+  sed -n "s/^data_directory = '\\(.*\\)'$/\\1/p")"
+[[ -n "$PG_DATA" && -d "$PG_DATA" ]] || {
+  printf 'could not locate TrustMe PostgreSQL data directory\n' >&2
+  exit 1
+}
 systemctl stop "$(pg_service_name)" || true
 
 install -d -o postgres -g postgres -m 0700 /var/lib/postgresql
