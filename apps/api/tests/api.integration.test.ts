@@ -15,7 +15,7 @@ const config = {
   redisUrl: 'redis://localhost:56379',
   apiServiceToken: token,
   depositXpub: HDNodeWallet.createRandom().neuter().extendedKey,
-  adminJwtSecret: 'test-admin-jwt-secret',
+  adminJwtSecret: 'test-admin-jwt-secret-32-characters-long!',
   adminJwtTtlSeconds: 3600,
   polygonRpcUrl: 'http://127.0.0.1:8545',
   usdtContractAddress: getAddress(`0x${'99'.repeat(20)}`),
@@ -44,22 +44,22 @@ async function addSystemAccounts() {
   };
 }
 
-function appFixture(chainProvider?: AdminChainProvider) {
+function appFixture(chainProvider?: AdminChainProvider, queueOverride?: ApiDependencies['queue']) {
   const calls: unknown[][] = [];
   const queue = { add: async (...args: unknown[]) => { calls.push(args); return {}; } } as unknown as ApiDependencies['queue'];
   const redis = { ping: async () => 'PONG' };
-  const app = createApp({ config, prisma, queue, redis, chainProvider });
+  const app = createApp({ config, prisma, queue: queueOverride ?? queue, redis, chainProvider });
   return { app, calls };
 }
 
-async function createAdmin(role: AdminRole, password = 'correct-password') {
+async function createAdmin(role: AdminRole, password = 'correct-password', username = `${role.toLowerCase()}@example.com`) {
   return prisma.adminUser.create({
-    data: { username: `${role.toLowerCase()}@example.com`, passwordHash: await bcrypt.hash(password, 10), role },
+    data: { username, passwordHash: await bcrypt.hash(password, 10), role },
   });
 }
 
-async function adminToken(app: ReturnType<typeof appFixture>['app'], email: string, password = 'correct-password') {
-  const result = await request(app).post('/admin/login').send({ email, password });
+async function adminToken(app: ReturnType<typeof appFixture>['app'], username: string, password = 'correct-password') {
+  const result = await request(app).post('/admin/login').send({ username, password });
   expect(result.status).toBe(200);
   return result.body.token as string;
 }
@@ -174,18 +174,61 @@ describe('member API', () => {
 describe('admin API', () => {
   it('authenticates admins without distinguishing login failures and enforces roles', async () => {
     const { app } = appFixture();
-    await createAdmin(AdminRole.VIEWER);
-    const success = await request(app).post('/admin/login').send({ email: 'viewer@example.com', password: 'correct-password' });
+    await createAdmin(AdminRole.VIEWER, 'correct-password', 'operator-1');
+    const success = await request(app).post('/admin/login').send({ username: 'operator-1', password: 'correct-password' });
     expect(success.status).toBe(200);
     expect(success.body.token).toEqual(expect.any(String));
-    const wrongPassword = await request(app).post('/admin/login').send({ email: 'viewer@example.com', password: 'wrong-password' });
-    const unknownEmail = await request(app).post('/admin/login').send({ email: 'unknown@example.com', password: 'wrong-password' });
+    const wrongPassword = await request(app).post('/admin/login').send({ username: 'operator-1', password: 'wrong-password' });
+    const unknownUsername = await request(app).post('/admin/login').send({ username: 'unknown-operator', password: 'wrong-password' });
     expect(wrongPassword.status).toBe(401);
-    expect(unknownEmail.status).toBe(401);
-    expect(wrongPassword.body).toEqual(unknownEmail.body);
+    expect(unknownUsername.status).toBe(401);
+    expect(wrongPassword.body).toEqual(unknownUsername.body);
     const tokenValue = success.body.token as string;
     const settings = await request(app).patch('/admin/settings').set('Authorization', `Bearer ${tokenValue}`).send({ withdrawalBaseFeeBps: '200' });
     expect(settings.status).toBe(403);
+  });
+
+  it('returns precise status codes without leaking unexpected errors', async () => {
+    const { app } = appFixture();
+    const missingMember = await request(app)
+      .get('/v1/users/does-not-exist/balance')
+      .set('Authorization', `Bearer ${token}`);
+    expect(missingMember.status).toBe(404);
+
+    await createAdmin(AdminRole.APPROVER);
+    const withdrawal = await createPendingWithdrawal(app, 'admin-conflict', '+1555000204');
+    await prisma.withdrawal.update({ where: { id: withdrawal.id }, data: { status: WithdrawalStatus.APPROVED } });
+    const jwt = await adminToken(app, 'approver@example.com');
+    const conflict = await request(app)
+      .post(`/admin/withdrawals/${withdrawal.id}/approve`)
+      .set('Authorization', `Bearer ${jwt}`);
+    expect(conflict.status).toBe(409);
+
+    const failingQueue = {
+      add: async () => {
+        throw new Error('internal queue details');
+      },
+    } as unknown as ApiDependencies['queue'];
+    const failingApp = appFixture(undefined, failingQueue).app;
+    const internalWithdrawal = await createPendingWithdrawal(app, 'admin-internal', '+1555000205');
+    const internal = await request(failingApp)
+      .post(`/admin/withdrawals/${internalWithdrawal.id}/approve`)
+      .set('Authorization', `Bearer ${jwt}`);
+    expect(internal.status).toBe(500);
+    expect(internal.body).toEqual({ error: 'internal server error' });
+    expect(JSON.stringify(internal.body)).not.toContain('internal queue details');
+  });
+
+  it('rejects malformed admin pagination cursors', async () => {
+    const { app } = appFixture();
+    await createAdmin(AdminRole.VIEWER);
+    const jwt = await adminToken(app, 'viewer@example.com');
+    const result = await request(app)
+      .get('/admin/withdrawals')
+      .query({ cursor: 'not-a-valid-cursor' })
+      .set('Authorization', `Bearer ${jwt}`);
+    expect(result.status).toBe(400);
+    expect(result.body.error).toBe('invalid cursor');
   });
 
   it('approves a pending withdrawal once and audits the successful mutation', async () => {
@@ -197,7 +240,7 @@ describe('admin API', () => {
       request(app).post(`/admin/withdrawals/${withdrawal.id}/approve`).set('Authorization', `Bearer ${jwt}`),
       request(app).post(`/admin/withdrawals/${withdrawal.id}/approve`).set('Authorization', `Bearer ${jwt}`),
     ]);
-    expect(results.map((result) => result.status).sort()).toEqual([200, 400]);
+    expect(results.map((result) => result.status).sort()).toEqual([200, 409]);
     expect(calls).toHaveLength(1);
     expect(calls[0]).toEqual(['dispatch', { withdrawalId: withdrawal.id }, { jobId: withdrawal.id }]);
     expect(await prisma.adminAuditLog.count({ where: { entityId: withdrawal.id, action: 'withdrawal.approve' } })).toBe(1);

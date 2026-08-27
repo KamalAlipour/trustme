@@ -31,6 +31,9 @@ import {
 import { type ApiConfig } from './config.js';
 import { openapiDocument } from './openapi.js';
 import { createAdminRouter, EthersAdminChainProvider, type AdminChainProvider } from './admin.js';
+import { HttpError } from './http-error.js';
+
+export { HttpError } from './http-error.js';
 
 type RedisLike = { ping(): Promise<string> };
 export type QueueLike = Pick<Queue, 'add'>;
@@ -79,7 +82,7 @@ function serviceTokenMatches(expected: string, provided: string | undefined): bo
 
 async function userWithAccounts(prisma: PrismaClient, barcodeId: string) {
   const user = await prisma.user.findUnique({ where: { barcodeId } });
-  if (!user) throw new Error('member not found');
+  if (!user) throw new HttpError(404, 'member not found');
   const account = await prisma.ledgerAccount.findFirstOrThrow({ where: { userId: user.id, type: AccountType.USER_COUPON, asset: Asset.COUPON } });
   return { user, account };
 }
@@ -266,13 +269,46 @@ export function createApp(dependencies: ApiDependencies): express.Express {
     }
   });
 
-  app.use((error: unknown, _request: Request, response: Response, next: NextFunction) => {
+  app.use((error: unknown, request: Request, response: Response, next: NextFunction) => {
     void next;
-    if (error instanceof Error && error.name === 'ZodError') {
+    if (error instanceof z.ZodError) {
       response.status(400).json({ error: error.message });
       return;
     }
-    response.status(400).json({ error: error instanceof Error ? error.message : 'request failed' });
+    if (error instanceof HttpError) {
+      response.status(error.status).json({ error: error.message });
+      return;
+    }
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+      response.status(404).json({ error: 'resource not found' });
+      return;
+    }
+    const message = error instanceof Error ? error.message : '';
+    if (
+      [
+        'deposit amount must be positive',
+        'transfer amount must be positive',
+        'escrow amount must be positive',
+        'escrow expiry must be in the future',
+        'escrow is not active',
+        'escrow has expired',
+        'withdrawal cannot be refunded in its current state',
+        'withdrawal cannot be rejected in its current state',
+        'withdrawal must contain coupons',
+        'withdrawal is below minimum',
+        'invalid USDT amount',
+        'micro-USDT cannot be negative',
+        'coupons cannot be negative',
+        'money values cannot be negative',
+        'ledger account balance cannot be negative',
+        'coupon issuance account cannot be positive',
+      ].includes(message)
+    ) {
+      response.status(400).json({ error: message });
+      return;
+    }
+    request.log.error({ err: error }, 'request failed');
+    response.status(500).json({ error: 'internal server error' });
   });
   return app;
 }

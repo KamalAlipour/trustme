@@ -10,7 +10,26 @@ export const openapiDocument = {
     '/v1/escrows/{id}/cancel': { post: { responses: { '200': { description: 'Escrow cancelled' } } } },
     '/v1/withdrawals': { post: { responses: { '201': { description: 'Withdrawal requested' } } } },
     '/v1/withdrawals/{id}': { get: { responses: { '200': { description: 'Withdrawal status' } } } },
-    '/admin/login': { post: { responses: { '200': { description: 'Admin JWT' }, '401': { description: 'Invalid credentials' } } } },
+    '/admin/login': {
+      post: {
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['username', 'password'],
+                properties: {
+                  username: { type: 'string', description: 'Admin username' },
+                  password: { type: 'string', format: 'password' },
+                },
+              },
+            },
+          },
+        },
+        responses: { '200': { description: 'Admin JWT' }, '401': { description: 'Invalid credentials' } },
+      },
+    },
     '/admin/overview': { get: { responses: { '200': { description: 'Admin overview' } } } },
     '/admin/settings': {
       get: { responses: { '200': { description: 'Admin settings' } } },

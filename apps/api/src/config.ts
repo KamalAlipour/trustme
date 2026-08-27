@@ -8,7 +8,7 @@ export const apiConfigSchema = z.object({
   redisUrl: z.string().min(1),
   apiServiceToken: z.string().min(1),
   depositXpub: z.string().min(1),
-  adminJwtSecret: z.string().min(1),
+  adminJwtSecret: z.string().min(32),
   adminJwtTtlSeconds: integer.default(3600),
   polygonRpcUrl: z.string().url(),
   usdtContractAddress: evmAddressSchema,

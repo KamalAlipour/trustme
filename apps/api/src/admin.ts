@@ -22,6 +22,7 @@ import {
 import type { QueueLike } from './app.js';
 import { adminClaims, createAdminJwt, requireAdmin, requireRole, verifyAdminPassword } from './admin-auth.js';
 import type { ApiConfig } from './config.js';
+import { HttpError } from './http-error.js';
 
 export type AdminChainProvider = {
   getBlockNumber(): Promise<number>;
@@ -57,7 +58,7 @@ export type AdminRouterDependencies = {
   chainProvider: AdminChainProvider | undefined;
 };
 
-const loginSchema = z.object({ email: z.string().email(), password: z.string().min(1) });
+const loginSchema = z.object({ username: z.string().min(1), password: z.string().min(1) });
 const nonNegativeIntegerString = z.string().regex(/^(?:0|[1-9]\d*)$/);
 const settingSchema = z.object({
   withdrawalBaseFeeBps: nonNegativeIntegerString.refine((value) => BigInt(value) <= 10_000n, 'fee bps must be between 0 and 10000'),
@@ -115,10 +116,16 @@ function adminId(request: Request): string {
 }
 
 function cursorDate(cursor: string): { createdAt: Date; id: string } {
+  if (!/^[A-Za-z0-9_-]+$/.test(cursor)) throw new HttpError(400, 'invalid cursor');
   const decoded = Buffer.from(cursor, 'base64url').toString();
   const separator = decoded.indexOf('|');
-  if (separator < 1) throw new Error('invalid cursor');
-  return { createdAt: new Date(decoded.slice(0, separator)), id: decoded.slice(separator + 1) };
+  if (separator < 1) throw new HttpError(400, 'invalid cursor');
+  const createdAt = new Date(decoded.slice(0, separator));
+  const id = decoded.slice(separator + 1);
+  if (Number.isNaN(createdAt.getTime()) || !z.string().uuid().safeParse(id).success) {
+    throw new HttpError(400, 'invalid cursor');
+  }
+  return { createdAt, id };
 }
 
 function nextCursor(createdAt: Date, id: string): string {
@@ -143,7 +150,7 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
   router.post('/login', loginLimiter, async (request, response, next) => {
     try {
       const body = loginSchema.parse(request.body);
-      const admin = await prisma.adminUser.findUnique({ where: { username: body.email } });
+      const admin = await prisma.adminUser.findUnique({ where: { username: body.username } });
       const valid = await verifyAdminPassword(body.password, admin?.passwordHash);
       if (!admin || !valid) {
         response.status(401).json({ error: 'invalid credentials' });
@@ -229,7 +236,7 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
   router.patch('/settings', requireRole(AdminRole.ADMIN), async (request, response, next) => {
     try {
       const body = patchSettingsSchema.parse(request.body);
-      if (Object.keys(body).length === 0) throw new Error('at least one setting is required');
+      if (Object.keys(body).length === 0) throw new HttpError(400, 'at least one setting is required');
       await withSerializableRetry(prisma, async (tx) => {
         const keys = Object.keys(body);
         const keyMap: Record<string, string> = {
@@ -297,7 +304,7 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
       const withdrawal = await withSerializableRetry(prisma, async (tx) => {
         await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "Withdrawal" WHERE "id" = ${withdrawalId}::uuid FOR UPDATE`);
         const current = await tx.withdrawal.findUniqueOrThrow({ where: { id: withdrawalId } });
-        if (current.status !== WithdrawalStatus.PENDING_APPROVAL) throw new Error('withdrawal is not pending approval');
+        if (current.status !== WithdrawalStatus.PENDING_APPROVAL) throw new HttpError(409, 'withdrawal is not pending approval');
         const updated = await tx.withdrawal.update({ where: { id: current.id }, data: { status: WithdrawalStatus.APPROVED } });
         await tx.adminAuditLog.create({
           data: {
