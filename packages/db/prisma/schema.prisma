@@ -35,6 +35,8 @@ enum TransactionType {
 
 enum TransactionStatus {
   PENDING
+  CONFIRMED
+  REJECTED
   APPROVED
   PENDING_APPROVAL
   PROCESSING
@@ -55,6 +57,7 @@ enum EscrowStatus {
 enum WithdrawalStatus {
   PENDING_APPROVAL
   APPROVED
+  REJECTED
   PROCESSING
   COMPLETED
   FAILED
@@ -72,6 +75,7 @@ model User {
   phoneNumber     String           @unique
   barcodeId       String           @unique
   aliasName       String?
+  dustMicroUsdt   BigInt           @default(0)
   createdAt       DateTime         @default(now())
   depositAddresses DepositAddress[]
   ledgerAccounts  LedgerAccount[]
