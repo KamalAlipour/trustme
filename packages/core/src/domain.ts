@@ -29,7 +29,10 @@ export async function postDeposit(
 ) {
   if (input.amountMicroUsdt <= 0n) throw new Error('deposit amount must be positive');
   const coupons = couponsFromMicroUsdt(input.amountMicroUsdt);
-  if (coupons <= 0n) throw new Error('deposit must contain at least one coupon');
+  const legs = [
+    { fromAccountId: input.externalOnchainAccountId, toAccountId: input.vaultAccountId, amount: input.amountMicroUsdt, asset: Asset.USDT },
+    ...(coupons > 0n ? [{ fromAccountId: input.issuanceAccountId, toAccountId: input.userCouponAccountId, amount: coupons, asset: Asset.COUPON }] : []),
+  ];
   return postTransaction(prisma, {
     type: TransactionType.DEPOSIT,
     externalRef: input.externalRef,
@@ -38,10 +41,7 @@ export async function postDeposit(
     amountMicroUsdt: input.amountMicroUsdt,
     amountCoupons: coupons,
     roundingDustMicroUsdt: roundingDustMicroUsdt(input.amountMicroUsdt),
-    legs: [
-      { fromAccountId: input.externalOnchainAccountId, toAccountId: input.vaultAccountId, amount: input.amountMicroUsdt, asset: Asset.USDT },
-      { fromAccountId: input.issuanceAccountId, toAccountId: input.userCouponAccountId, amount: coupons, asset: Asset.COUPON },
-    ],
+    legs,
   });
 }
 

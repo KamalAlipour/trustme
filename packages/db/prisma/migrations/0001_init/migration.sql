@@ -15,7 +15,7 @@ CREATE TABLE "User" (
   CONSTRAINT "User_pkey" PRIMARY KEY ("id")
 );
 CREATE TABLE "DepositAddress" (
-  "id" UUID NOT NULL DEFAULT gen_random_uuid(), "userId" UUID NOT NULL, "derivationIndex" INTEGER NOT NULL,
+  "id" UUID NOT NULL DEFAULT gen_random_uuid(), "userId" UUID NOT NULL, "derivationIndex" INTEGER NOT NULL DEFAULT nextval('"deposit_derivation_index_seq"'),
   "address" TEXT NOT NULL, "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT "DepositAddress_pkey" PRIMARY KEY ("id")
 );

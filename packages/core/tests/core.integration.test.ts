@@ -64,6 +64,18 @@ describe('money and ledger domain', () => {
     expect(transaction.roundingDustMicroUsdt).toBe(5_678n);
     expect(await prisma.ledgerAccount.findUniqueOrThrow({ where: { id: fixtureAccounts.users[0]! } })).toMatchObject({ balance: 1_234n });
     expect(await prisma.ledgerEntry.count({ where: { transactionId: transaction.id } })).toBe(2);
+    const dustOnly = await postDeposit(prisma, {
+      externalRef: 'deposit:0xabc:1',
+      userId: (await prisma.user.findFirstOrThrow()).id,
+      userCouponAccountId: fixtureAccounts.users[0]!,
+      externalOnchainAccountId: fixtureAccounts.external,
+      vaultAccountId: fixtureAccounts.vault,
+      issuanceAccountId: fixtureAccounts.issuance,
+      amountMicroUsdt: 1n,
+    });
+    expect(dustOnly.amountCoupons).toBe(0n);
+    expect(dustOnly.roundingDustMicroUsdt).toBe(1n);
+    expect(await prisma.ledgerEntry.count({ where: { transactionId: dustOnly.id } })).toBe(1);
   });
 
   it('preserves per-asset zero sums through randomized transfers', async () => {
