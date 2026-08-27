@@ -1,0 +1,216 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Asset {
+  USDT
+  COUPON
+}
+
+enum AccountType {
+  USER_COUPON
+  ESCROW
+  SYSTEM_COUPON_ISSUANCE
+  SYSTEM_VAULT_USDT
+  SYSTEM_WITHDRAWAL_PENDING
+  SYSTEM_FEE_COLLECTION
+  EXTERNAL_ONCHAIN
+}
+
+enum TransactionType {
+  DEPOSIT
+  TRANSFER
+  ESCROW_HOLD
+  ESCROW_RELEASE
+  ESCROW_CANCEL
+  WITHDRAWAL
+  REFUND
+  FEE
+}
+
+enum TransactionStatus {
+  PENDING
+  CONFIRMED
+  REJECTED
+  APPROVED
+  PENDING_APPROVAL
+  PROCESSING
+  COMPLETED
+  FAILED
+  REFUNDED
+  CANCELLED
+}
+
+enum EscrowStatus {
+  ACTIVE
+  RELEASED
+  CANCELLED
+  EXPIRED
+  LOCKED
+}
+
+enum WithdrawalStatus {
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  PROCESSING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+enum AdminRole {
+  VIEWER
+  APPROVER
+  ADMIN
+}
+
+model User {
+  id              String           @id @default(uuid()) @db.Uuid
+  phoneNumber     String           @unique
+  barcodeId       String           @unique
+  aliasName       String?
+  dustMicroUsdt   BigInt           @default(0)
+  createdAt       DateTime         @default(now())
+  depositAddresses DepositAddress[]
+  ledgerAccounts  LedgerAccount[]
+  transactions    Transaction[]
+  escrowHolds     EscrowHold[]     @relation("EscrowSender")
+  receivedEscrows EscrowHold[]     @relation("EscrowRecipient")
+  withdrawals     Withdrawal[]
+}
+
+model DepositAddress {
+  id              String   @id @default(uuid()) @db.Uuid
+  userId          String   @db.Uuid
+  derivationIndex Int      @default(autoincrement()) @unique
+  address         String   @unique
+  createdAt       DateTime @default(now())
+  user            User     @relation(fields: [userId], references: [id])
+}
+
+model LedgerAccount {
+  id             String        @id @default(uuid()) @db.Uuid
+  type           AccountType
+  asset          Asset
+  userId         String?       @db.Uuid
+  balance        BigInt        @default(0)
+  createdAt      DateTime      @default(now())
+  user           User?         @relation(fields: [userId], references: [id])
+  outgoing       LedgerEntry[] @relation("LedgerFrom")
+  incoming       LedgerEntry[] @relation("LedgerTo")
+  escrowHolds    EscrowHold[]
+  @@unique([type, userId, asset])
+  @@index([type, asset])
+}
+
+model LedgerEntry {
+  id            String        @id @default(uuid()) @db.Uuid
+  transactionId String        @db.Uuid
+  fromAccountId String        @db.Uuid
+  toAccountId   String        @db.Uuid
+  amount        BigInt
+  asset         Asset
+  createdAt     DateTime      @default(now())
+  transaction   Transaction   @relation(fields: [transactionId], references: [id])
+  fromAccount   LedgerAccount @relation("LedgerFrom", fields: [fromAccountId], references: [id])
+  toAccount     LedgerAccount @relation("LedgerTo", fields: [toAccountId], references: [id])
+  @@index([transactionId])
+}
+
+model Transaction {
+  id                    String            @id @default(uuid()) @db.Uuid
+  userId                String?           @db.Uuid
+  type                  TransactionType
+  status                TransactionStatus @default(PENDING)
+  amountMicroUsdt       BigInt            @default(0)
+  amountCoupons         BigInt            @default(0)
+  feeMicroUsdt          BigInt            @default(0)
+  roundingDustMicroUsdt BigInt            @default(0)
+  txHash                String?
+  externalRef           String            @unique
+  createdAt             DateTime          @default(now())
+  user                  User?             @relation(fields: [userId], references: [id])
+  entries               LedgerEntry[]
+  escrowHold            EscrowHold?
+  withdrawal            Withdrawal?
+  @@index([userId, createdAt])
+}
+
+model SystemSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+model EscrowHold {
+  id                String       @id @default(uuid()) @db.Uuid
+  senderId          String       @db.Uuid
+  recipientId       String       @db.Uuid
+  escrowAccountId   String       @db.Uuid
+  transactionId     String       @unique @db.Uuid
+  amountCoupons     BigInt
+  codeHash          String
+  wrongAttempts     Int          @default(0)
+  expiresAt         DateTime
+  status            EscrowStatus @default(ACTIVE)
+  createdAt         DateTime     @default(now())
+  sender            User         @relation("EscrowSender", fields: [senderId], references: [id])
+  recipient         User         @relation("EscrowRecipient", fields: [recipientId], references: [id])
+  escrowAccount     LedgerAccount @relation(fields: [escrowAccountId], references: [id])
+  transaction       Transaction  @relation(fields: [transactionId], references: [id])
+  @@index([senderId, status])
+  @@index([expiresAt, status])
+}
+
+model Withdrawal {
+  id                 String           @id @default(uuid()) @db.Uuid
+  userId             String           @db.Uuid
+  transactionId      String           @unique @db.Uuid
+  destinationAddress String
+  couponsGross       BigInt
+  grossMicroUsdt     BigInt
+  feeMicroUsdt       BigInt
+  netMicroUsdt       BigInt
+  status             WithdrawalStatus @default(PENDING_APPROVAL)
+  chainTxHash        String?
+  broadcastedAt      DateTime?
+  createdAt          DateTime         @default(now())
+  user               User             @relation(fields: [userId], references: [id])
+  transaction        Transaction      @relation(fields: [transactionId], references: [id])
+  @@index([status, createdAt])
+}
+
+model ChainCursor {
+  id              Int      @id @default(1)
+  nextBlock       BigInt
+  lastBlockHash   String?
+  updatedAt       DateTime @updatedAt
+}
+
+model AdminUser {
+  id           String    @id @default(uuid()) @db.Uuid
+  username     String    @unique
+  passwordHash String
+  role         AdminRole
+  createdAt    DateTime  @default(now())
+  auditLogs    AdminAuditLog[]
+}
+
+model AdminAuditLog {
+  id          String    @id @default(uuid()) @db.Uuid
+  adminUserId String    @db.Uuid
+  action      String
+  entityType  String
+  entityId    String
+  oldValue    String?
+  newValue    String?
+  createdAt   DateTime  @default(now())
+  adminUser   AdminUser @relation(fields: [adminUserId], references: [id])
+  @@index([entityType, entityId])
+}
