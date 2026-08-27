@@ -27,6 +27,7 @@ import {
   transferCoupons,
   withSerializableRetry,
   evmAddressSchema,
+  DomainError,
 } from '@trustme/core';
 import { type ApiConfig } from './config.js';
 import { openapiDocument } from './openapi.js';
@@ -283,28 +284,8 @@ export function createApp(dependencies: ApiDependencies): express.Express {
       response.status(404).json({ error: 'resource not found' });
       return;
     }
-    const message = error instanceof Error ? error.message : '';
-    if (
-      [
-        'deposit amount must be positive',
-        'transfer amount must be positive',
-        'escrow amount must be positive',
-        'escrow expiry must be in the future',
-        'escrow is not active',
-        'escrow has expired',
-        'withdrawal cannot be refunded in its current state',
-        'withdrawal cannot be rejected in its current state',
-        'withdrawal must contain coupons',
-        'withdrawal is below minimum',
-        'invalid USDT amount',
-        'micro-USDT cannot be negative',
-        'coupons cannot be negative',
-        'money values cannot be negative',
-        'ledger account balance cannot be negative',
-        'coupon issuance account cannot be positive',
-      ].includes(message)
-    ) {
-      response.status(400).json({ error: message });
+    if (error instanceof DomainError) {
+      response.status(error.status).json({ error: error.message });
       return;
     }
     request.log.error({ err: error }, 'request failed');

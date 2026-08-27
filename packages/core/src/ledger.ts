@@ -7,6 +7,7 @@ import {
   TransactionType,
 } from '@trustme/db';
 import { withSerializableRetry } from './retry.js';
+import { DomainError } from './domain-error.js';
 
 export type DbClient = PrismaClient | Prisma.TransactionClient;
 export type LedgerLeg = {
@@ -69,10 +70,10 @@ async function postWithClient(client: Prisma.TransactionClient, input: PostTrans
     if (!account) throw new Error('one or more ledger accounts do not exist');
     const resultingBalance = account.balance + change;
     if (account.type === AccountType.SYSTEM_COUPON_ISSUANCE && resultingBalance > 0n) {
-      throw new Error('coupon issuance account cannot be positive');
+      throw new DomainError('coupon issuance account cannot be positive');
     }
     if (account.type !== AccountType.SYSTEM_COUPON_ISSUANCE && account.type !== AccountType.EXTERNAL_ONCHAIN && resultingBalance < 0n) {
-      throw new Error('ledger account balance cannot be negative');
+      throw new DomainError('ledger account balance cannot be negative');
     }
   }
 

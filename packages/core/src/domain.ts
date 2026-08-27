@@ -14,6 +14,7 @@ import { postTransaction, postWithClient } from './ledger.js';
 import { couponsFromMicroUsdt, withdrawalQuote } from './money.js';
 import { evmAddressSchema, fourDigitCodeSchema } from './schemas.js';
 import { withSerializableRetry } from './retry.js';
+import { DomainError } from './domain-error.js';
 
 export async function postDeposit(
   prisma: PrismaClient,
@@ -28,7 +29,7 @@ export async function postDeposit(
     txHash?: string;
   },
 ) {
-  if (input.amountMicroUsdt <= 0n) throw new Error('deposit amount must be positive');
+  if (input.amountMicroUsdt <= 0n) throw new DomainError('deposit amount must be positive');
   return withSerializableRetry(prisma, async (tx) => {
     const existing = await tx.transaction.findUnique({ where: { externalRef: input.externalRef } });
     if (existing) return existing;
@@ -60,7 +61,7 @@ export async function transferCoupons(
   prisma: PrismaClient,
   input: { userId?: string; externalRef: string; fromAccountId: string; toAccountId: string; amountCoupons: bigint },
 ) {
-  if (input.amountCoupons <= 0n) throw new Error('transfer amount must be positive');
+  if (input.amountCoupons <= 0n) throw new DomainError('transfer amount must be positive');
   return postTransaction(prisma, {
     type: TransactionType.TRANSFER,
     externalRef: input.externalRef,
@@ -85,8 +86,8 @@ export async function createEscrowHold(
   },
 ) {
   fourDigitCodeSchema.parse(input.code);
-  if (input.amountCoupons <= 0n) throw new Error('escrow amount must be positive');
-  if (input.expiresAt <= new Date()) throw new Error('escrow expiry must be in the future');
+  if (input.amountCoupons <= 0n) throw new DomainError('escrow amount must be positive');
+  if (input.expiresAt <= new Date()) throw new DomainError('escrow expiry must be in the future');
   const holdId = randomUUID();
   const externalRef = input.externalRef ?? `escrow:${holdId}:hold`;
   const codeHash = await bcrypt.hash(input.code, 10);
@@ -124,7 +125,7 @@ async function cancelLockedHold(
   externalRef: string,
   status: EscrowStatus,
 ) {
-  if (hold.status !== EscrowStatus.ACTIVE && hold.status !== EscrowStatus.LOCKED) throw new Error('escrow is not active');
+  if (hold.status !== EscrowStatus.ACTIVE && hold.status !== EscrowStatus.LOCKED) throw new DomainError('escrow is not active');
   await postWithClient(tx, {
     type,
     externalRef,
@@ -145,8 +146,8 @@ export async function releaseEscrow(
   const result = await withSerializableRetry(prisma, async (tx: Prisma.TransactionClient) => {
     await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "EscrowHold" WHERE "id" = ${input.holdId}::uuid FOR UPDATE`);
     const hold = await tx.escrowHold.findUniqueOrThrow({ where: { id: input.holdId } });
-    if (hold.status !== EscrowStatus.ACTIVE) throw new Error('escrow is not active');
-    if (hold.expiresAt <= new Date()) throw new Error('escrow has expired');
+    if (hold.status !== EscrowStatus.ACTIVE) throw new DomainError('escrow is not active');
+    if (hold.expiresAt <= new Date()) throw new DomainError('escrow has expired');
     // Keep comparison inside the transaction so the attempt counter is atomic.
     const valid = await bcrypt.compare(input.code, hold.codeHash);
     if (!valid) {
@@ -168,7 +169,7 @@ export async function releaseEscrow(
     await tx.escrowHold.update({ where: { id: hold.id }, data: { status: EscrowStatus.RELEASED } });
     return { hold: await tx.escrowHold.findUniqueOrThrow({ where: { id: hold.id } }), error: null };
   });
-  if (result.error) throw new Error(result.error);
+  if (result.error) throw new DomainError(result.error);
   return result.hold;
 }
 
@@ -292,15 +293,15 @@ async function refundWithdrawalLocked(
 ) {
   await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "Withdrawal" WHERE "id" = ${input.withdrawalId}::uuid FOR UPDATE`);
   const withdrawal = await tx.withdrawal.findUniqueOrThrow({ where: { id: input.withdrawalId } });
-  if (withdrawal.chainTxHash !== null) throw new Error('withdrawal cannot be refunded in its current state');
+  if (withdrawal.chainTxHash !== null) throw new DomainError('withdrawal cannot be refunded in its current state');
   if (withdrawal.status === WithdrawalStatus.REFUNDED) return withdrawal;
-  if (withdrawal.status === WithdrawalStatus.REJECTED) throw new Error('withdrawal cannot be refunded in its current state');
+  if (withdrawal.status === WithdrawalStatus.REJECTED) throw new DomainError('withdrawal cannot be refunded in its current state');
   if (
     (withdrawal.status !== WithdrawalStatus.PENDING_APPROVAL &&
       withdrawal.status !== WithdrawalStatus.APPROVED &&
       withdrawal.status !== WithdrawalStatus.FAILED)
   ) {
-    throw new Error('withdrawal cannot be refunded in its current state');
+    throw new DomainError('withdrawal cannot be refunded in its current state');
   }
   await postWithClient(tx, {
     type: TransactionType.REFUND,
@@ -327,7 +328,7 @@ export async function rejectWithdrawal(prisma: PrismaClient, input: WithdrawalPo
   return withSerializableRetry(prisma, async (tx: Prisma.TransactionClient) => {
     const withdrawal = await tx.withdrawal.findUniqueOrThrow({ where: { id: input.withdrawalId } });
     if (withdrawal.status !== WithdrawalStatus.PENDING_APPROVAL && withdrawal.status !== WithdrawalStatus.APPROVED) {
-      throw new Error('withdrawal cannot be rejected in its current state');
+      throw new DomainError('withdrawal cannot be rejected in its current state');
     }
     const result = await refundWithdrawalLocked(tx, input, WithdrawalStatus.REJECTED);
     await tx.transaction.update({
@@ -344,15 +345,16 @@ export function calculateSolvency(input: {
   totalDustMicroUsdt: bigint;
   vaultBalance: bigint;
   withdrawalPendingBalance: bigint;
+  feeBalance: bigint;
 }) {
   const couponLiability = -input.issuanceBalance * 10_000n;
-  const liabilitiesMicroUsdt = couponLiability + input.totalDustMicroUsdt;
-  const assetsMicroUsdt = input.vaultBalance + input.withdrawalPendingBalance;
+  const custodyMicroUsdt = input.vaultBalance + input.withdrawalPendingBalance + input.feeBalance;
+  const obligationsMicroUsdt = couponLiability + input.totalDustMicroUsdt + input.withdrawalPendingBalance;
   return {
-    liabilitiesMicroUsdt,
-    assetsMicroUsdt,
-    surplusMicroUsdt: assetsMicroUsdt - liabilitiesMicroUsdt,
-    isSolvent: assetsMicroUsdt >= liabilitiesMicroUsdt,
+    custodyMicroUsdt,
+    obligationsMicroUsdt,
+    surplusMicroUsdt: custodyMicroUsdt - obligationsMicroUsdt,
+    isSolvent: custodyMicroUsdt >= obligationsMicroUsdt,
   };
 }
 
@@ -366,12 +368,16 @@ export async function readSolvency(prisma: PrismaClient) {
   const pending = await prisma.ledgerAccount.findFirstOrThrow({
     where: { type: AccountType.SYSTEM_WITHDRAWAL_PENDING, asset: Asset.USDT, userId: null },
   });
+  const fees = await prisma.ledgerAccount.findFirstOrThrow({
+    where: { type: AccountType.SYSTEM_FEE_COLLECTION, asset: Asset.USDT, userId: null },
+  });
   const dust = await prisma.user.aggregate({ _sum: { dustMicroUsdt: true } });
   return calculateSolvency({
     issuanceBalance: issuance.balance,
     totalDustMicroUsdt: dust._sum.dustMicroUsdt ?? 0n,
     vaultBalance: vault.balance,
     withdrawalPendingBalance: pending.balance,
+    feeBalance: fees.balance,
   });
 }
 

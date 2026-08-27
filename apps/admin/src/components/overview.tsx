@@ -6,7 +6,13 @@ export type OverviewData = {
   feesCollectedUsdt: string;
   withdrawalPendingUsdt: string;
   dustUsdt: string;
-  solvency: { surplusUsdt: string; isSolvent: boolean };
+  solvency: {
+    custodyUsdt: string;
+    obligationsUsdt: string;
+    surplusUsdt: string;
+    isSolvent: boolean;
+    components: { vaultUsdt: string; withdrawalPendingUsdt: string; feesUsdt: string; couponsUsdt: string; dustUsdt: string };
+  };
   transactionCount24hByType: Record<string, number>;
   chain: { available: boolean; headBlock?: number; nextBlock?: string; lag?: string };
   hotWallet: { available: boolean; usdt?: string; nativeWei?: string };
@@ -41,6 +47,10 @@ export function Overview({ data }: Readonly<{ data: OverviewData }>) {
             <p className="mt-2 text-2xl font-semibold">{data.solvency.surplusUsdt}</p>
             <p className="mt-1 text-sm font-medium">{data.solvency.isSolvent ? labels.solvent : labels.insolvent}</p>
           </div>
+        </div>
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <StatCard label={labels.custody} value={data.solvency.custodyUsdt} />
+          <StatCard label={labels.obligations} value={data.solvency.obligationsUsdt} />
         </div>
       </div>
       <div className="grid gap-6 lg:grid-cols-2">

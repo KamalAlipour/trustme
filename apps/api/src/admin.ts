@@ -156,7 +156,7 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
         response.status(401).json({ error: 'invalid credentials' });
         return;
       }
-      response.json({ token: createAdminJwt(admin.id, admin.role, config.adminJwtSecret, config.adminJwtTtlSeconds), expiresIn: config.adminJwtTtlSeconds });
+      response.json({ token: createAdminJwt(admin.id, admin.username, admin.role, config.adminJwtSecret, config.adminJwtTtlSeconds), expiresIn: config.adminJwtTtlSeconds });
     } catch (error) {
       next(error);
     }
@@ -211,10 +211,17 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
         withdrawalPendingUsdt: decimalFromMicroUsdt(pending.balance),
         dustUsdt: decimalFromMicroUsdt(dust._sum.dustMicroUsdt ?? 0n),
         solvency: {
-          assetsUsdt: decimalFromMicroUsdt(solvency.assetsMicroUsdt),
-          liabilitiesUsdt: decimalFromMicroUsdt(solvency.liabilitiesMicroUsdt),
+          custodyUsdt: decimalFromMicroUsdt(solvency.custodyMicroUsdt),
+          obligationsUsdt: decimalFromMicroUsdt(solvency.obligationsMicroUsdt),
           surplusUsdt: decimalFromMicroUsdt(solvency.surplusMicroUsdt),
           isSolvent: solvency.isSolvent,
+          components: {
+            vaultUsdt: decimalFromMicroUsdt(vault.balance),
+            withdrawalPendingUsdt: decimalFromMicroUsdt(pending.balance),
+            feesUsdt: decimalFromMicroUsdt(fees.balance),
+            couponsUsdt: decimalFromMicroUsdt((-issuance.balance) * 10_000n),
+            dustUsdt: decimalFromMicroUsdt(dust._sum.dustMicroUsdt ?? 0n),
+          },
         },
         transactionCount24hByType,
         chain,

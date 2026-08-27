@@ -1,8 +1,9 @@
 import Link from 'next/link';
 import { logoutAction } from '../app/logout/actions';
 import { labels } from '../labels';
+import type { AdminSession } from '../lib/session';
 
-export function Shell({ children }: Readonly<{ children: React.ReactNode }>) {
+export function Shell({ children, session }: Readonly<{ children: React.ReactNode; session: AdminSession }>) {
   return (
     <div className="min-h-screen">
       <header className="border-b bg-white">
@@ -14,7 +15,8 @@ export function Shell({ children }: Readonly<{ children: React.ReactNode }>) {
             <Link href="/">{labels.overview}</Link>
             <Link href="/withdrawals">{labels.withdrawals}</Link>
             <Link href="/ledger">{labels.ledger}</Link>
-            <Link href="/settings">{labels.settings}</Link>
+            {session.role === 'ADMIN' ? <Link href="/settings">{labels.settings}</Link> : null}
+            <span className="text-slate-500">{session.username} ({session.role})</span>
             <form action={logoutAction}>
               <button type="submit">{labels.logout}</button>
             </form>

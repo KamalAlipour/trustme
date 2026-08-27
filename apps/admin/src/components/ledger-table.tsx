@@ -20,7 +20,7 @@ export function LedgerTable({ rows }: Readonly<{ rows: LedgerRow[] }>) {
     <div className="overflow-x-auto rounded-lg border bg-white shadow-sm">
       <table className="min-w-full text-left text-sm">
         <thead className="bg-slate-50">
-          <tr>{[labels.transactionType, labels.status, labels.barcode, labels.externalReference, labels.usdt, labels.coupons, labels.createdAt, ''].map((label) => <th className="whitespace-nowrap px-4 py-3 font-medium" key={label || 'actions'}>{label}</th>)}</tr>
+          <tr>{[labels.transactionType, labels.status, labels.barcode, labels.externalReference, labels.usdt, labels.coupons, labels.fee, labels.createdAt, labels.entries].map((label) => <th className="whitespace-nowrap px-4 py-3 font-medium" key={label}>{label}</th>)}</tr>
         </thead>
         <tbody className="divide-y">
           {rows.map((row) => (
@@ -31,6 +31,7 @@ export function LedgerTable({ rows }: Readonly<{ rows: LedgerRow[] }>) {
               <td className="px-4 py-3 font-mono text-xs">{row.externalRef}</td>
               <td className="px-4 py-3">{row.amountUsdt}</td>
               <td className="px-4 py-3">{row.amountCoupons}</td>
+              <td className="px-4 py-3">{row.feeUsdt}</td>
               <td className="whitespace-nowrap px-4 py-3">{formatDate(row.createdAt)}</td>
               <td className="px-4 py-3">
                 <details>

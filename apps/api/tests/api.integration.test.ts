@@ -280,6 +280,12 @@ describe('admin API', () => {
     expect(result.body.chain).toMatchObject({ available: true, headBlock: 250, nextBlock: '240', lag: '10' });
     expect(result.body.hotWallet).toMatchObject({ available: true, usdt: '10', nativeWei: '2000000000000000000' });
     expect(result.body.solvency.isSolvent).toBe(true);
+    expect(result.body.solvency).toMatchObject({
+      custodyUsdt: '0',
+      obligationsUsdt: '0',
+      surplusUsdt: '0',
+      components: { vaultUsdt: '0', withdrawalPendingUsdt: '0', feesUsdt: '0', couponsUsdt: '0', dustUsdt: '0' },
+    });
 
     const unavailable = appFixture({
       getBlockNumber: async () => { throw new Error('RPC unavailable'); },

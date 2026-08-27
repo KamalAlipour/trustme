@@ -5,7 +5,7 @@ import { redirect } from 'next/navigation';
 import { ADMIN_TOKEN_COOKIE } from '../../constants';
 import { secureCookies } from '../../config';
 import { labels } from '../../labels';
-import { loginRequest } from '../../lib/api';
+import { ApiResponseError, loginRequest } from '../../lib/api';
 
 export async function loginAction(formData: FormData): Promise<void> {
   const username = formData.get('username');
@@ -22,8 +22,11 @@ export async function loginAction(formData: FormData): Promise<void> {
       path: '/',
       ...(result.expiresIn === undefined ? {} : { maxAge: result.expiresIn }),
     });
-  } catch {
-    redirect(`/login?error=${encodeURIComponent(labels.invalidCredentials)}`);
+  } catch (error) {
+    if (error instanceof ApiResponseError && error.status === 401) {
+      redirect(`/login?error=${encodeURIComponent(labels.invalidCredentials)}`);
+    }
+    redirect(`/login?error=${encodeURIComponent(labels.apiUnavailable)}`);
   }
   redirect('/');
 }

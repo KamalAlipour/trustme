@@ -78,10 +78,14 @@ Account types:
 3. `USER_COUPON`, `ESCROW`, `SYSTEM_*` (except `SYSTEM_COUPON_ISSUANCE`) and
    `EXTERNAL_ONCHAIN` balances respect the sign column above — a DB `CHECK`
    plus an application guard.
-4. Liabilities are covered: `-SYSTEM_COUPON_ISSUANCE.balance * 10_000 +
-   sum(User.dustMicroUsdt) <= SYSTEM_VAULT_USDT.balance +
-   SYSTEM_WITHDRAWAL_PENDING.balance`. The admin dashboard surfaces this as the
-   solvency figure.
+4. Solvency is measured from custody and obligations. Custody is
+   `SYSTEM_VAULT_USDT.balance + SYSTEM_WITHDRAWAL_PENDING.balance +
+   SYSTEM_FEE_COLLECTION.balance`; obligations are
+   `-SYSTEM_COUPON_ISSUANCE.balance * 10_000 + sum(User.dustMicroUsdt) +
+   SYSTEM_WITHDRAWAL_PENDING.balance`. The surplus is custody minus obligations,
+   so an in-flight withdrawal is counted as both held custody and a payout
+   obligation. The admin dashboard surfaces the component breakdown and marks
+   the system solvent only when the surplus is non-negative.
 
 **Concurrency.** A posting runs inside a single `prisma.$transaction` at
 `Serializable`, and locks the touched accounts with `SELECT ... FOR UPDATE`
