@@ -30,9 +30,10 @@ import {
 } from '@trustme/core';
 import { type ApiConfig } from './config.js';
 import { openapiDocument } from './openapi.js';
+import { createAdminRouter, EthersAdminChainProvider, type AdminChainProvider } from './admin.js';
 
 type RedisLike = { ping(): Promise<string> };
-type QueueLike = Pick<Queue, 'add'>;
+export type QueueLike = Pick<Queue, 'add'>;
 
 const couponsSchema = z.string().regex(/^[1-9]\d*$/, 'amountCoupons must be a positive decimal string');
 const userBodySchema = z.object({
@@ -66,6 +67,7 @@ export type ApiDependencies = {
   prisma: PrismaClient;
   queue: QueueLike;
   redis: RedisLike;
+  chainProvider?: AdminChainProvider;
 };
 
 function serviceTokenMatches(expected: string, provided: string | undefined): boolean {
@@ -96,7 +98,24 @@ function serializeUser(user: { id: string; phoneNumber: string; barcodeId: strin
 
 export function createApp(dependencies: ApiDependencies): express.Express {
   const { config, prisma, queue, redis } = dependencies;
-  const logger = pino({ redact: ['code', 'privateKey', 'HOT_WALLET_PRIVATE_KEY', 'authorization', 'token'] });
+  const logger = pino({
+    redact: [
+      'code',
+      'password',
+      'passwordHash',
+      'privateKey',
+      'HOT_WALLET_PRIVATE_KEY',
+      'ADMIN_JWT_SECRET',
+      'authorization',
+      'token',
+      'jwt',
+      'req.headers.authorization',
+      'req.body.code',
+      'req.body.password',
+      'req.body.token',
+      'res.body.token',
+    ],
+  });
   const app = express();
   app.use(helmet());
   app.use(express.json({ limit: config.bodyLimit }));
@@ -112,6 +131,7 @@ export function createApp(dependencies: ApiDependencies): express.Express {
     }
     next();
   });
+  app.use('/admin', createAdminRouter({ config, prisma, queue, chainProvider: dependencies.chainProvider }));
 
   app.get('/healthz', (_request, response) => response.json({ status: 'ok' }));
   app.get('/readyz', async (_request, response) => {
@@ -268,5 +288,5 @@ export async function createApiRuntime(config: ApiConfig): Promise<{ app: expres
   const prisma = new PrismaClient({ datasources: { db: { url: config.databaseUrl } } });
   const redis = new Redis(config.redisUrl);
   const queue = new Queue('trustme-withdrawal-dispatch', { connection: redis });
-  return { app: createApp({ config, prisma, queue, redis }), prisma, redis, queue };
+  return { app: createApp({ config, prisma, queue, redis, chainProvider: new EthersAdminChainProvider(config.polygonRpcUrl) }), prisma, redis, queue };
 }

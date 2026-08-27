@@ -10,5 +10,15 @@ export const openapiDocument = {
     '/v1/escrows/{id}/cancel': { post: { responses: { '200': { description: 'Escrow cancelled' } } } },
     '/v1/withdrawals': { post: { responses: { '201': { description: 'Withdrawal requested' } } } },
     '/v1/withdrawals/{id}': { get: { responses: { '200': { description: 'Withdrawal status' } } } },
+    '/admin/login': { post: { responses: { '200': { description: 'Admin JWT' }, '401': { description: 'Invalid credentials' } } } },
+    '/admin/overview': { get: { responses: { '200': { description: 'Admin overview' } } } },
+    '/admin/settings': {
+      get: { responses: { '200': { description: 'Admin settings' } } },
+      patch: { responses: { '200': { description: 'Updated admin settings' } } },
+    },
+    '/admin/withdrawals': { get: { responses: { '200': { description: 'Admin withdrawal queue' } } } },
+    '/admin/withdrawals/{id}/approve': { post: { responses: { '200': { description: 'Withdrawal approved' } } } },
+    '/admin/withdrawals/{id}/reject': { post: { responses: { '200': { description: 'Withdrawal rejected' } } } },
+    '/admin/ledger': { get: { responses: { '200': { description: 'Admin ledger entries' } } } },
   },
 } as const;

@@ -260,7 +260,30 @@ type WithdrawalPostingInput = {
   feeAccountId: string;
   pendingAccountId: string;
   issuanceAccountId: string;
+  audit?: AdminAuditInput;
 };
+
+export type AdminAuditInput = {
+  adminUserId: string;
+  action: string;
+  entityType: string;
+  entityId: string;
+  oldValue?: string;
+  newValue?: string;
+};
+
+async function createAdminAudit(tx: Prisma.TransactionClient, audit: AdminAuditInput): Promise<void> {
+  await tx.adminAuditLog.create({
+    data: {
+      adminUserId: audit.adminUserId,
+      action: audit.action,
+      entityType: audit.entityType,
+      entityId: audit.entityId,
+      ...(audit.oldValue === undefined ? {} : { oldValue: audit.oldValue }),
+      ...(audit.newValue === undefined ? {} : { newValue: audit.newValue }),
+    },
+  });
+}
 
 async function refundWithdrawalLocked(
   tx: Prisma.TransactionClient,
@@ -311,6 +334,7 @@ export async function rejectWithdrawal(prisma: PrismaClient, input: WithdrawalPo
       where: { id: withdrawal.transactionId },
       data: { status: TransactionStatus.REJECTED },
     });
+    if (input.audit !== undefined) await createAdminAudit(tx, input.audit);
     return result;
   });
 }

@@ -1,6 +1,6 @@
 import { getAddress, Interface, keccak256, type TransactionRequest } from 'ethers';
 import { AccountType, Asset, Prisma, PrismaClient, TransactionStatus, TransactionType, WithdrawalStatus } from '@trustme/db';
-import { postTransaction, withSerializableRetry } from '@trustme/core';
+import { getHotWalletBalances as readHotWalletBalances, postTransaction, withSerializableRetry } from '@trustme/core';
 import type { ChainProvider, ChainReceipt, TransactionSigner } from './provider.js';
 
 const usdtInterface = new Interface(['function transfer(address to, uint256 amount) returns (bool)']);
@@ -52,17 +52,7 @@ function calculateGasLimit(estimatedGas: bigint, config: DispatchConfig): bigint
   return gasLimit;
 }
 
-export async function getHotWalletBalances(
-  provider: ChainProvider,
-  usdtContractAddress: string,
-  hotWalletAddress: string,
-): Promise<{ usdtBalanceMicroUsdt: bigint; nativeBalanceWei: bigint }> {
-  const [usdtBalanceMicroUsdt, nativeBalanceWei] = await Promise.all([
-    provider.getTokenBalance(usdtContractAddress, hotWalletAddress),
-    provider.getNativeBalance(hotWalletAddress),
-  ]);
-  return { usdtBalanceMicroUsdt, nativeBalanceWei };
-}
+export const getHotWalletBalances = readHotWalletBalances;
 
 function isKnownBroadcastError(error: unknown, expectedHash: string): boolean {
   if (!(error instanceof Error)) return false;
