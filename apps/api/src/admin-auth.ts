@@ -7,6 +7,7 @@ export type AdminClaims = {
   sub: string;
   username: string;
   role: AdminRole;
+  typ: 'admin';
   exp: number;
 };
 
@@ -26,7 +27,7 @@ export async function verifyAdminPassword(password: string, passwordHash: string
 
 export function createAdminJwt(adminId: string, username: string, role: AdminRole, secret: string, ttlSeconds: number): string {
   const header = base64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
-  const payload = base64url(JSON.stringify({ sub: adminId, username, role, exp: Math.floor(Date.now() / 1000) + ttlSeconds }));
+  const payload = base64url(JSON.stringify({ sub: adminId, username, role, typ: 'admin', exp: Math.floor(Date.now() / 1000) + ttlSeconds }));
   const body = `${header}.${payload}`;
   return `${body}.${signature(body, secret)}`;
 }
@@ -43,9 +44,9 @@ export function verifyAdminJwt(token: string, secret: string): AdminClaims | nul
   try {
     const decodedHeader = JSON.parse(Buffer.from(header, 'base64url').toString()) as { alg?: string; typ?: string };
     const claims = JSON.parse(Buffer.from(payload, 'base64url').toString()) as Partial<AdminClaims>;
-    if (decodedHeader.alg !== 'HS256' || decodedHeader.typ !== 'JWT' || typeof claims.sub !== 'string' || typeof claims.username !== 'string' || typeof claims.role !== 'string' || typeof claims.exp !== 'number') return null;
+    if (decodedHeader.alg !== 'HS256' || decodedHeader.typ !== 'JWT' || claims.typ !== 'admin' || typeof claims.sub !== 'string' || typeof claims.username !== 'string' || typeof claims.role !== 'string' || typeof claims.exp !== 'number') return null;
     if (!Object.values(AdminRole).includes(claims.role as AdminRole) || claims.exp <= Math.floor(Date.now() / 1000)) return null;
-    return { sub: claims.sub, username: claims.username, role: claims.role as AdminRole, exp: claims.exp };
+    return { sub: claims.sub, username: claims.username, role: claims.role as AdminRole, typ: 'admin', exp: claims.exp };
   } catch {
     return null;
   }

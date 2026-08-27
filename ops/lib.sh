@@ -18,6 +18,27 @@ load_trustme_env() {
   set +a
 }
 
+ensure_generated_secret() {
+  local name="$1"
+  local bytes="$2"
+  local value
+  if [[ -n "${!name:-}" ]]; then
+    return 0
+  fi
+  command -v openssl >/dev/null 2>&1 || {
+    printf 'openssl is required to generate %s\n' "$name" >&2
+    return 1
+  }
+  value="$(openssl rand -hex "$bytes")"
+  if grep -q "^${name}=" "$trustme_env_file"; then
+    sed -i -E "s|^${name}=.*$|${name}=${value}|" "$trustme_env_file"
+  else
+    printf '%s=%s\n' "$name" "$value" >> "$trustme_env_file"
+  fi
+  printf -v "$name" '%s' "$value"
+  export "$name"
+}
+
 require_root() {
   if [[ "${EUID}" -ne 0 ]]; then
     printf 'this TrustMe operation must run as root\n' >&2

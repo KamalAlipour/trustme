@@ -4,8 +4,11 @@ import { getAddress, HDNodeWallet } from 'ethers';
 import { Redis } from 'ioredis';
 import bcrypt from 'bcryptjs';
 import { AccountType, AdminRole, Asset, PrismaClient, WithdrawalStatus } from '@trustme/db';
-import { postDeposit } from '@trustme/core';
+import { createLoanRequest, postDeposit } from '@trustme/core';
 import { createApp, type ApiDependencies } from '../src/app.js';
+import { provisionUser } from '../src/user-provisioning.js';
+import { createMemberJwt } from '../src/member-auth.js';
+import { createAdminJwt } from '../src/admin-auth.js';
 import type { AdminChainProvider } from '../src/admin.js';
 
 const prisma = new PrismaClient();
@@ -17,6 +20,16 @@ const config = {
   depositXpub: HDNodeWallet.createRandom().neuter().extendedKey,
   adminJwtSecret: 'test-admin-jwt-secret-32-characters-long!',
   adminJwtTtlSeconds: 3600,
+  memberJwtSecret: 'test-member-jwt-secret-32-characters-long!',
+  memberJwtTtlSeconds: 900,
+  memberRefreshTtlDays: 60,
+  emailDelivery: 'log' as const,
+  smtpHost: undefined,
+  smtpPort: undefined,
+  smtpUser: undefined,
+  smtpPassword: undefined,
+  smtpFrom: undefined,
+  nodeEnv: 'test',
   polygonRpcUrl: 'http://127.0.0.1:8545',
   usdtContractAddress: getAddress(`0x${'99'.repeat(20)}`),
   hotWalletAddress: getAddress(`0x${'aa'.repeat(20)}`),
@@ -24,6 +37,8 @@ const config = {
   bodyLimit: '32kb',
   rateLimitWindowMs: 60_000,
   rateLimitMax: 100,
+  bindHost: '127.0.0.1',
+  failoverMarkerPath: '/tmp/trustme-marker',
 };
 
 async function account(type: AccountType, asset: Asset, userId?: string) {
@@ -44,12 +59,20 @@ async function addSystemAccounts() {
   };
 }
 
-function appFixture(chainProvider?: AdminChainProvider, queueOverride?: ApiDependencies['queue']) {
+function appFixture(chainProvider?: AdminChainProvider, queueOverride?: ApiDependencies['queue'], configOverride: Partial<typeof config> = {}) {
   const calls: unknown[][] = [];
+  const emailCodes = new Map<string, string>();
   const queue = { add: async (...args: unknown[]) => { calls.push(args); return {}; } } as unknown as ApiDependencies['queue'];
   const redis = { ping: async () => 'PONG' };
-  const app = createApp({ config, prisma, queue: queueOverride ?? queue, redis, chainProvider });
-  return { app, calls };
+  const app = createApp({
+    config: { ...config, ...configOverride },
+    prisma,
+    queue: queueOverride ?? queue,
+    redis,
+    chainProvider,
+    logEmailCode: (email, code) => emailCodes.set(email, code),
+  });
+  return { app, calls, emailCodes };
 }
 
 async function createAdmin(role: AdminRole, password = 'correct-password', username = `${role.toLowerCase()}@example.com`) {
@@ -62,6 +85,14 @@ async function adminToken(app: ReturnType<typeof appFixture>['app'], username: s
   const result = await request(app).post('/admin/login').send({ username, password });
   expect(result.status).toBe(200);
   return result.body.token as string;
+}
+
+async function memberToken(app: ReturnType<typeof appFixture>['app'], phone: string, displayName?: string) {
+  const user = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: phone } });
+  await prisma.user.update({ where: { id: user.id }, data: { pinHash: await bcrypt.hash('2468', 12), ...(displayName === undefined ? {} : { displayName }) } });
+  const login = await request(app).post('/v1/auth/login').send({ phone, pin: '2468' });
+  expect(login.status).toBe(200);
+  return login.body.tokens.accessToken as string;
 }
 
 async function createPendingWithdrawal(app: ReturnType<typeof appFixture>['app'], barcodeId: string, phone: string, couponsGross = '150000') {
@@ -92,7 +123,7 @@ beforeAll(async () => {
   await prisma.$connect();
 });
 beforeEach(async () => {
-  await prisma.$executeRawUnsafe('TRUNCATE TABLE "AdminAuditLog", "AdminUser", "Withdrawal", "EscrowHold", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User", "ChainCursor", "SystemSetting" CASCADE');
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "AdminAuditLog", "AdminUser", "Withdrawal", "EscrowHold", "EmailVerification", "MemberDevice", "Contact", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User", "ChainCursor", "SystemSetting" CASCADE');
   await prisma.systemSetting.createMany({ data: [
     { key: 'WITHDRAWAL_BASE_FEE_BPS', value: '100' },
     { key: 'MIN_WITHDRAWAL_USDT', value: '1' },
@@ -104,6 +135,212 @@ afterAll(async () => {
 });
 
 describe('member API', () => {
+  it('supports PIN signup and token-scoped profile reads', async () => {
+    const { app } = appFixture();
+    const registered = await request(app).post('/v1/auth/register').send({ phone: '+1555000120', pin: '2468', displayName: 'Coupon User' });
+    expect(registered.status).toBe(201);
+    expect(registered.body).not.toHaveProperty('pin');
+    expect(registered.body.member).toMatchObject({ displayName: 'Coupon User', barcodeId: expect.stringMatching(/^TC[0-9ABCDEFGHJKMNPQRSTVWXYZ]{14}$/), phone: '*-*-0120', isRestricted: false });
+    const profile = await request(app).get('/v1/me').set('Authorization', `Bearer ${registered.body.tokens.accessToken}`);
+    expect(profile.status).toBe(200);
+    expect(await prisma.ledgerAccount.count({ where: { user: { phoneNumber: '+1555000120' } } })).toBe(2);
+    expect(await prisma.depositAddress.count({ where: { user: { phoneNumber: '+1555000120' } } })).toBe(1);
+    expect((await request(app).post('/v1/auth/login').send({ phone: '+1555000120', pin: '2468' })).status).toBe(200);
+    expect((await request(app).post('/v1/auth/register').send({ phone: '+1555000120', pin: '2468' })).status).toBe(409);
+  });
+
+  it('rejects weak PINs and keeps unknown login indistinguishable', async () => {
+    const { app } = appFixture();
+    for (const pin of ['0000', '1111', '1234', '4321']) {
+      expect((await request(app).post('/v1/auth/register').send({ phone: `+15550001${pin}`, pin })).status).toBe(400);
+    }
+    const unknown = await request(app).post('/v1/auth/login').send({ phone: '+1555000121', pin: '2468' });
+    const wrong = await request(app).post('/v1/auth/login').send({ phone: '+1555000121', pin: '1357' });
+    expect(unknown.status).toBe(401);
+    expect(unknown.body).toEqual(wrong.body);
+  });
+
+  it('locks PIN attempts and rejects the locked account before bcrypt', async () => {
+    const { app } = appFixture();
+    await request(app).post('/v1/auth/register').send({ phone: '+1555000122', pin: '2468' });
+    for (let attempt = 0; attempt < 4; attempt += 1) expect((await request(app).post('/v1/auth/login').send({ phone: '+1555000122', pin: '1357' })).status).toBe(401);
+    const locked = await request(app).post('/v1/auth/login').send({ phone: '+1555000122', pin: '1357' });
+    expect(locked.status).toBe(423);
+    expect(locked.body.retryAfter).toEqual(expect.any(Number));
+    expect((await request(app).post('/v1/auth/login').send({ phone: '+1555000122', pin: '2468' })).status).toBe(423);
+  });
+
+  it('returns 503 for email delivery none and never returns email codes', async () => {
+    const { app } = appFixture(undefined, undefined, { emailDelivery: 'none' });
+    const response = await request(app).post('/v1/auth/register').send({ phone: '+1555000125', pin: '2468', email: 'member@example.com' });
+    expect(response.status).toBe(503);
+    expect(response.body).toEqual({ error: 'email delivery not configured' });
+    expect(response.body).not.toHaveProperty('code');
+  });
+
+  it('rotates refresh tokens and revokes every device on reuse', async () => {
+    const { app } = appFixture();
+    const registered = await request(app).post('/v1/auth/register').send({ phone: '+1555000126', pin: '2468' });
+    const firstRefresh = registered.body.tokens.refreshToken as string;
+    const rotated = await request(app).post('/v1/auth/refresh').send({ refreshToken: firstRefresh });
+    expect(rotated.status).toBe(200);
+    expect(rotated.body.tokens.refreshToken).not.toBe(firstRefresh);
+    expect((await request(app).post('/v1/auth/refresh').send({ refreshToken: firstRefresh })).status).toBe(401);
+    const devices = await prisma.memberDevice.findMany({ where: { user: { phoneNumber: '+1555000126' } } });
+    expect(devices.every((device) => device.revokedAt !== null)).toBe(true);
+  });
+
+  it('verifies email and resets the PIN while revoking old devices', async () => {
+    const { app, emailCodes } = appFixture();
+    const registered = await request(app).post('/v1/auth/register').send({ phone: '+1555000127', pin: '2468', email: 'reset@example.com' });
+    expect(registered.status).toBe(201);
+    expect(emailCodes.get('reset@example.com')).toMatch(/^\d{6}$/);
+    const accessToken = registered.body.tokens.accessToken as string;
+    const verified = await request(app).post('/v1/me/email/verify').set('Authorization', `Bearer ${accessToken}`).send({ code: emailCodes.get('reset@example.com') });
+    expect(verified.status).toBe(200);
+    expect(verified.body.emailVerified).toBe(true);
+    const requested = await request(app).post('/v1/auth/pin-reset/request').send({ email: 'reset@example.com' });
+    expect(requested.status).toBe(202);
+    const reset = await request(app).post('/v1/auth/pin-reset/confirm').send({ email: 'reset@example.com', code: emailCodes.get('reset@example.com'), pin: '1357' });
+    expect(reset.status).toBe(200);
+    expect((await request(app).get('/v1/me').set('Authorization', `Bearer ${accessToken}`)).status).toBe(401);
+    expect((await request(app).post('/v1/auth/login').send({ phone: '+1555000127', pin: '1357' })).status).toBe(200);
+  });
+
+  it('requires PIN step-up for member transfers', async () => {
+    const { app } = appFixture();
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000128', barcodeId: 'step-up-a' });
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000129', barcodeId: 'step-up-b' });
+    const actorToken = await memberToken(app, '+1555000128');
+    const missing = await request(app).post('/v1/me/transfers').set('Authorization', `Bearer ${actorToken}`).send({ toBarcodeId: 'step-up-b', amountCoupons: '1', idempotencyKey: 'missing-pin' });
+    expect(missing.status).toBe(400);
+    const wrong = await request(app).post('/v1/me/transfers').set('Authorization', `Bearer ${actorToken}`).send({ toBarcodeId: 'step-up-b', amountCoupons: '1', idempotencyKey: 'wrong-pin', pin: '1357' });
+    expect(wrong.status).toBe(401);
+    expect((await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000128' } })).pinAttempts).toBe(1);
+  });
+
+  it('rejects service, admin, malformed, and expired tokens on /v1/me', async () => {
+    const { app } = appFixture();
+    const admin = await createAdmin(AdminRole.ADMIN);
+    const adminLogin = await request(app).post('/admin/login').send({ username: admin.username, password: 'correct-password' });
+    const expired = `${adminLogin.body.token}.invalid`;
+    for (const authorization of [undefined, `Bearer ${token}`, `Bearer ${adminLogin.body.token}`, 'Bearer garbage', `Bearer ${expired}`]) {
+      const query = request(app).get('/v1/me');
+      if (authorization !== undefined) query.set('Authorization', authorization);
+      const response = await query;
+      expect(response.status).toBe(401);
+    }
+    const sameSecretAdmin = createAdminJwt(admin.id, admin.username, admin.role, config.memberJwtSecret, config.adminJwtTtlSeconds);
+    expect((await request(app).get('/v1/me').set('Authorization', `Bearer ${sameSecretAdmin}`)).status).toBe(401);
+  });
+
+  it('rejects an expired member JWT', async () => {
+    const { app } = appFixture();
+    const user = await prisma.user.create({ data: { phoneNumber: '+1555000124', barcodeId: 'expired-member' } });
+    const device = await prisma.memberDevice.create({ data: { userId: user.id, label: 'test', refreshTokenHash: 'expired', expiresAt: new Date(Date.now() + 60_000) } });
+    const response = await request(app).get('/v1/me').set('Authorization', `Bearer ${createMemberJwt(user.id, device.id, config.memberJwtSecret, -1)}`);
+    expect(response.status).toBe(401);
+  });
+
+  it('scopes transfers to the token actor and exposes stable transaction history', async () => {
+    const { app } = appFixture();
+    const createdA = await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000126', barcodeId: 'member-a' });
+    const createdB = await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000127', barcodeId: 'member-b' });
+    expect(createdA.status).toBe(201);
+    expect(createdB.status).toBe(201);
+    await prisma.user.update({ where: { barcodeId: 'member-b' }, data: { displayName: 'Bob' } });
+    const systems = await addSystemAccounts();
+    const userA = await prisma.user.findUniqueOrThrow({ where: { barcodeId: 'member-a' } });
+    const accountA = await prisma.ledgerAccount.findFirstOrThrow({ where: { userId: userA.id, type: AccountType.USER_COUPON, asset: Asset.COUPON } });
+    await postDeposit(prisma, { externalRef: 'member-history-fund', userId: userA.id, userCouponAccountId: accountA.id, externalOnchainAccountId: systems.external.id, vaultAccountId: systems.vault.id, issuanceAccountId: systems.issuance.id, amountMicroUsdt: 100_000_000n });
+    const tokenA = await memberToken(app, '+1555000126', 'Alice');
+    const tokenB = await memberToken(app, '+1555000127', 'Bob');
+    const malicious = await request(app).post('/v1/me/transfers').set('Authorization', `Bearer ${tokenA}`).send({ fromBarcodeId: 'member-b', toBarcodeId: 'member-b', amountCoupons: '1', idempotencyKey: 'malicious', pin: '2468' });
+    expect(malicious.status).toBe(201);
+    const balanceA = await request(app).get('/v1/me/balance').set('Authorization', `Bearer ${tokenA}`);
+    expect(balanceA.body.coupons).toBe('9999');
+    const reverse = await request(app).post('/v1/me/transfers').set('Authorization', `Bearer ${tokenB}`).send({ toBarcodeId: 'member-a', amountCoupons: '1', idempotencyKey: 'reverse', pin: '2468' });
+    expect(reverse.status).toBe(201);
+    const history = await request(app).get('/v1/me/transactions?limit=1').set('Authorization', `Bearer ${tokenA}`);
+    expect(history.status).toBe(200);
+    expect(history.body.items[0]).toMatchObject({ direction: 'in', amountCoupons: '1', counterparty: { displayName: 'Bob', barcodeId: 'member-b' } });
+    expect(history.body.nextCursor).toEqual(expect.any(String));
+    const next = await request(app).get(`/v1/me/transactions?limit=10&cursor=${encodeURIComponent(history.body.nextCursor)}`).set('Authorization', `Bearer ${tokenA}`);
+    expect(next.status).toBe(200);
+    expect(next.body.items.some((item: { direction: string; amountCoupons: string }) => item.direction === 'out' && item.amountCoupons === '1')).toBe(true);
+  });
+
+  it('supports private contact aliases, search, duplicate protection, and owner scoping', async () => {
+    const { app } = appFixture();
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000128', barcodeId: 'contact-owner' });
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000129', barcodeId: 'contact-target' });
+    await prisma.user.update({ where: { barcodeId: 'contact-target' }, data: { displayName: 'Target Name' } });
+    const ownerToken = await memberToken(app, '+1555000128');
+    const otherToken = await memberToken(app, '+1555000129');
+    const created = await request(app).post('/v1/me/contacts').set('Authorization', `Bearer ${ownerToken}`).send({ barcodeId: 'contact-target', alias: 'Work' });
+    expect(created.status).toBe(201);
+    expect(created.body).toMatchObject({ alias: 'Work', barcodeId: 'contact-target', displayName: 'Target Name' });
+    expect(created.body).not.toHaveProperty('phone');
+    expect((await request(app).post('/v1/me/contacts').set('Authorization', `Bearer ${ownerToken}`).send({ barcodeId: 'contact-target', alias: 'Again' })).status).toBe(409);
+    expect((await request(app).post('/v1/me/contacts').set('Authorization', `Bearer ${ownerToken}`).send({ barcodeId: 'contact-owner', alias: 'Self' })).status).toBe(400);
+    expect((await request(app).patch(`/v1/me/contacts/${created.body.id}`).set('Authorization', `Bearer ${otherToken}`).send({ alias: 'Hacked' })).status).toBe(403);
+    expect((await request(app).patch(`/v1/me/contacts/${created.body.id}`).set('Authorization', `Bearer ${ownerToken}`).send({ alias: 'Personal' })).status).toBe(200);
+    expect((await request(app).get('/v1/me/contacts?query=Personal&sort=alias').set('Authorization', `Bearer ${ownerToken}`)).body.items[0].alias).toBe('Personal');
+    expect((await request(app).delete(`/v1/me/contacts/${created.body.id}`).set('Authorization', `Bearer ${otherToken}`)).status).toBe(403);
+    expect((await request(app).delete(`/v1/me/contacts/${created.body.id}`).set('Authorization', `Bearer ${ownerToken}`)).status).toBe(204);
+  });
+
+  it('returns 403 for every member operation attempted by the wrong actor', async () => {
+    const { app } = appFixture();
+    for (const [phone, barcode] of [['+1555000130', 'actor-a'], ['+1555000131', 'actor-b'], ['+1555000132', 'actor-c']]) {
+      await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone, barcodeId: barcode });
+    }
+    const actorA = await prisma.user.findUniqueOrThrow({ where: { barcodeId: 'actor-a' } });
+    const actorB = await prisma.user.findUniqueOrThrow({ where: { barcodeId: 'actor-b' } });
+    const actorC = await prisma.user.findUniqueOrThrow({ where: { barcodeId: 'actor-c' } });
+    const tokenA = await memberToken(app, actorA.phoneNumber);
+    const tokenB = await memberToken(app, actorB.phoneNumber);
+    const tokenC = await memberToken(app, actorC.phoneNumber);
+    const systems = await addSystemAccounts();
+    const accountA = await prisma.ledgerAccount.findFirstOrThrow({ where: { userId: actorA.id, type: AccountType.USER_COUPON, asset: Asset.COUPON } });
+    await postDeposit(prisma, { externalRef: 'wrong-actor-fund', userId: actorA.id, userCouponAccountId: accountA.id, externalOnchainAccountId: systems.external.id, vaultAccountId: systems.vault.id, issuanceAccountId: systems.issuance.id, amountMicroUsdt: 100_000_000n });
+    const escrow = await request(app).post('/v1/me/escrows').set('Authorization', `Bearer ${tokenA}`).send({ recipientBarcodeId: actorB.barcodeId, amountCoupons: '1', code: '1234', pin: '2468', expiresAt: new Date(Date.now() + 60_000).toISOString() });
+    expect(escrow.status).toBe(201);
+    expect((await request(app).post(`/v1/me/escrows/${escrow.body.id}/release`).set('Authorization', `Bearer ${tokenC}`).send({ code: '1234' })).status).toBe(403);
+    expect((await request(app).post(`/v1/me/escrows/${escrow.body.id}/cancel`).set('Authorization', `Bearer ${tokenB}`)).status).toBe(403);
+    const loan = await createLoanRequest(prisma, {
+      borrowerId: actorA.id,
+      principalCoupons: 10n,
+      installments: [{ amountCoupons: 10n, dueAt: new Date(Date.now() + 86_400_000) }],
+      guarantors: [{ guarantorId: actorB.id, amountCoupons: 10n }],
+    });
+    await prisma.loan.update({ where: { id: loan.id }, data: { lenderId: actorC.id, status: 'ACTIVE' } });
+    const guarantee = await prisma.guarantee.findUniqueOrThrow({ where: { loanId_guarantorId: { loanId: loan.id, guarantorId: actorB.id } } });
+    expect((await request(app).post(`/v1/me/guarantees/${guarantee.id}/approve`).set('Authorization', `Bearer ${tokenA}`).send({ code: '1234', pin: '2468' })).status).toBe(403);
+    expect((await request(app).post(`/v1/me/guarantees/${guarantee.id}/decline`).set('Authorization', `Bearer ${tokenA}`)).status).toBe(403);
+    expect((await request(app).post(`/v1/me/guarantees/${guarantee.id}/activate`).set('Authorization', `Bearer ${tokenB}`).send({ code: '1234' })).status).toBe(403);
+    expect((await request(app).post(`/v1/me/loans/${loan.id}/repay`).set('Authorization', `Bearer ${tokenC}`).send({ amountCoupons: '1', idempotencyKey: 'wrong-repay' })).status).toBe(403);
+  });
+
+  it('generates a barcode when omitted while preserving caller-supplied values', async () => {
+    const { app } = appFixture();
+    const generated = await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000109' });
+    expect(generated.status).toBe(201);
+    expect(generated.body.barcodeId).toMatch(/^TC[0-9ABCDEFGHJKMNPQRSTVWXYZ]{14}$/);
+    const supplied = await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000110', barcodeId: 'back-office-free-form' });
+    expect(supplied.status).toBe(201);
+    expect(supplied.body.barcodeId).toBe('back-office-free-form');
+  });
+
+  it('retries a generated barcode after a barcode unique collision', async () => {
+    await prisma.user.create({ data: { phoneNumber: '+1555000111', barcodeId: 'TC00000000000000' } });
+    const generated = await provisionUser(prisma, config, { phoneNumber: '+1555000112' }, (() => {
+      const values = ['TC00000000000000', 'TC00000000000001'];
+      return () => values.shift()!;
+    })());
+    expect(generated.barcodeId).toBe('TC00000000000001');
+  });
+
   it('requires the service token and creates an idempotent member', async () => {
     const { app } = appFixture();
     await expect(request(app).post('/v1/users').send({ phone: '+1555000100', barcodeId: 'api-1' })).resolves.toHaveProperty('status', 401);
