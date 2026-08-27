@@ -21,8 +21,10 @@ TRUSTME_ADMIN_PORT="${TRUSTME_ADMIN_PORT:-}"
 TRUSTME_PG_DATABASE="${TRUSTME_PG_DATABASE:-trustme}"
 TRUSTME_PG_ROLE="${TRUSTME_PG_ROLE:-trustme}"
 TRUSTME_PG_PASSWORD="${TRUSTME_PG_PASSWORD:-}"
+TRUSTME_REPLICATION_ROLE="${TRUSTME_REPLICATION_ROLE:-}"
 require_value TRUSTME_PG_VERSION
 require_value TRUSTME_PG_PASSWORD
+require_value TRUSTME_REPLICATION_ROLE
 require_value TRUSTME_REDIS_PASSWORD
 require_value TRUSTME_API_HOST
 require_value TRUSTME_ADMIN_HOST
@@ -105,8 +107,8 @@ PG_HBA="$(pg_conftool "$TRUSTME_PG_VERSION" trustme show hba_file |
   printf 'could not locate TrustMe pg_hba.conf\n' >&2
   exit 1
 }
-grep -Fqx "host replication ${TRUSTME_PG_ROLE} 127.0.0.1/32 scram-sha-256" "$PG_HBA" ||
-  printf '%s\n' "host replication ${TRUSTME_PG_ROLE} 127.0.0.1/32 scram-sha-256" >> "$PG_HBA"
+grep -Fqx "host replication ${TRUSTME_REPLICATION_ROLE} 127.0.0.1/32 scram-sha-256" "$PG_HBA" ||
+  printf '%s\n' "host replication ${TRUSTME_REPLICATION_ROLE} 127.0.0.1/32 scram-sha-256" >> "$PG_HBA"
 systemctl restart "$(pg_service_name)"
 
 REDIS_DATA_DIR="${TRUSTME_REDIS_DATA_DIR:-/var/lib/trustme-redis}"
