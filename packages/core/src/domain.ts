@@ -219,7 +219,7 @@ export async function requestWithdrawal(
     feeAccountId: string;
     pendingAccountId: string;
     issuanceAccountId: string;
-    cooldownHours?: number;
+    cooldownHours: number;
   },
 ) {
   evmAddressSchema.parse(input.destinationAddress);
@@ -235,9 +235,8 @@ export async function requestWithdrawal(
     if (availability.blockers.includes('pending_code')) throw new DomainError('withdrawal blocked by pending code');
     if (availability.blockers.includes('unresolved_claim')) throw new DomainError('withdrawal blocked by unresolved claim');
     if (input.couponsGross > availability.availableToWithdrawCoupons) throw new DomainError('withdrawal exceeds available balance');
-    const cooldownHours = input.cooldownHours ?? 0;
-    if (cooldownHours < 0) throw new DomainError('withdrawal cooldown must be non-negative');
-    const eligibleAt = new Date(Date.now() + cooldownHours * 60 * 60 * 1000);
+    if (input.cooldownHours < 0) throw new DomainError('withdrawal cooldown must be non-negative');
+    const eligibleAt = new Date(Date.now() + input.cooldownHours * 60 * 60 * 1000);
     const transaction = await postWithClient(tx, {
       type: TransactionType.WITHDRAWAL,
       externalRef: `withdrawal:${withdrawalId}:burn`,

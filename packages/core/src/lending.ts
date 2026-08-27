@@ -307,12 +307,12 @@ export async function repayLoan(
     if (existing) return tx.loan.findUniqueOrThrow({ where: { id: input.loanId }, include: { installments: true, guarantees: true } });
     await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "Loan" WHERE "id" = ${input.loanId}::uuid FOR UPDATE`);
     const loan = await tx.loan.findUniqueOrThrow({ where: { id: input.loanId } });
-    if (loan.status !== LoanStatus.ACTIVE) throw new DomainError('loan is not active');
+    if (loan.status !== LoanStatus.ACTIVE && loan.status !== LoanStatus.DEFAULTED) throw new DomainError('loan is not active');
     if (input.amountCoupons > loan.outstandingCoupons) throw new DomainError('repayment exceeds outstanding debt');
     await requireUserCouponAccount(tx, input.borrowerAccountId, loan.borrowerId);
     if (loan.lenderId === null) throw new DomainError('loan has no lender');
     await requireUserCouponAccount(tx, input.lenderAccountId, loan.lenderId);
-    const transaction = await postWithClient(tx, {
+    await postWithClient(tx, {
       type: TransactionType.LOAN_REPAY,
       externalRef: input.externalRef,
       userId: loan.borrowerId,
@@ -320,7 +320,6 @@ export async function repayLoan(
       amountCoupons: input.amountCoupons,
       legs: [{ fromAccountId: input.borrowerAccountId, toAccountId: input.lenderAccountId, amount: input.amountCoupons, asset: Asset.COUPON }],
     });
-    void transaction;
     let remaining = input.amountCoupons;
     const installments = await tx.loanInstallment.findMany({ where: { loanId: loan.id }, orderBy: { sequence: 'asc' } });
     for (const installment of installments) {
@@ -371,6 +370,11 @@ export async function claimGuarantees(prisma: PrismaClient, input: { loanId: str
     await requireUserCouponAccount(tx, input.lenderAccountId, loan.lenderId);
     const guarantees = await tx.guarantee.findMany({ where: { loanId: loan.id, status: GuaranteeStatus.ACTIVE }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
     if (guarantees.length === 0) throw new DomainError('loan has no active guarantees');
+    const overdueInstallment = (await tx.loanInstallment.findMany({
+      where: { loanId: loan.id, dueAt: { lt: new Date() } },
+      select: { amountCoupons: true, paidCoupons: true },
+    })).find((installment) => installment.paidCoupons < installment.amountCoupons);
+    if (overdueInstallment === undefined) throw new DomainError('loan has no overdue installment');
     const totalLocked = guarantees.reduce((sum, guarantee) => sum + guarantee.amountCoupons, 0n);
     const target = loan.outstandingCoupons < totalLocked ? loan.outstandingCoupons : totalLocked;
     const claims = guarantees.map((guarantee) => (guarantee.amountCoupons * target) / totalLocked);

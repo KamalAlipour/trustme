@@ -47,7 +47,7 @@ beforeAll(async () => {
   await prisma.$connect();
 });
 beforeEach(async () => {
-  await prisma.$executeRawUnsafe('TRUNCATE TABLE "AdminAuditLog", "AdminUser", "Withdrawal", "EscrowHold", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User", "ChainCursor" CASCADE');
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "AdminAuditLog", "AdminUser", "Withdrawal", "EscrowHold", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User", "ChainCursor" CASCADE');
 });
 afterAll(async () => {
   await prisma.$disconnect();
@@ -117,6 +117,7 @@ describe('withdrawal dispatch and confirmation', () => {
       feeAccountId: fixtureAccounts.fees.id,
       pendingAccountId: fixtureAccounts.pending.id,
       issuanceAccountId: fixtureAccounts.issuance.id,
+      cooldownHours: 0,
     });
     const signer = new FakeTransactionSigner(getAddress(`0x${'dd'.repeat(20)}`), '0x01');
     const provider = new FakeChainProvider({
@@ -165,6 +166,7 @@ describe('withdrawal dispatch and confirmation', () => {
       feeAccountId: fixtureAccounts.fees.id,
       pendingAccountId: fixtureAccounts.pending.id,
       issuanceAccountId: fixtureAccounts.issuance.id,
+      cooldownHours: 0,
     });
     const signer = new FakeTransactionSigner(getAddress(`0x${'dd'.repeat(20)}`), '0x01');
     const provider = new FakeChainProvider();
@@ -202,6 +204,7 @@ describe('withdrawal dispatch and confirmation', () => {
       feeAccountId: fixtureAccounts.fees.id,
       pendingAccountId: fixtureAccounts.pending.id,
       issuanceAccountId: fixtureAccounts.issuance.id,
+      cooldownHours: 0,
     });
     const signer = new FakeTransactionSigner(
       getAddress(`0x${'dd'.repeat(20)}`),
@@ -241,6 +244,7 @@ describe('withdrawal dispatch and confirmation', () => {
       feeAccountId: fixtureAccounts.fees.id,
       pendingAccountId: fixtureAccounts.pending.id,
       issuanceAccountId: fixtureAccounts.issuance.id,
+      cooldownHours: 0,
     });
     const first = await makeWithdrawal('e');
     const signer = new FakeTransactionSigner(getAddress(`0x${'dd'.repeat(20)}`), '0x01');
@@ -283,6 +287,7 @@ describe('withdrawal dispatch and confirmation', () => {
       feeAccountId: fixtureAccounts.fees.id,
       pendingAccountId: fixtureAccounts.pending.id,
       issuanceAccountId: fixtureAccounts.issuance.id,
+      cooldownHours: 0,
     });
     const signer = new FakeTransactionSigner(getAddress(`0x${'dd'.repeat(20)}`), '0x01');
     const provider = new FakeChainProvider({ head: 5, blockTimestamps: new Map([[5, Math.floor(Date.now() / 1000) - 121]]) });
