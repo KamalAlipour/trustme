@@ -279,9 +279,25 @@ describe('money and ledger domain', () => {
       totalDustMicroUsdt: 5_000n,
       vaultBalance: 900_000n,
       withdrawalPendingBalance: 105_000n,
+      feeBalance: 25_000n,
     })).toEqual({
-      liabilitiesMicroUsdt: 1_005_000n,
-      assetsMicroUsdt: 1_005_000n,
+      custodyMicroUsdt: 1_030_000n,
+      obligationsMicroUsdt: 1_110_000n,
+      surplusMicroUsdt: -80_000n,
+      isSolvent: false,
+    });
+  });
+
+  it('does not count an in-flight withdrawal as surplus', () => {
+    expect(calculateSolvency({
+      issuanceBalance: -100n,
+      totalDustMicroUsdt: 0n,
+      vaultBalance: 1_000_000n,
+      withdrawalPendingBalance: 500_000n,
+      feeBalance: 0n,
+    })).toEqual({
+      custodyMicroUsdt: 1_500_000n,
+      obligationsMicroUsdt: 1_500_000n,
       surplusMicroUsdt: 0n,
       isSolvent: true,
     });

@@ -3,5 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "scripts": { "build": "tsc -p tsconfig.json", "typecheck": "tsc -p tsconfig.json --noEmit", "test": "vitest run --passWithNoTests" }
+  "scripts": { "build": "tsc -p tsconfig.json", "typecheck": "tsc -p tsconfig.json --noEmit", "test": "vitest run --passWithNoTests" },
+  "dependencies": {
+    "@trustme/core": "0.1.0",
+    "@trustme/db": "0.1.0",
+    "bullmq": "5.40.3",
+    "ethers": "6.13.5",
+    "ioredis": "5.4.1",
+    "pino": "9.6.0"
+  }
 }

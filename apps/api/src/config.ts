@@ -1,0 +1,44 @@
+import { z } from 'zod';
+import { evmAddressSchema } from '@trustme/core';
+
+const integer = z.coerce.number().int().positive();
+
+export const apiConfigSchema = z.object({
+  databaseUrl: z.string().min(1),
+  redisUrl: z.string().min(1),
+  apiServiceToken: z.string().min(1),
+  depositXpub: z.string().min(1),
+  adminJwtSecret: z.string().min(32),
+  adminJwtTtlSeconds: integer.default(3600),
+  polygonRpcUrl: z.string().url(),
+  usdtContractAddress: evmAddressSchema,
+  hotWalletAddress: evmAddressSchema,
+  bindHost: z.string().default('127.0.0.1'),
+  port: integer.default(3000),
+  bodyLimit: z.string().default('32kb'),
+  rateLimitWindowMs: integer.default(60_000),
+  rateLimitMax: integer.default(60),
+  failoverMarkerPath: z.string().default('/etc/trustme/FAILED_OVER'),
+});
+
+export type ApiConfig = z.infer<typeof apiConfigSchema>;
+
+export function loadApiConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
+  return apiConfigSchema.parse({
+    databaseUrl: env.DATABASE_URL,
+    redisUrl: env.REDIS_URL,
+    apiServiceToken: env.API_SERVICE_TOKEN,
+    depositXpub: env.DEPOSIT_XPUB,
+    adminJwtSecret: env.ADMIN_JWT_SECRET,
+    adminJwtTtlSeconds: env.ADMIN_JWT_TTL_SECONDS,
+    polygonRpcUrl: env.POLYGON_RPC_URL,
+    usdtContractAddress: env.USDT_CONTRACT_ADDRESS,
+    hotWalletAddress: env.HOT_WALLET_ADDRESS,
+    bindHost: env.API_BIND_HOST,
+    port: env.API_PORT,
+    bodyLimit: env.API_BODY_LIMIT,
+    rateLimitWindowMs: env.API_RATE_LIMIT_WINDOW_MS,
+    rateLimitMax: env.API_RATE_LIMIT_MAX,
+    failoverMarkerPath: env.FAILOVER_MARKER_PATH,
+  });
+}

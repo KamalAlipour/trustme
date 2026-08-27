@@ -78,10 +78,14 @@ Account types:
 3. `USER_COUPON`, `ESCROW`, `SYSTEM_*` (except `SYSTEM_COUPON_ISSUANCE`) and
    `EXTERNAL_ONCHAIN` balances respect the sign column above — a DB `CHECK`
    plus an application guard.
-4. Liabilities are covered: `-SYSTEM_COUPON_ISSUANCE.balance * 10_000 +
-   sum(User.dustMicroUsdt) <= SYSTEM_VAULT_USDT.balance +
-   SYSTEM_WITHDRAWAL_PENDING.balance`. The admin dashboard surfaces this as the
-   solvency figure.
+4. Solvency is measured from custody and obligations. Custody is
+   `SYSTEM_VAULT_USDT.balance + SYSTEM_WITHDRAWAL_PENDING.balance +
+   SYSTEM_FEE_COLLECTION.balance`; obligations are
+   `-SYSTEM_COUPON_ISSUANCE.balance * 10_000 + sum(User.dustMicroUsdt) +
+   SYSTEM_WITHDRAWAL_PENDING.balance`. The surplus is custody minus obligations,
+   so an in-flight withdrawal is counted as both held custody and a payout
+   obligation. The admin dashboard surfaces the component breakdown and marks
+   the system solvent only when the surplus is non-negative.
 
 **Concurrency.** A posting runs inside a single `prisma.$transaction` at
 `Serializable`, and locks the touched accounts with `SELECT ... FOR UPDATE`
@@ -165,12 +169,32 @@ passwords are argon2 hashes, and approval actions are written to an append-only
 | | Server 1 — primary | Server 2 — standby |
 |---|---|---|
 | OS user | `trustme` (no shared home with anything else) | same |
-| Postgres | database `trustme`, role `trustme` | arrives through the existing cluster-wide streaming replication |
+| Postgres | dedicated cluster `trustme`, database `trustme`, role `trustme` | dedicated streaming replica over the TrustMe-only tunnel |
 | Redis | own instance, own port, `requirepass`, bound to localhost | started only at failover |
-| Ports | api and admin on their own loopback ports | same, stopped |
+| Ports | PG `5434`, Redis `6380`, API `3121`, admin `3122` (loopback only) | same, plus replication tunnel `5435` (loopback only) |
 | Web | own nginx vhost / own hostname | vhost installed at failover |
-| Secrets | `.env` owned by `trustme`, mode 0600, values from the secret store | rsynced with the code tree |
+| Secrets | `/etc/trustme/trustme.env`, owned by `root:trustme`, mode 0640 | provisioned separately, never committed |
 
 The chain ingest and dispatch workers run **only on the primary**: a standby
 that starts signing payouts is the one failure mode this system cannot tolerate,
-so the worker unit refuses to start when the failover marker file is present.
+so the API and worker refuse to start when the failover marker file is present.
+The default marker is `/etc/trustme/FAILED_OVER`, overridable through
+`FAILOVER_MARKER_PATH`. The marker means that this machine is not the active
+TrustMe node: it is present on Server 2 during normal operation and is written
+onto Server 1 by the promote script when TrustMe moves to Server 2. This is a
+safety interlock because two live workers sharing one hot wallet could collide
+on nonces or double-pay, not a convenience switch.
+
+The authoritative TrustMe port map is also kept in `ops/ports.sh` and enforced
+by `ops/preflight.sh`:
+
+| Service | Port |
+|---|---:|
+| TrustMe PostgreSQL | `5434` |
+| TrustMe replication tunnel on Server 2 | `5435` |
+| TrustMe Redis | `6380` |
+| TrustMe API | `3121` |
+| TrustMe admin UI | `3122` |
+
+PostgreSQL, Redis, API, and admin bind to `127.0.0.1`; nginx is the only public
+listener.
