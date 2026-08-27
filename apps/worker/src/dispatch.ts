@@ -7,7 +7,10 @@ const usdtInterface = new Interface(['function transfer(address to, uint256 amou
 
 export type DispatchConfig = {
   usdtContractAddress: string;
+  chainId: number;
   confirmations: number;
+  gasSafetyMultiplierBps: number;
+  gasLimitCeiling: number;
 };
 
 export type DispatchResult =
@@ -32,6 +35,35 @@ function feeFields(fees: Awaited<ReturnType<ChainProvider['estimateFees']>>): Pi
   return fees.gasPrice === undefined ? {} : { gasPrice: fees.gasPrice };
 }
 
+function feeFieldsWithType(
+  fees: Awaited<ReturnType<ChainProvider['estimateFees']>>,
+): Pick<TransactionRequest, 'gasPrice' | 'maxFeePerGas' | 'maxPriorityFeePerGas' | 'type'> {
+  if (fees.maxFeePerGas !== undefined && fees.maxPriorityFeePerGas !== undefined) {
+    return { ...feeFields(fees), type: 2 };
+  }
+  if (fees.gasPrice !== undefined) return { gasPrice: fees.gasPrice, type: 0 };
+  throw new Error('provider returned no usable fee estimate');
+}
+
+function calculateGasLimit(estimatedGas: bigint, config: DispatchConfig): bigint {
+  if (estimatedGas <= 0n) throw new Error('provider returned an invalid gas estimate');
+  const gasLimit = (estimatedGas * BigInt(config.gasSafetyMultiplierBps) + 9_999n) / 10_000n;
+  if (gasLimit > BigInt(config.gasLimitCeiling)) throw new Error('estimated gas exceeds configured ceiling');
+  return gasLimit;
+}
+
+export async function getHotWalletBalances(
+  provider: ChainProvider,
+  usdtContractAddress: string,
+  hotWalletAddress: string,
+): Promise<{ usdtBalanceMicroUsdt: bigint; nativeBalanceWei: bigint }> {
+  const [usdtBalanceMicroUsdt, nativeBalanceWei] = await Promise.all([
+    provider.getTokenBalance(usdtContractAddress, hotWalletAddress),
+    provider.getNativeBalance(hotWalletAddress),
+  ]);
+  return { usdtBalanceMicroUsdt, nativeBalanceWei };
+}
+
 function isKnownBroadcastError(error: unknown, expectedHash: string): boolean {
   if (!(error instanceof Error)) return false;
   if (/already known/i.test(error.message)) return true;
@@ -48,23 +80,51 @@ export async function dispatchWithdrawal(
   signer: TransactionSigner,
   config: DispatchConfig,
   withdrawalId: string,
+  log: Pick<Console, 'error'> = console,
 ): Promise<DispatchResult> {
   const withdrawal = await claimApprovedWithdrawal(prisma, withdrawalId);
   if (withdrawal === null) return { status: 'skipped' };
   if (withdrawal.chainTxHash !== null) return { status: 'watching', txHash: withdrawal.chainTxHash };
-  const fees = await provider.estimateFees();
-  const transaction: TransactionRequest = {
-    to: config.usdtContractAddress,
-    data: usdtInterface.encodeFunctionData('transfer', [getAddress(withdrawal.destinationAddress), withdrawal.netMicroUsdt]),
-    nonce: await provider.getTransactionCount(signer.address),
-    ...feeFields(fees),
-  };
-  const signedTransaction = await signer.signTransaction(transaction);
-  const txHash = keccak256(signedTransaction);
-  await prisma.withdrawal.update({
-    where: { id: withdrawal.id },
-    data: { chainTxHash: txHash, broadcastedAt: new Date() },
-  });
+  let signedTransaction: string;
+  let txHash: string;
+  try {
+    const fees = await provider.estimateFees();
+    const feeTransaction = feeFieldsWithType(fees);
+    const transactionWithoutGas: TransactionRequest = {
+      to: config.usdtContractAddress,
+      data: usdtInterface.encodeFunctionData('transfer', [getAddress(withdrawal.destinationAddress), withdrawal.netMicroUsdt]),
+      chainId: config.chainId,
+      nonce: await provider.getTransactionCount(signer.address, 'pending'),
+      ...feeTransaction,
+    };
+    const estimatedGas = await provider.estimateGas({ ...transactionWithoutGas, from: signer.address });
+    const gasLimit = calculateGasLimit(estimatedGas, config);
+    const maxFeePerGas = fees.maxFeePerGas ?? fees.gasPrice;
+    if (maxFeePerGas === undefined) throw new Error('provider returned no usable fee estimate');
+    const requiredNativeBalance = gasLimit * maxFeePerGas;
+    const balances = await getHotWalletBalances(provider, config.usdtContractAddress, signer.address);
+    if (balances.usdtBalanceMicroUsdt < withdrawal.netMicroUsdt) {
+      log.error(`hot wallet has insufficient USDT for withdrawal ${withdrawal.id}`);
+      throw new Error('hot wallet has insufficient USDT');
+    }
+    if (balances.nativeBalanceWei < requiredNativeBalance) {
+      log.error(`hot wallet has insufficient native balance for withdrawal ${withdrawal.id}`);
+      throw new Error('hot wallet has insufficient native balance');
+    }
+    const transaction: TransactionRequest = { ...transactionWithoutGas, gasLimit };
+    signedTransaction = await signer.signTransaction(transaction);
+    txHash = keccak256(signedTransaction);
+    await prisma.withdrawal.update({
+      where: { id: withdrawal.id },
+      data: { chainTxHash: txHash, broadcastedAt: new Date() },
+    });
+  } catch (error) {
+    await prisma.withdrawal.updateMany({
+      where: { id: withdrawal.id, status: WithdrawalStatus.PROCESSING, chainTxHash: null },
+      data: { status: WithdrawalStatus.APPROVED },
+    });
+    throw error;
+  }
   try {
     await provider.sendTransaction(signedTransaction);
   } catch (error) {

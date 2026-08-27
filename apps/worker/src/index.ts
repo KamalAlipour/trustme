@@ -26,7 +26,12 @@ export async function startWorker(config: WorkerConfig = loadWorkerConfig()): Pr
   const logger = pino({ redact: ['code', 'privateKey', 'HOT_WALLET_PRIVATE_KEY', 'authorization', 'token'] });
   const prisma = new PrismaClient({ datasources: { db: { url: config.databaseUrl } } });
   const rpc = new JsonRpcProvider(config.polygonRpcUrl);
-  const provider = createEthersProvider(config.polygonRpcUrl);
+  const provider = createEthersProvider(rpc);
+  const chainId = await provider.getChainId();
+  if (chainId !== BigInt(config.chainId)) {
+    await prisma.$disconnect();
+    throw new Error(`configured chain ID ${config.chainId} does not match provider chain ID ${chainId}`);
+  }
   const signer = createWalletSigner(config.hotWalletPrivateKey, rpc);
   const queues = createQueues(config.redisUrl);
   const ingestWorker = new BullWorker(
@@ -37,7 +42,7 @@ export async function startWorker(config: WorkerConfig = loadWorkerConfig()): Pr
   const dispatchWorker = new BullWorker(
     DISPATCH_QUEUE,
     async (job) => {
-      const result = await dispatchWithdrawal(prisma, provider, signer, config, String(job.data.withdrawalId));
+      const result = await dispatchWithdrawal(prisma, provider, signer, config, String(job.data.withdrawalId), logger);
       if (result.status !== 'skipped') {
         await queues.confirmation.add('confirm', { withdrawalId: job.data.withdrawalId }, {
           jobId: `confirmation:${job.data.withdrawalId}`,

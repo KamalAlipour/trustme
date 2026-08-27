@@ -9,7 +9,13 @@ import { FakeChainProvider, FakeTransactionSigner } from '../src/provider.js';
 const prisma = new PrismaClient();
 const usdt = getAddress(`0x${'aa'.repeat(20)}`);
 const transferTopic = id('Transfer(address,address,uint256)');
-const dispatchConfig = { usdtContractAddress: usdt, confirmations: 2 };
+const dispatchConfig = {
+  usdtContractAddress: usdt,
+  chainId: 137,
+  confirmations: 2,
+  gasSafetyMultiplierBps: 12_500,
+  gasLimitCeiling: 200_000,
+};
 
 async function account(type: AccountType, asset: Asset, userId?: string) {
   return prisma.ledgerAccount.create({ data: { type, asset, ...(userId === undefined ? {} : { userId }) } });
@@ -114,6 +120,9 @@ describe('withdrawal dispatch and confirmation', () => {
     });
     const signer = new FakeTransactionSigner(getAddress(`0x${'dd'.repeat(20)}`), '0x01');
     const provider = new FakeChainProvider({
+      pendingNonce: 8,
+      latestNonce: 7,
+      gasEstimate: 40_000n,
       onSendTransaction: async () => {
         expect((await prisma.withdrawal.findUniqueOrThrow({ where: { id: withdrawal.id } })).chainTxHash).not.toBeNull();
       },
@@ -121,6 +130,7 @@ describe('withdrawal dispatch and confirmation', () => {
     const result = await dispatchWithdrawal(prisma, provider, signer, dispatchConfig, withdrawal.id);
     expect(result.status).toBe('broadcast');
     expect(signer.signCount).toBe(1);
+    expect(signer.signedRequests[0]).toMatchObject({ chainId: 137, type: 0, nonce: 8, gasLimit: 50_000n });
     const hash = (await prisma.withdrawal.findUniqueOrThrow({ where: { id: withdrawal.id } })).chainTxHash;
     expect(hash).not.toBeNull();
     const receiptProvider = new FakeChainProvider({
@@ -167,5 +177,86 @@ describe('withdrawal dispatch and confirmation', () => {
     await expect(confirmWithdrawal(prisma, reverted, dispatchConfig, withdrawal.id)).resolves.toMatchObject({ status: 'failed' });
     expect(await prisma.ledgerEntry.count()).toBe(before);
     expect((await prisma.withdrawal.findUniqueOrThrow({ where: { id: withdrawal.id } })).status).toBe(WithdrawalStatus.FAILED);
+  });
+
+  it('returns a pre-broadcast signing failure to APPROVED', async () => {
+    const fixtureAccounts = await fixture();
+    await postDeposit(prisma, {
+      externalRef: 'deposit:dispatch:throw',
+      userId: fixtureAccounts.user.id,
+      userCouponAccountId: fixtureAccounts.userAccount.id,
+      externalOnchainAccountId: fixtureAccounts.external.id,
+      vaultAccountId: fixtureAccounts.vault.id,
+      issuanceAccountId: fixtureAccounts.issuance.id,
+      amountMicroUsdt: 2_000_000_000n,
+    });
+    const withdrawal = await requestWithdrawal(prisma, {
+      userId: fixtureAccounts.user.id,
+      userAccountId: fixtureAccounts.userAccount.id,
+      destinationAddress: getAddress(`0x${'cc'.repeat(20)}`),
+      couponsGross: 50_000n,
+      baseFeeBps: 100n,
+      minimumWithdrawalMicroUsdt: 1n,
+      autoApprovalLimitMicroUsdt: 1_000_000_000n,
+      vaultAccountId: fixtureAccounts.vault.id,
+      feeAccountId: fixtureAccounts.fees.id,
+      pendingAccountId: fixtureAccounts.pending.id,
+      issuanceAccountId: fixtureAccounts.issuance.id,
+    });
+    const signer = new FakeTransactionSigner(
+      getAddress(`0x${'dd'.repeat(20)}`),
+      '0x01',
+      async () => {
+        throw new Error('signing failed');
+      },
+    );
+    await expect(dispatchWithdrawal(prisma, new FakeChainProvider(), signer, dispatchConfig, withdrawal.id)).rejects.toThrow('signing failed');
+    expect(signer.signCount).toBe(1);
+    expect(await prisma.withdrawal.findUniqueOrThrow({ where: { id: withdrawal.id } })).toMatchObject({
+      status: WithdrawalStatus.APPROVED,
+      chainTxHash: null,
+    });
+  });
+
+  it('checks USDT and native funding before signing', async () => {
+    const fixtureAccounts = await fixture();
+    await postDeposit(prisma, {
+      externalRef: 'deposit:dispatch:funding',
+      userId: fixtureAccounts.user.id,
+      userCouponAccountId: fixtureAccounts.userAccount.id,
+      externalOnchainAccountId: fixtureAccounts.external.id,
+      vaultAccountId: fixtureAccounts.vault.id,
+      issuanceAccountId: fixtureAccounts.issuance.id,
+      amountMicroUsdt: 2_000_000_000n,
+    });
+    const makeWithdrawal = (id: string) => requestWithdrawal(prisma, {
+      userId: fixtureAccounts.user.id,
+      userAccountId: fixtureAccounts.userAccount.id,
+      destinationAddress: getAddress(`0x${id.repeat(40 / id.length)}`),
+      couponsGross: 50_000n,
+      baseFeeBps: 100n,
+      minimumWithdrawalMicroUsdt: 1n,
+      autoApprovalLimitMicroUsdt: 1_000_000_000n,
+      vaultAccountId: fixtureAccounts.vault.id,
+      feeAccountId: fixtureAccounts.fees.id,
+      pendingAccountId: fixtureAccounts.pending.id,
+      issuanceAccountId: fixtureAccounts.issuance.id,
+    });
+    const first = await makeWithdrawal('e');
+    const signer = new FakeTransactionSigner(getAddress(`0x${'dd'.repeat(20)}`), '0x01');
+    const noUsdt = new FakeChainProvider({
+      tokenBalances: new Map([[`${usdt.toLowerCase()}:${signer.address.toLowerCase()}`, 0n]]),
+    });
+    await expect(dispatchWithdrawal(prisma, noUsdt, signer, dispatchConfig, first.id)).rejects.toThrow('insufficient USDT');
+    expect(signer.signCount).toBe(0);
+    expect((await prisma.withdrawal.findUniqueOrThrow({ where: { id: first.id } })).status).toBe(WithdrawalStatus.APPROVED);
+
+    const second = await makeWithdrawal('f');
+    const noNative = new FakeChainProvider({
+      nativeBalances: new Map([[signer.address.toLowerCase(), 0n]]),
+    });
+    await expect(dispatchWithdrawal(prisma, noNative, signer, dispatchConfig, second.id)).rejects.toThrow('insufficient native');
+    expect(signer.signCount).toBe(0);
+    expect((await prisma.withdrawal.findUniqueOrThrow({ where: { id: second.id } })).status).toBe(WithdrawalStatus.APPROVED);
   });
 });

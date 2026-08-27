@@ -1,5 +1,6 @@
 import {
   JsonRpcProvider,
+  Contract,
   Wallet,
   type FeeData,
   type Log,
@@ -42,7 +43,11 @@ export interface ChainProvider {
   getTransactionReceipt(hash: string): Promise<ChainReceipt | null>;
   sendTransaction(signedTransaction: string): Promise<void>;
   estimateFees(): Promise<FeeEstimate>;
-  getTransactionCount(address: string): Promise<number>;
+  estimateGas(transaction: TransactionRequest): Promise<bigint>;
+  getChainId(): Promise<bigint>;
+  getNativeBalance(address: string): Promise<bigint>;
+  getTokenBalance(tokenAddress: string, ownerAddress: string): Promise<bigint>;
+  getTransactionCount(address: string, blockTag: 'latest' | 'pending'): Promise<number>;
 }
 
 export interface TransactionSigner {
@@ -103,13 +108,31 @@ export class EthersChainProvider implements ChainProvider {
     };
   }
 
-  public async getTransactionCount(address: string): Promise<number> {
-    return this.provider.getTransactionCount(address, 'pending');
+  public async estimateGas(transaction: TransactionRequest): Promise<bigint> {
+    return this.provider.estimateGas(transaction);
+  }
+
+  public async getChainId(): Promise<bigint> {
+    return (await this.provider.getNetwork()).chainId;
+  }
+
+  public async getNativeBalance(address: string): Promise<bigint> {
+    return this.provider.getBalance(address);
+  }
+
+  public async getTokenBalance(tokenAddress: string, ownerAddress: string): Promise<bigint> {
+    const token = new Contract(tokenAddress, ['function balanceOf(address) view returns (uint256)'], this.provider);
+    const balanceOf = token.getFunction('balanceOf');
+    return BigInt(await balanceOf(ownerAddress));
+  }
+
+  public async getTransactionCount(address: string, blockTag: 'latest' | 'pending'): Promise<number> {
+    return this.provider.getTransactionCount(address, blockTag);
   }
 }
 
-export function createEthersProvider(url: string): EthersChainProvider {
-  return new EthersChainProvider(new JsonRpcProvider(url));
+export function createEthersProvider(urlOrProvider: string | JsonRpcProvider): EthersChainProvider {
+  return new EthersChainProvider(typeof urlOrProvider === 'string' ? new JsonRpcProvider(urlOrProvider) : urlOrProvider);
 }
 
 export function createWalletSigner(privateKey: string, provider: JsonRpcProvider): TransactionSigner {
@@ -122,6 +145,12 @@ export type FakeProviderOptions = {
   logs?: ChainLog[];
   receipts?: Map<string, ChainReceipt | null>;
   fees?: FeeEstimate;
+  chainId?: bigint;
+  gasEstimate?: bigint;
+  nativeBalances?: Map<string, bigint>;
+  tokenBalances?: Map<string, bigint>;
+  pendingNonce?: number;
+  latestNonce?: number;
   nonce?: number;
   onSendTransaction?: (signedTransaction: string) => Promise<void>;
 };
@@ -164,8 +193,26 @@ export class FakeChainProvider implements ChainProvider {
     return this.options.fees ?? { gasPrice: 1n };
   }
 
-  public async getTransactionCount(): Promise<number> {
-    return this.options.nonce ?? 0;
+  public async estimateGas(): Promise<bigint> {
+    return this.options.gasEstimate ?? 50_000n;
+  }
+
+  public async getChainId(): Promise<bigint> {
+    return this.options.chainId ?? 137n;
+  }
+
+  public async getNativeBalance(address: string): Promise<bigint> {
+    return this.options.nativeBalances?.get(address.toLowerCase()) ?? 10n ** 18n;
+  }
+
+  public async getTokenBalance(tokenAddress: string, ownerAddress: string): Promise<bigint> {
+    return this.options.tokenBalances?.get(`${tokenAddress.toLowerCase()}:${ownerAddress.toLowerCase()}`) ?? 10n ** 30n;
+  }
+
+  public async getTransactionCount(_address: string, blockTag: 'latest' | 'pending'): Promise<number> {
+    return blockTag === 'pending'
+      ? (this.options.pendingNonce ?? this.options.nonce ?? 0)
+      : (this.options.latestNonce ?? this.options.nonce ?? 0);
   }
 }
 
@@ -173,12 +220,20 @@ export class FakeTransactionSigner implements TransactionSigner {
   public readonly address: string;
   public signCount = 0;
 
-  public constructor(address: string, private readonly signedTransaction = '0x01') {
+  public readonly signedRequests: TransactionRequest[] = [];
+
+  public constructor(
+    address: string,
+    private readonly signedTransaction = '0x01',
+    private readonly onSign?: (transaction: TransactionRequest) => Promise<void>,
+  ) {
     this.address = address;
   }
 
-  public async signTransaction(): Promise<string> {
+  public async signTransaction(transaction: TransactionRequest): Promise<string> {
     this.signCount += 1;
+    this.signedRequests.push(transaction);
+    await this.onSign?.(transaction);
     return this.signedTransaction;
   }
 }
