@@ -39,6 +39,7 @@ valid_identifier "$TRUSTME_REPLICATION_ROLE" ||
 valid_identifier "$TRUSTME_REPLICATION_SLOT" ||
   { printf 'invalid replication slot name\n' >&2; exit 1; }
 MARKER_PATH="${FAILOVER_MARKER_PATH:-/etc/trustme/FAILED_OVER}"
+PGPASS_FILE="${TRUSTME_PGPASS_FILE:-/etc/trustme/pgpass}"
 
 "$SCRIPT_DIR/preflight.sh" --allow-existing
 
@@ -54,20 +55,12 @@ if [[ -d /opt/trustme/current && ! -L /opt/trustme/current ]]; then
   exit 1
 fi
 chown root:trustme /etc/trustme
-chmod 0750 /etc/trustme
+chmod 0751 /etc/trustme
 chown root:trustme /etc/trustme/trustme.env
 chmod 0640 /etc/trustme/trustme.env
-install -d -o root -g trustme -m 0750 "$(dirname "$MARKER_PATH")"
+install -d -o root -g trustme -m 0751 "$(dirname "$MARKER_PATH")"
 
-install -d -o root -g root -m 0750 /opt/trustme/ops
-for script in "$SCRIPT_DIR"/*.sh; do
-  install -o root -g root -m 0750 "$script" "/opt/trustme/ops/$(basename "$script")"
-done
-install -d -o root -g root -m 0750 /opt/trustme/ops/systemd \
-  /opt/trustme/ops/nginx /opt/trustme/ops/env
-install -o root -g root -m 0644 "$SCRIPT_DIR"/systemd/*.service /opt/trustme/ops/systemd/
-install -o root -g root -m 0644 "$SCRIPT_DIR"/nginx/trustme.conf /opt/trustme/ops/nginx/
-install -o root -g root -m 0640 "$SCRIPT_DIR"/env/trustme.env.example /opt/trustme/ops/env/
+install_trustme_ops
 
 if ! pg_lsclusters --no-header | awk '$2 == "trustme" { found = 1 } END { exit !found }'; then
   pg_createcluster "$TRUSTME_PG_VERSION" trustme --port "$TRUSTME_PG_PORT" --start
@@ -78,6 +71,7 @@ PG_DATA="$(pg_conftool "$TRUSTME_PG_VERSION" trustme show data_directory)"
 systemctl stop "$(pg_service_name)" || true
 
 install -d -o postgres -g postgres -m 0700 /var/lib/postgresql
+install -d -m 0751 "$(dirname "$PGPASS_FILE")"
 if [[ -e "$PG_DATA/PG_VERSION" && ! -e "$PG_DATA/standby.signal" ]]; then
   mv "$PG_DATA" "${PG_DATA}.before-trustme-$(date +%Y%m%d%H%M%S)"
   install -d -o postgres -g postgres -m 0700 "$PG_DATA"
@@ -114,11 +108,9 @@ chmod 0644 /etc/systemd/system/trustme-pg-replication-tunnel.service
 systemctl daemon-reload
 systemctl enable --now trustme-pg-replication-tunnel.service
 
-pgpass=/var/lib/postgresql/.pgpass
 printf '127.0.0.1:%s:*:%s:%s\n' "$TUNNEL_PORT" "$TRUSTME_REPLICATION_ROLE" \
-  "$TRUSTME_REPLICATION_PASSWORD" > "$pgpass"
-chown postgres:postgres "$pgpass"
-chmod 0600 "$pgpass"
+  "$TRUSTME_REPLICATION_PASSWORD" | install -o postgres -g postgres -m 0600 \
+  /dev/stdin "$PGPASS_FILE"
 
 remote_ssh=(ssh -i "$TRUSTME_SSH_KEY" -o BatchMode=yes
   -o StrictHostKeyChecking=accept-new "${TRUSTME_SSH_USER}@${TRUSTME_PRIMARY_HOST}")
@@ -128,13 +120,14 @@ escaped_replication_password="${TRUSTME_REPLICATION_PASSWORD//\'/\'\'}"
   printf 'do $$ begin if not exists (select 1 from pg_roles where rolname = '
   printf "'%s') then create role \"%s\" replication login password :" \
     "$TRUSTME_REPLICATION_ROLE" "$TRUSTME_REPLICATION_ROLE"
-  printf "'trustme_replication_password'; end if; end $$;\n"
+  printf '%s\n' "'trustme_replication_password'; end if; end \$\$;"
 } | "${remote_ssh[@]}" "sudo -u postgres psql -p ${TRUSTME_PG_PORT} -d postgres -v ON_ERROR_STOP=1"
 unset escaped_replication_password
 "${remote_ssh[@]}" "sudo -u postgres psql -p ${TRUSTME_PG_PORT} -d postgres -v ON_ERROR_STOP=1 -c \"select pg_create_physical_replication_slot('${TRUSTME_REPLICATION_SLOT}') where not exists (select 1 from pg_replication_slots where slot_name = '${TRUSTME_REPLICATION_SLOT}')\""
 
 if [[ ! -e "$PG_DATA/standby.signal" ]]; then
-  sudo -u postgres pg_basebackup -h 127.0.0.1 -p "$TUNNEL_PORT" \
+  sudo -u postgres env PGPASSFILE="$PGPASS_FILE" pg_basebackup \
+    -h 127.0.0.1 -p "$TUNNEL_PORT" \
     -U "$TRUSTME_REPLICATION_ROLE" -D "$PG_DATA" -X stream \
     -S "$TRUSTME_REPLICATION_SLOT" -R -P
 fi
@@ -151,9 +144,8 @@ umask 0077
 } > /etc/trustme/redis.conf
 chown trustme:trustme /etc/trustme/redis.conf
 chmod 0640 /etc/trustme/redis.conf
+install_trustme_units "$(pg_service_name)"
 for unit in api worker admin redis; do
-  install -o root -g root -m 0644 "$SCRIPT_DIR/systemd/trustme-${unit}.service" \
-    "/etc/systemd/system/trustme-${unit}.service"
   systemctl disable --now "trustme-${unit}.service" 2>/dev/null || true
 done
 systemctl daemon-reload

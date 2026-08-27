@@ -8,14 +8,12 @@ source "$SCRIPT_DIR/lib.sh"
 require_root
 load_trustme_env
 LOG=/var/log/trustme-promote.log
-exec >> "$LOG" 2>&1
+exec > >(tee -a "$LOG") 2>&1
 
 for variable in TRUSTME_PRIMARY_HOST TRUSTME_SSH_USER TRUSTME_SSH_KEY \
   TRUSTME_PG_DATABASE; do
   require_value "$variable"
 done
-PG_VERSION="${TRUSTME_PG_VERSION:-}"
-require_value PG_VERSION
 PG_PORT="${TRUSTME_PG_PORT:-}"
 REDIS_PORT="${TRUSTME_REDIS_PORT:-}"
 MARKER_PATH="${FAILOVER_MARKER_PATH:-/etc/trustme/FAILED_OVER}"
@@ -57,8 +55,9 @@ sudo -u postgres reindexdb -p "$PG_PORT" -d "$TRUSTME_PG_DATABASE" || log "WARN:
 rm -f "$MARKER_PATH"
 systemctl enable --now trustme-redis.service
 systemctl enable --now trustme-api.service trustme-admin.service trustme-worker.service
+install_trustme_nginx_vhost
 log "TrustMe is active on this host"
 printf 'Operator action required: point TrustMe DNS records to this host (%s).\n' \
   "${TRUSTME_STANDBY_HOST:-this server}"
-printf 'Operator action required: install/reload the TrustMe nginx vhost and obtain TLS with certbot.\n'
+printf 'Operator action required: obtain TLS with certbot after DNS points here.\n'
 printf '=== TRUSTME PROMOTE DONE ===\n'

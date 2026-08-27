@@ -22,8 +22,13 @@ done
 PG_VERSION="${TRUSTME_PG_VERSION:-}"
 require_value PG_VERSION
 PG_PORT="${TRUSTME_PG_PORT:-}"
+FAILBACK_TUNNEL_PORT="${TRUSTME_FAILBACK_TUNNEL_PORT:-}"
 MARKER_PATH="${FAILOVER_MARKER_PATH:-/etc/trustme/FAILED_OVER}"
+PGPASS_FILE="${TRUSTME_PGPASS_FILE:-/etc/trustme/pgpass}"
 [[ "$PG_PORT" == "$TRUSTME_EXPECTED_PG_PORT" ]] || exit 1
+[[ "$FAILBACK_TUNNEL_PORT" == "$TRUSTME_EXPECTED_FAILBACK_TUNNEL_PORT" ]] ||
+  { printf 'TRUSTME_FAILBACK_TUNNEL_PORT must be %s\n' \
+      "$TRUSTME_EXPECTED_FAILBACK_TUNNEL_PORT" >&2; exit 1; }
 remote=(ssh -i "$TRUSTME_SSH_KEY" -o BatchMode=yes
   -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new
   "${TRUSTME_SSH_USER}@${TRUSTME_PRIMARY_HOST}")
@@ -43,7 +48,7 @@ sudo -u postgres psql -p "$PG_PORT" -d postgres -v ON_ERROR_STOP=1 -c \
   "select pg_create_physical_replication_slot('${TRUSTME_REPLICATION_SLOT}_s1') where not exists (select 1 from pg_replication_slots where slot_name = '${TRUSTME_REPLICATION_SLOT}_s1')" >/dev/null
 ssh -i "$TRUSTME_SSH_KEY" -N -T -o BatchMode=yes \
   -o ExitOnForwardFailure=yes -o StrictHostKeyChecking=accept-new \
-  -R 127.0.0.1:5436:127.0.0.1:"$PG_PORT" \
+  -R 127.0.0.1:"$FAILBACK_TUNNEL_PORT":127.0.0.1:"$PG_PORT" \
   "${TRUSTME_SSH_USER}@${TRUSTME_PRIMARY_HOST}" &
 tunnel_pid=$!
 trap 'kill "$tunnel_pid" 2>/dev/null || true' EXIT
@@ -51,11 +56,12 @@ sleep 2
 escaped_password="${TRUSTME_REPLICATION_PASSWORD//\'/\'\'}"
 {
   printf "\\set trustme_replication_password '%s'\n" "$escaped_password"
-  printf 'host=127.0.0.1 port=5436 user=%s password=' "$TRUSTME_REPLICATION_ROLE"
+  printf 'host=127.0.0.1 port=%s user=%s password=' "$FAILBACK_TUNNEL_PORT" \
+    "$TRUSTME_REPLICATION_ROLE"
   printf "'trustme_replication_password'\n"
-} | "${remote[@]}" "install -o postgres -g postgres -m 0600 /dev/stdin /var/lib/postgresql/.pgpass"
+} | "${remote[@]}" "sudo install -d -o root -g trustme -m 0751 \"$(dirname "$PGPASS_FILE")\"; sudo install -o postgres -g postgres -m 0600 /dev/stdin \"$PGPASS_FILE\""
 unset escaped_password
-"${remote[@]}" "systemctl stop postgresql@${PG_VERSION}-trustme.service; data=\$(sudo -u postgres pg_conftool ${PG_VERSION} trustme show data_directory); if [ -e \"\$data/PG_VERSION\" ]; then mv \"\$data\" \"\$data.before-trustme-failback-\$(date +%Y%m%d%H%M%S)\"; fi; install -d -o postgres -g postgres -m 0700 \"\$data\"; sudo -u postgres pg_basebackup -h 127.0.0.1 -p 5436 -U ${TRUSTME_REPLICATION_ROLE} -D \"\$data\" -X stream -S ${TRUSTME_REPLICATION_SLOT}_s1 -R -P; systemctl start postgresql@${PG_VERSION}-trustme.service; for i in \$(seq 1 30); do [ \"\$(sudo -u postgres psql -p ${PG_PORT} -d postgres -Atqc 'select pg_is_in_recovery()')\" = t ] && break; sleep 2; done; sudo -u postgres psql -p ${PG_PORT} -d postgres -Atqc 'select pg_promote(true, 60)' >/dev/null; rm -f /etc/trustme/FAILED_OVER; systemctl enable --now trustme-redis.service trustme-api.service trustme-admin.service trustme-worker.service"
+"${remote[@]}" "systemctl stop postgresql@${PG_VERSION}-trustme.service; data=\$(sudo -u postgres pg_conftool ${PG_VERSION} trustme show data_directory); if [ -e \"\$data/PG_VERSION\" ]; then mv \"\$data\" \"\$data.before-trustme-failback-\$(date +%Y%m%d%H%M%S)\"; fi; install -d -o postgres -g postgres -m 0700 \"\$data\"; sudo -u postgres env PGPASSFILE=${PGPASS_FILE} pg_basebackup -h 127.0.0.1 -p ${FAILBACK_TUNNEL_PORT} -U ${TRUSTME_REPLICATION_ROLE} -D \"\$data\" -X stream -S ${TRUSTME_REPLICATION_SLOT}_s1 -R -P; systemctl start postgresql@${PG_VERSION}-trustme.service; for i in \$(seq 1 30); do [ \"\$(sudo -u postgres psql -p ${PG_PORT} -d postgres -Atqc 'select pg_is_in_recovery()')\" = t ] && break; sleep 2; done; sudo -u postgres psql -p ${PG_PORT} -d postgres -Atqc 'select pg_promote(true, 60)' >/dev/null; rm -f ${MARKER_PATH}; systemctl enable --now trustme-redis.service trustme-api.service trustme-admin.service trustme-worker.service"
 kill "$tunnel_pid" 2>/dev/null || true
 trap - EXIT
 

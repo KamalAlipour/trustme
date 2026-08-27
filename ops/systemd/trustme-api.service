@@ -1,6 +1,6 @@
 [Unit]
 Description=TrustMe API
-After=network-online.target postgresql.service trustme-redis.service
+After=network-online.target __TRUSTME_PG_UNIT__ trustme-redis.service
 Wants=network-online.target
 
 [Service]

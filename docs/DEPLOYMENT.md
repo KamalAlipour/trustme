@@ -21,6 +21,7 @@ The authoritative port map is in `ops/ports.sh`:
 | TrustMe Redis | `6380` |
 | TrustMe API | `3121` |
 | TrustMe admin UI | `3122` |
+| Temporary failback tunnel | `5436` |
 
 All TrustMe application, Redis, and PostgreSQL listeners bind to `127.0.0.1`.
 Only nginx is public-facing. `ops/preflight.sh` checks every port before
@@ -43,6 +44,16 @@ preflight mode still fails on unrelated listeners, clusters, roles, databases,
 or files owned by the `trustme` user. PostgreSQL, Redis, nginx, and systemd
 must already be available; package provisioning is deliberately not performed
 by these scripts.
+
+PostgreSQL replication credentials use the TrustMe-owned
+`/etc/trustme/pgpass` file (configurable with `TRUSTME_PGPASS_FILE`), owned by
+the `postgres` user with mode `0600`. The scripts never modify the shared
+`/var/lib/postgresql/.pgpass` file.
+
+The API and worker systemd templates contain a
+`__TRUSTME_PG_UNIT__` placeholder. Each install substitutes it with the
+configured `postgresql@<version>-trustme.service` unit so application startup
+is ordered after the dedicated cluster, not FairFare's PostgreSQL unit.
 
 ## Marker interlock
 
@@ -91,7 +102,8 @@ service.
 
 The script prints the manual actions still required: install/reload the local
 TrustMe nginx vhost, obtain certificates, and move the TrustMe DNS records to
-Server 2. It does not modify Cloudflare or run certbot.
+Server 2. It installs and validates the local vhost during promotion but does
+not modify Cloudflare or run certbot.
 
 ## Failback
 
@@ -121,7 +133,8 @@ Server 2's PostgreSQL cluster is a physical streaming replica of Server 1.
 The replication connection reaches Server 1's loopback-only PostgreSQL through
 the TrustMe systemd tunnel on Server 2's local port `5435`. The replication
 role, password, and slot are TrustMe-specific. FairFare's local `5433` tunnel
-and replication slot are never used.
+and replication slot are never used. Failback uses the separate,
+configurable `TRUSTME_FAILBACK_TUNNEL_PORT` (default `5436`).
 
 Redis is an independent append-only instance on port `6380`, with its own
 configuration and data directory. Its systemd unit is enabled on the primary
@@ -135,6 +148,9 @@ templated hostnames. The install script substitutes
 `__TRUSTME_API_HOST__` and `__TRUSTME_ADMIN_HOST__` from the environment file.
 It proxies to `127.0.0.1:3121` and `127.0.0.1:3122`, includes security headers,
 and rate-limits login requests.
+The admin CSP explicitly allows Next.js' inline bootstrap and hydration scripts
+and inline styles; tightening it with nonces requires verification against a
+running instance.
 
 After DNS points to the active host, an operator can obtain certificates with
 the documented command:

@@ -33,6 +33,7 @@ require_value TRUSTME_ADMIN_HOST
 valid_identifier "$TRUSTME_PG_DATABASE" || { printf 'invalid database name\n' >&2; exit 1; }
 valid_identifier "$TRUSTME_PG_ROLE" || { printf 'invalid role name\n' >&2; exit 1; }
 MARKER_PATH="${FAILOVER_MARKER_PATH:-/etc/trustme/FAILED_OVER}"
+PGPASS_FILE="${TRUSTME_PGPASS_FILE:-/etc/trustme/pgpass}"
 
 # Re-runs explicitly permit only the TrustMe-owned resources that this script
 # creates. A fresh install still fails on any unrelated listener or resource.
@@ -50,20 +51,19 @@ if [[ -d /opt/trustme/current && ! -L /opt/trustme/current ]]; then
   exit 1
 fi
 chown root:trustme /etc/trustme
-chmod 0750 /etc/trustme
+chmod 0751 /etc/trustme
 chown root:trustme /etc/trustme/trustme.env
 chmod 0640 /etc/trustme/trustme.env
-install -d -o root -g trustme -m 0750 "$(dirname "$MARKER_PATH")"
+install -d -o root -g trustme -m 0751 "$(dirname "$MARKER_PATH")"
+install -d -m 0751 "$(dirname "$PGPASS_FILE")"
+if [[ ! -e "$PGPASS_FILE" ]]; then
+  install -o postgres -g postgres -m 0600 /dev/null "$PGPASS_FILE"
+else
+  chown postgres:postgres "$PGPASS_FILE"
+  chmod 0600 "$PGPASS_FILE"
+fi
 
-install -d -o root -g root -m 0750 /opt/trustme/ops
-for script in "$SCRIPT_DIR"/*.sh; do
-  install -o root -g root -m 0750 "$script" "/opt/trustme/ops/$(basename "$script")"
-done
-install -d -o root -g root -m 0750 /opt/trustme/ops/systemd \
-  /opt/trustme/ops/nginx /opt/trustme/ops/env
-install -o root -g root -m 0644 "$SCRIPT_DIR"/systemd/*.service /opt/trustme/ops/systemd/
-install -o root -g root -m 0644 "$SCRIPT_DIR"/nginx/trustme.conf /opt/trustme/ops/nginx/
-install -o root -g root -m 0640 "$SCRIPT_DIR"/env/trustme.env.example /opt/trustme/ops/env/
+install_trustme_ops
 
 if ! pg_lsclusters --no-header | awk '$2 == "trustme" { found = 1 } END { exit !found }'; then
   pg_createcluster "$TRUSTME_PG_VERSION" trustme --port "$TRUSTME_PG_PORT" --start
@@ -111,24 +111,10 @@ umask 0077
 chown trustme:trustme /etc/trustme/redis.conf
 chmod 0640 /etc/trustme/redis.conf
 
-for unit in api worker admin redis; do
-  install -o root -g root -m 0644 "$SCRIPT_DIR/systemd/trustme-${unit}.service" \
-    "/etc/systemd/system/trustme-${unit}.service"
-done
+install_trustme_units "$(pg_service_name)"
 systemctl daemon-reload
 systemctl enable trustme-redis.service trustme-api.service trustme-admin.service \
   trustme-worker.service
-
-if ! [[ "$TRUSTME_API_HOST" =~ ^[A-Za-z0-9.-]+$ && "$TRUSTME_ADMIN_HOST" =~ ^[A-Za-z0-9.-]+$ ]]; then
-  printf 'invalid TrustMe hostname\n' >&2
-  exit 1
-fi
-install -d -m 0755 /etc/nginx/sites-available /etc/nginx/sites-enabled
-sed -e "s|__TRUSTME_API_HOST__|${TRUSTME_API_HOST}|g" \
-  -e "s|__TRUSTME_ADMIN_HOST__|${TRUSTME_ADMIN_HOST}|g" \
-  "$SCRIPT_DIR/nginx/trustme.conf" > /etc/nginx/sites-available/trustme.conf
-ln -sfn /etc/nginx/sites-available/trustme.conf /etc/nginx/sites-enabled/trustme.conf
-nginx -t
-systemctl reload nginx
+install_trustme_nginx_vhost
 
 printf 'TrustMe primary installation complete. Fill /etc/trustme/trustme.env before deployment.\n'

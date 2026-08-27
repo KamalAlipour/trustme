@@ -31,6 +31,9 @@ release=""
 old_release=""
 require_value TRUSTME_REPOSITORY_URL
 MARKER_PATH="${FAILOVER_MARKER_PATH:-/etc/trustme/FAILED_OVER}"
+shared_root="${TRUSTME_SHARED_ROOT:-/opt/trustme/shared}"
+trustme_home="${shared_root}/home"
+npm_cache="${trustme_home}/.npm"
 
 rollback_release() {
   local target
@@ -56,6 +59,8 @@ fi
 [[ -n "$REF" ]] || { printf '--ref is required\n' >&2; exit 2; }
 
 install -d -o trustme -g trustme -m 0750 "$release_root"
+install -d -o trustme -g trustme -m 0700 "$trustme_home" "$npm_cache"
+systemctl stop trustme-worker.service
 if [[ ! -d "$repo_cache" ]]; then
   git clone --mirror "$repo_url" "$repo_cache"
 fi
@@ -69,13 +74,15 @@ install -d -o trustme -g trustme -m 0750 "$release"
 git -C "$repo_cache" archive "$commit" | tar -x -C "$release"
 chown -R trustme:trustme "$release"
 
-(cd "$release" && npm ci && npm run build)
+runuser -u trustme -- env HOME="$trustme_home" npm_config_cache="$npm_cache" \
+  bash -c "cd \"\$1\" && npm ci && npm run build" -- "$release"
 if ((NO_MIGRATE == 0)); then
-  (cd "$release" && npx prisma migrate deploy --schema packages/db/prisma/schema.prisma)
+  runuser -u trustme -- env HOME="$trustme_home" npm_config_cache="$npm_cache" \
+    bash -c "cd \"\$1\" && npx prisma migrate deploy --schema packages/db/prisma/schema.prisma" \
+    -- "$release"
 fi
 
 old_release="$(readlink -f "$current_link" 2>/dev/null || true)"
-systemctl stop trustme-worker.service
 if [[ -n "$old_release" && -d "$old_release" ]]; then
   ln -sfn "$old_release" "${previous_link}.next"
   mv -Tf "${previous_link}.next" "$previous_link"
