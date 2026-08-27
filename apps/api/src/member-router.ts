@@ -471,17 +471,84 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       });
       const hasMore = rows.length > query.limit;
       const page = hasMore ? rows.slice(0, query.limit) : rows;
+      const transactionIds = page.map((row) => row.transactionId);
+      const escrowHolds = transactionIds.length === 0
+        ? []
+        : await prisma.escrowHold.findMany({
+          where: {
+            OR: [
+              { transactionId: { in: transactionIds } },
+              { releaseTransactionId: { in: transactionIds } },
+            ],
+          },
+          include: {
+            sender: { select: { displayName: true, barcodeId: true } },
+            recipient: { select: { displayName: true, barcodeId: true } },
+          },
+        });
+      const holdByTransactionId = new Map<string, (typeof escrowHolds)[number]>();
+      for (const hold of escrowHolds) {
+        holdByTransactionId.set(hold.transactionId, hold);
+        if (hold.releaseTransactionId !== null) holdByTransactionId.set(hold.releaseTransactionId, hold);
+      }
+      const refundableTransactionIds = page.flatMap((row) => {
+        const outgoing = row.fromAccountId === userAccount.id;
+        const hold = holdByTransactionId.get(row.transactionId);
+        if (hold !== undefined && row.toAccount.type === AccountType.ESCROW && hold.transactionId === row.transactionId) {
+          return hold.releaseTransactionId === null ? [] : [hold.releaseTransactionId];
+        }
+        if (hold !== undefined && row.fromAccount.type === AccountType.ESCROW && hold.releaseTransactionId === row.transactionId) return [];
+        if (
+          outgoing &&
+          row.transaction.type === 'TRANSFER' &&
+          row.fromAccount.type === AccountType.USER_COUPON &&
+          row.toAccount.type === AccountType.USER_COUPON
+        ) return [row.transactionId];
+        return [];
+      });
+      const refunds = refundableTransactionIds.length === 0
+        ? []
+        : await prisma.refundRequest.findMany({
+          where: { transactionId: { in: refundableTransactionIds }, buyerId: memberClaims(request).sub },
+          select: { id: true, transactionId: true, status: true, amountCoupons: true, createdAt: true },
+          orderBy: { createdAt: 'desc' },
+        });
+      const latestRefundByTransactionId = new Map<string, (typeof refunds)[number]>();
+      for (const refund of refunds) {
+        if (!latestRefundByTransactionId.has(refund.transactionId)) latestRefundByTransactionId.set(refund.transactionId, refund);
+      }
       response.json({
         items: page.map((row) => {
           const outgoing = row.fromAccountId === userAccount.id;
           const counterpartyAccount = outgoing ? row.toAccount : row.fromAccount;
+          const hold = holdByTransactionId.get(row.transactionId);
+          const escrowHoldLeg = hold !== undefined && row.toAccount.type === AccountType.ESCROW && hold.transactionId === row.transactionId;
+          const escrowReleaseLeg = hold !== undefined && row.fromAccount.type === AccountType.ESCROW && hold.releaseTransactionId === row.transactionId;
+          const refundableTransactionId = escrowHoldLeg
+            ? hold.releaseTransactionId
+            : !escrowReleaseLeg &&
+                outgoing &&
+                row.transaction.type === 'TRANSFER' &&
+                row.fromAccount.type === AccountType.USER_COUPON &&
+                row.toAccount.type === AccountType.USER_COUPON
+              ? row.transactionId
+              : null;
+          const resolvedCounterparty = escrowHoldLeg
+            ? { displayName: hold.recipient.displayName, barcodeId: hold.recipient.barcodeId }
+            : escrowReleaseLeg
+              ? { displayName: hold.sender.displayName, barcodeId: hold.sender.barcodeId }
+              : counterpartyAccount.user === null
+                ? { systemAccountType: counterpartyAccount.type }
+                : { displayName: counterpartyAccount.user.displayName, barcodeId: counterpartyAccount.user.barcodeId };
+          const refund = refundableTransactionId === null ? null : latestRefundByTransactionId.get(refundableTransactionId);
           return {
             id: row.id,
+            transactionId: row.transactionId,
+            refundableTransactionId,
             direction: outgoing ? 'out' : 'in',
             amountCoupons: row.amount.toString(),
-            counterparty: counterpartyAccount.user === null
-              ? { systemAccountType: counterpartyAccount.type }
-              : { displayName: counterpartyAccount.user.displayName, barcodeId: counterpartyAccount.user.barcodeId },
+            counterparty: resolvedCounterparty,
+            refund: refund === undefined || refund === null ? null : { id: refund.id, status: refund.status, amountCoupons: refund.amountCoupons.toString() },
             transaction: {
               type: row.transaction.type,
               status: row.transaction.status,

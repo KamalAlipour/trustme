@@ -17,3 +17,11 @@ export function nextInstallmentAmount(loan: { installments: Installment[]; outst
   const installment = loan.installments.find((row) => row.paidCoupons !== row.amountCoupons);
   return installment ? subtractCoupons(installment.amountCoupons, installment.paidCoupons) : loan.outstandingCoupons;
 }
+
+export function approvedAmountWithinRequest(approved: string, requested: string): boolean {
+  try {
+    return /^\d+$/.test(approved) && /^\d+$/.test(requested) && BigInt(approved) <= BigInt(requested);
+  } catch {
+    return false;
+  }
+}

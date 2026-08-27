@@ -355,6 +355,64 @@ describe('member API', () => {
     expect(next.body.items.some((item: { direction: string; amountCoupons: string }) => item.direction === 'out' && item.amountCoupons === '1')).toBe(true);
   });
 
+  it('exposes escrow purchase refund metadata and resolved counterparties', async () => {
+    const { app } = appFixture();
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000140', barcodeId: 'escrow-buyer' });
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000141', barcodeId: 'escrow-merchant' });
+    await prisma.user.update({ where: { barcodeId: 'escrow-merchant' }, data: { displayName: 'Merchant' } });
+    const systems = await addSystemAccounts();
+    const buyer = await prisma.user.findUniqueOrThrow({ where: { barcodeId: 'escrow-buyer' } });
+    const buyerAccount = await prisma.ledgerAccount.findFirstOrThrow({ where: { userId: buyer.id, type: AccountType.USER_COUPON, asset: Asset.COUPON } });
+    await postDeposit(prisma, {
+      externalRef: 'escrow-history-fund',
+      userId: buyer.id,
+      userCouponAccountId: buyerAccount.id,
+      externalOnchainAccountId: systems.external.id,
+      vaultAccountId: systems.vault.id,
+      issuanceAccountId: systems.issuance.id,
+      amountMicroUsdt: 100_000_000n,
+    });
+    const buyerToken = await memberToken(app, '+1555000140');
+    const merchantToken = await memberToken(app, '+1555000141');
+    const active = await request(app).post('/v1/me/escrows').set('Authorization', `Bearer ${buyerToken}`).send({
+      recipientBarcodeId: 'escrow-merchant',
+      amountCoupons: '2',
+      code: '1234',
+      pin: '2468',
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    expect(active.status).toBe(201);
+    const releasedHold = await request(app).post('/v1/me/escrows').set('Authorization', `Bearer ${buyerToken}`).send({
+      recipientBarcodeId: 'escrow-merchant',
+      amountCoupons: '3',
+      code: '1234',
+      pin: '2468',
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    expect(releasedHold.status).toBe(201);
+    expect((await request(app).post(`/v1/me/escrows/${releasedHold.body.id}/release`).set('Authorization', `Bearer ${merchantToken}`).send({ code: '1234' })).status).toBe(200);
+    const releaseTransaction = await prisma.transaction.findUniqueOrThrow({ where: { externalRef: `escrow:${releasedHold.body.id}:release` } });
+    const buyerHistory = await request(app).get('/v1/me/transactions?limit=100').set('Authorization', `Bearer ${buyerToken}`);
+    expect(buyerHistory.status).toBe(200);
+    const releasedItem = buyerHistory.body.items.find((item: { refundableTransactionId: string | null }) => item.refundableTransactionId === releaseTransaction.id);
+    expect(releasedItem).toMatchObject({
+      counterparty: { displayName: 'Merchant', barcodeId: 'escrow-merchant' },
+      refundableTransactionId: releaseTransaction.id,
+      transaction: { type: 'ESCROW_HOLD' },
+      refund: null,
+    });
+    const activeItem = buyerHistory.body.items.find((item: { transactionId: string; amountCoupons: string }) => item.amountCoupons === '2' && item.transactionId !== releasedItem.transactionId);
+    expect(activeItem).toMatchObject({ refundableTransactionId: null, counterparty: { displayName: 'Merchant', barcodeId: 'escrow-merchant' } });
+    const merchantHistory = await request(app).get('/v1/me/transactions?limit=100').set('Authorization', `Bearer ${merchantToken}`);
+    const releaseItem = merchantHistory.body.items.find((item: { transactionId: string }) => item.transactionId === releaseTransaction.id);
+    expect(releaseItem).toMatchObject({ counterparty: { displayName: buyer.displayName, barcodeId: 'escrow-buyer' }, refundableTransactionId: null });
+    const refund = await request(app).post('/v1/me/refunds').set('Authorization', `Bearer ${buyerToken}`).send({ transactionId: releaseTransaction.id, amountCoupons: '1', reason: 'کالا رسید' });
+    expect(refund.status).toBe(201);
+    const updatedHistory = await request(app).get('/v1/me/transactions?limit=100').set('Authorization', `Bearer ${buyerToken}`);
+    const updatedItem = updatedHistory.body.items.find((item: { refundableTransactionId: string | null }) => item.refundableTransactionId === releaseTransaction.id);
+    expect(updatedItem.refund).toMatchObject({ status: 'PENDING', amountCoupons: '1' });
+  });
+
   it('supports private contact aliases, search, duplicate protection, and owner scoping', async () => {
     const { app } = appFixture();
     await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000128', barcodeId: 'contact-owner' });

@@ -7,10 +7,14 @@ import { Page, LoadingScreen, ErrorMessage } from '../../src/components/Screen';
 import { formatCoupons, formatDate } from '../../src/lib/format';
 import { fa } from '../../src/i18n/fa';
 import { styles } from '../../src/styles';
+import { RefundSheet } from '../../src/components/RefundSheet';
+import { SellerRefundPanel } from '../../src/components/SellerRefundPanel';
+import { canRequestRefund, refundableRemainder } from '../../src/lib/refunds';
 
 export default function Purchases() {
   const [search, setSearch] = React.useState('');
   const [sort, setSort] = React.useState<'direction' | 'date-desc' | 'date-asc' | 'amount-desc' | 'amount-asc'>('date-desc');
+  const [refundItem, setRefundItem] = React.useState<{ id: string; amount: string } | null>(null);
   const transactions = useInfiniteQuery({
     queryKey: ['transactions'],
     queryFn: ({ pageParam }: { pageParam: string | undefined }) => request<TransactionsPage>(`/v1/me/transactions?limit=25${pageParam ? `&cursor=${encodeURIComponent(pageParam)}` : ''}`),
@@ -22,6 +26,8 @@ export default function Purchases() {
   const items = (transactions.data?.pages.flatMap((page) => page.items) ?? [])
     .filter((item) => `${item.counterparty.displayName ?? ''} ${item.counterparty.barcodeId ?? ''}`.toLowerCase().includes(search.toLowerCase()))
     .sort((left, right) => {
+      if (left.refund?.status === 'PENDING' && right.refund?.status !== 'PENDING') return -1;
+      if (right.refund?.status === 'PENDING' && left.refund?.status !== 'PENDING') return 1;
       if (sort === 'direction') return Number(right.direction === 'in') - Number(left.direction === 'in');
       if (sort === 'date-desc' || sort === 'date-asc') {
         const difference = new Date(right.transaction.createdAt).getTime() - new Date(left.transaction.createdAt).getTime();
@@ -35,6 +41,7 @@ export default function Purchases() {
   return (
     <Page>
       <Text style={styles.title}>{fa.purchases}</Text>
+      <SellerRefundPanel />
       <TextInput value={search} onChangeText={setSearch} placeholder="جستجوی طرف مقابل" style={styles.input} />
       <Text style={styles.muted}>جستجو فقط در تاریخچه بارگذاری‌شده انجام می‌شود.</Text>
       <Pressable onPress={() => setSort(nextSort[sort])} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{sortLabel}</Text></Pressable>
@@ -45,10 +52,16 @@ export default function Purchases() {
             <Text style={styles.text}>{item.counterparty.displayName ?? item.counterparty.barcodeId ?? item.counterparty.systemAccountType ?? 'سیستم'}</Text>
           </View>
           <Text style={styles.muted}>{formatDate(item.transaction.createdAt)} · {item.transaction.status}</Text>
-          <Pressable onPress={() => undefined}><Text style={styles.muted}>{fa.refundNotBuilt}</Text></Pressable>
+          {item.refund?.status === 'PENDING' ? <Text style={styles.muted}>🟡 {fa.refundPending}</Text> : null}
+          {item.refund?.status === 'APPROVED' ? <Text style={styles.notice}>🟢 {fa.refundApproved}</Text> : null}
+          {item.refund?.status === 'REJECTED' ? <Text style={styles.danger}>🔴 {fa.refundRejected}</Text> : null}
+          {canRequestRefund(item)
+            ? <Pressable onPress={() => item.refundableTransactionId === null ? undefined : setRefundItem({ id: item.refundableTransactionId, amount: refundableRemainder(item) })} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{item.refund === null ? fa.requestRefund : fa.requestAnotherRefund}</Text></Pressable>
+            : null}
         </View>
       ))}
       {transactions.hasNextPage ? <Pressable onPress={() => void transactions.fetchNextPage()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>تراکنش‌های بیشتر</Text></Pressable> : null}
+      {refundItem ? <RefundSheet transactionId={refundItem.id} purchaseAmount={refundItem.amount} onClose={() => setRefundItem(null)} /> : null}
     </Page>
   );
 }

@@ -9,6 +9,7 @@ import { greaterThan, nextInstallmentAmount } from '../../src/lib/coupons';
 import { formatCoupons, formatDate } from '../../src/lib/format';
 import { fa } from '../../src/i18n/fa';
 import { styles } from '../../src/styles';
+import { CharitySection } from '../../src/components/CharitySection';
 
 export default function Lending() {
   const loans = useLoans();
@@ -106,7 +107,7 @@ export default function Lending() {
           <Text style={styles.muted}>{formatDate(loan.createdAt)}</Text>
         </View>
       ))}
-      <View style={styles.card}><Text style={styles.heading}>خیریه</Text><Text style={styles.muted}>{fa.charityNotBuilt}</Text></View>
+      <CharitySection />
       <Modal visible={revealedCode !== null} animationType="slide">
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 24, padding: 24 }}>
           <Text style={styles.heading}>کد ضمانت را به وام‌گیرنده بخوانید</Text>

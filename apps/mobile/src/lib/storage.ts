@@ -3,6 +3,7 @@ import * as SecureStore from 'expo-secure-store';
 const REFRESH_TOKEN_KEY = 'trustcoupon.refreshToken';
 const PIN_KEY = 'trustcoupon.pin';
 const SESSION_MARKER_KEY = 'trustcoupon.session';
+const MANIFESTO_SEEN_KEY = 'trustcoupon.manifestoSeen';
 const options = { requireAuthentication: true, keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY };
 
 export async function saveCredentials(refreshToken: string, pin: string): Promise<void> {
@@ -33,4 +34,12 @@ export async function clearCredentials(): Promise<void> {
 
 export async function hasStoredCredentials(): Promise<boolean> {
   return (await SecureStore.getItemAsync(SESSION_MARKER_KEY)) !== null;
+}
+
+export async function hasSeenManifesto(): Promise<boolean> {
+  return (await SecureStore.getItemAsync(MANIFESTO_SEEN_KEY)) === '1';
+}
+
+export async function markManifestoSeen(): Promise<void> {
+  await SecureStore.setItemAsync(MANIFESTO_SEEN_KEY, '1');
 }

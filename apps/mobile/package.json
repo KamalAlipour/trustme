@@ -12,8 +12,11 @@
   "dependencies": {
     "@tanstack/react-query": "5.66.8",
     "expo": "~53.0.0",
+    "expo-audio": "^0.4.9",
     "expo-camera": "~16.0.0",
     "expo-crypto": "14.1.5",
+    "expo-file-system": "~18.1.11",
+    "expo-image-picker": "~16.1.4",
     "expo-local-authentication": "~16.0.0",
     "expo-router": "~5.1.0",
     "expo-secure-store": "~14.0.0",
