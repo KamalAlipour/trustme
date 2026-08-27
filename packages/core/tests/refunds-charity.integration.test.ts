@@ -4,10 +4,12 @@ import {
   approveAidRequest,
   approveRefund,
   createAidRequest,
+  createEscrowHold,
   createRefundRequest,
   donateToCharity,
   postDeposit,
   readSolvency,
+  releaseEscrow,
   transferCoupons,
 } from '../src/index.js';
 
@@ -67,6 +69,7 @@ describe('refunds and charity domain', () => {
     await prisma.charityAgent.create({ data: { charityId: charity.id, userId: agent.id, role: CharityAgentRole.AGENT } });
     await donateToCharity(prisma, { memberId: donor.id, memberAccountId: donorAccount.id, charityAccountId: charityAccount.id, amountCoupons: 50n, externalRef: 'donation:charity' });
     const request = await createAidRequest(prisma, { applicantId: applicant.id, charityId: charity.id, amountCoupons: 40n, description: 'food' });
+    await prisma.user.update({ where: { id: agent.id }, data: { activeGuaranteeCount: 1 } });
     const approved = await approveAidRequest(prisma, { aidRequestId: request.id, agentId: agent.id, approvedCoupons: 25n });
     expect(approved.status).toBe(AidRequestStatus.APPROVED);
     expect((await prisma.ledgerAccount.findUniqueOrThrow({ where: { id: charityAccount.id } })).balance).toBe(25n);
@@ -117,5 +120,31 @@ describe('refunds and charity domain', () => {
     const refund = await createRefundRequest(prisma, { transactionId: original.id, buyerId: buyer.id, amountCoupons: 10n, reason: 'restricted seller' });
     await approveRefund(prisma, { refundRequestId: refund.id, sellerId: seller.id });
     await expect(transferCoupons(prisma, { externalRef: 'transfer:restricted-seller', fromAccountId: sellerAccount.id, toAccountId: buyerAccount.id, amountCoupons: 1n, userId: seller.id })).rejects.toThrow('account is restricted');
+  });
+
+  it('allows refunds for escrow-release purchases and only for the buyer', async () => {
+    const buyer = await prisma.user.create({ data: { phoneNumber: '+15550012', barcodeId: 'buyer-escrow-refund' } });
+    const seller = await prisma.user.create({ data: { phoneNumber: '+15550013', barcodeId: 'seller-escrow-refund' } });
+    const unrelated = await prisma.user.create({ data: { phoneNumber: '+15550014', barcodeId: 'unrelated-escrow-refund' } });
+    const buyerAccount = await account(AccountType.USER_COUPON, Asset.COUPON, buyer.id);
+    const sellerAccount = await account(AccountType.USER_COUPON, Asset.COUPON, seller.id);
+    const escrowAccount = await account(AccountType.ESCROW, Asset.COUPON, buyer.id);
+    await prisma.ledgerAccount.update({ where: { id: buyerAccount.id }, data: { balance: 20n } });
+    const hold = await createEscrowHold(prisma, {
+      senderId: buyer.id,
+      recipientId: seller.id,
+      senderAccountId: buyerAccount.id,
+      escrowAccountId: escrowAccount.id,
+      amountCoupons: 10n,
+      code: '1234',
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    await releaseEscrow(prisma, { holdId: hold.id, recipientAccountId: sellerAccount.id, code: '1234' });
+    const released = await prisma.transaction.findUniqueOrThrow({ where: { externalRef: `escrow:${hold.id}:release` } });
+    const refund = await createRefundRequest(prisma, { transactionId: released.id, buyerId: buyer.id, amountCoupons: 10n, reason: 'escrow purchase returned' });
+    await expect(createRefundRequest(prisma, { transactionId: released.id, buyerId: unrelated.id, amountCoupons: 10n, reason: 'not the buyer' })).rejects.toThrow('transaction is not refundable');
+    await approveRefund(prisma, { refundRequestId: refund.id, sellerId: seller.id });
+    expect((await prisma.ledgerAccount.findUniqueOrThrow({ where: { id: buyerAccount.id } })).balance).toBe(20n);
+    expect((await prisma.ledgerAccount.findUniqueOrThrow({ where: { id: sellerAccount.id } })).balance).toBe(0n);
   });
 });

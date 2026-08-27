@@ -12,7 +12,9 @@ type RefundInput = {
 };
 
 async function userCouponAccount(tx: Prisma.TransactionClient, userId: string) {
-  return tx.ledgerAccount.findFirstOrThrow({ where: { userId, type: AccountType.USER_COUPON, asset: Asset.COUPON } });
+  const account = await tx.ledgerAccount.findFirstOrThrow({ where: { userId, type: AccountType.USER_COUPON, asset: Asset.COUPON } });
+  await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "LedgerAccount" WHERE "id" = ${account.id}::uuid FOR UPDATE`);
+  return tx.ledgerAccount.findUniqueOrThrow({ where: { id: account.id } });
 }
 
 export async function createRefundRequest(prisma: PrismaClient, input: RefundInput) {
@@ -34,24 +36,43 @@ export async function createRefundRequest(prisma: PrismaClient, input: RefundInp
       throw new DomainError('transaction is not refundable');
     }
     const couponEntries = original.entries.filter((entry) => entry.asset === Asset.COUPON);
+    const entry = couponEntries.length === 1 ? couponEntries[0]! : null;
+    let buyerId: string | null = null;
+    let sellerId: string | null = null;
     if (
-      couponEntries.length !== 1 ||
-      couponEntries[0]!.fromAccount.type !== AccountType.USER_COUPON ||
-      couponEntries[0]!.toAccount.type !== AccountType.USER_COUPON ||
-      couponEntries[0]!.fromAccount.userId === null ||
-      couponEntries[0]!.toAccount.userId === null ||
-      couponEntries[0]!.fromAccount.userId !== input.buyerId
+      entry !== null &&
+      original.type === TransactionType.TRANSFER &&
+      entry.fromAccount.type === AccountType.USER_COUPON &&
+      entry.toAccount.type === AccountType.USER_COUPON &&
+      entry.fromAccount.userId !== null &&
+      entry.toAccount.userId !== null
     ) {
+      buyerId = entry.fromAccount.userId;
+      sellerId = entry.toAccount.userId;
+    } else if (
+      entry !== null &&
+      original.type === TransactionType.ESCROW_RELEASE &&
+      entry.fromAccount.type === AccountType.ESCROW &&
+      entry.toAccount.type === AccountType.USER_COUPON &&
+      entry.toAccount.userId !== null
+    ) {
+      const parts = original.externalRef.split(':');
+      const holdId = parts.length === 3 && parts[0] === 'escrow' && parts[2] === 'release' ? parts[1] : null;
+      const hold = holdId === null || holdId === undefined ? null : await tx.escrowHold.findUnique({ where: { id: holdId } });
+      if (hold !== null && hold.recipientId === entry.toAccount.userId) {
+        buyerId = hold.senderId;
+        sellerId = hold.recipientId;
+      }
+    }
+    if (buyerId === null || sellerId === null || buyerId !== input.buyerId) {
       throw new DomainError('transaction is not refundable');
     }
-    const buyerId = couponEntries[0]!.fromAccount.userId;
-    const sellerId = couponEntries[0]!.toAccount.userId;
     const approved = await tx.refundRequest.aggregate({
       where: { transactionId: original.id, status: RefundStatus.APPROVED },
       _sum: { amountCoupons: true },
     });
     const refunded = approved._sum.amountCoupons ?? 0n;
-    const refundable = couponEntries[0]!.amount - refunded;
+    const refundable = entry!.amount - refunded;
     if (input.amountCoupons > refundable) throw new DomainError('refund exceeds refundable amount');
     const pending = await tx.refundRequest.findFirst({ where: { transactionId: original.id, status: RefundStatus.PENDING } });
     if (pending !== null) throw new DomainError('refund is already pending', 409);
@@ -84,27 +105,20 @@ export async function approveRefund(prisma: PrismaClient, input: { refundRequest
   return withSerializableRetry(prisma, async (tx) => {
     await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "RefundRequest" WHERE "id" = ${input.refundRequestId}::uuid FOR UPDATE`);
     const request = await tx.refundRequest.findUniqueOrThrow({ where: { id: input.refundRequestId } });
-    if (request.sellerId !== input.sellerId) throw new DomainError('forbidden', 403);
+    if (request.sellerId !== input.sellerId) throw new DomainError('resource not found', 404);
     if (request.status === RefundStatus.APPROVED) return request;
     if (request.status !== RefundStatus.PENDING) throw new DomainError('refund is not pending', 409);
     const seller = await userCouponAccount(tx, request.sellerId);
     const buyer = await userCouponAccount(tx, request.buyerId);
-    let transaction;
-    try {
-      transaction = await postWithClient(tx, {
-        type: TransactionType.REFUND,
-        externalRef: `refund:${request.id}`,
-        userId: request.sellerId,
-        status: TransactionStatus.CONFIRMED,
-        amountCoupons: request.amountCoupons,
-        legs: [{ fromAccountId: seller.id, toAccountId: buyer.id, amount: request.amountCoupons, asset: Asset.COUPON }],
-      });
-    } catch (error) {
-      if (error instanceof DomainError && error.message.includes('cannot be negative')) {
-        throw new DomainError('insufficient balance for refund', 409);
-      }
-      throw error;
-    }
+    if (seller.balance < request.amountCoupons) throw new DomainError('insufficient balance for refund', 409);
+    const transaction = await postWithClient(tx, {
+      type: TransactionType.REFUND,
+      externalRef: `refund:${request.id}`,
+      userId: request.sellerId,
+      status: TransactionStatus.CONFIRMED,
+      amountCoupons: request.amountCoupons,
+      legs: [{ fromAccountId: seller.id, toAccountId: buyer.id, amount: request.amountCoupons, asset: Asset.COUPON }],
+    });
     return tx.refundRequest.update({
       where: { id: request.id },
       data: { status: RefundStatus.APPROVED, decidedAt: new Date(), refundTransactionId: transaction.id },
@@ -118,7 +132,7 @@ export async function rejectRefund(prisma: PrismaClient, input: { refundRequestI
   return withSerializableRetry(prisma, async (tx) => {
     await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "RefundRequest" WHERE "id" = ${input.refundRequestId}::uuid FOR UPDATE`);
     const request = await tx.refundRequest.findUniqueOrThrow({ where: { id: input.refundRequestId } });
-    if (request.sellerId !== input.sellerId) throw new DomainError('forbidden', 403);
+    if (request.sellerId !== input.sellerId) throw new DomainError('resource not found', 404);
     if (request.status !== RefundStatus.PENDING) throw new DomainError('refund is not pending', 409);
     return tx.refundRequest.update({
       where: { id: request.id },

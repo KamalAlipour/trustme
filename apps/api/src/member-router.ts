@@ -81,8 +81,8 @@ const contactPatchSchema = z.object({ alias: z.string().trim().min(1).max(128) }
 const transactionQuerySchema = z.object({ cursor: z.string().min(1).optional(), limit: z.coerce.number().int().min(1).max(100).default(25) });
 const contactsQuerySchema = z.object({ query: z.string().optional(), sort: z.enum(['alias', 'recent']).default('alias') });
 const refundSchema = z.object({ transactionId: z.string().uuid(), amountCoupons: couponsSchema, reason: z.string().trim().min(1), mediaIds: z.array(z.string().uuid()).max(10).optional() });
-const refundQuerySchema = z.object({ role: z.enum(['buyer', 'seller']).default('buyer'), status: z.enum(['PENDING', 'APPROVED', 'REJECTED']).optional() });
-const charityDonationSchema = z.object({ amountCoupons: couponsSchema, pin: fourDigitCodeSchema });
+const refundQuerySchema = z.object({ role: z.enum(['buyer', 'seller']).default('buyer'), status: z.enum(['PENDING', 'APPROVED', 'REJECTED']).optional(), cursor: z.string().min(1).optional(), limit: z.coerce.number().int().min(1).max(100).default(25) });
+const charityDonationSchema = z.object({ amountCoupons: couponsSchema, pin: fourDigitCodeSchema, idempotencyKey: z.string().min(1).optional() });
 const aidRequestSchema = z.object({ charityId: z.string().uuid(), amountCoupons: couponsSchema, description: z.string().trim().min(1), loanId: z.string().uuid().optional(), mediaIds: z.array(z.string().uuid()).max(10).optional() });
 const aidDocumentsSchema = z.object({ mediaIds: z.array(z.string().uuid()).min(1).max(10) });
 const charityQuerySchema = z.object({ status: z.enum(['PENDING', 'DOCUMENTS_REQUESTED', 'APPROVED', 'REJECTED']).optional() });
@@ -231,6 +231,19 @@ function cursorDate(cursor: string): { createdAt: Date; id: string } {
 
 function nextCursor(createdAt: Date, id: string): string {
   return Buffer.from(`${createdAt.toISOString()}|${id}`).toString('base64url');
+}
+
+function refundCursor(status: string, createdAt: Date, id: string): string {
+  return Buffer.from(`${status}|${createdAt.toISOString()}|${id}`).toString('base64url');
+}
+
+function parseRefundCursor(cursor: string): { status: string; createdAt: Date; id: string } {
+  const decoded = Buffer.from(cursor, 'base64url').toString();
+  const parts = decoded.split('|');
+  if (parts.length !== 3 || !['PENDING', 'APPROVED', 'REJECTED'].includes(parts[0]!)) throw new HttpError(400, 'invalid cursor');
+  const createdAt = new Date(parts[1]!);
+  if (Number.isNaN(createdAt.getTime()) || !idSchema.safeParse(parts[2]).success) throw new HttpError(400, 'invalid cursor');
+  return { status: parts[0]!, createdAt, id: parts[2]! };
 }
 
 function serializeRefund(request: {
@@ -847,27 +860,58 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
     try {
       const userId = memberClaims(request).sub;
       const query = refundQuerySchema.parse(request.query);
+      const cursor = query.cursor === undefined ? undefined : parseRefundCursor(query.cursor);
+      const roleColumn = query.role === 'buyer' ? Prisma.sql`"buyerId"` : Prisma.sql`"sellerId"`;
+      const statusPredicate = query.status === undefined ? Prisma.empty : Prisma.sql`AND "status" = ${query.status}::"RefundStatus"`;
+      const cursorPredicate = cursor === undefined
+        ? Prisma.empty
+        : query.status !== undefined || query.role !== 'seller'
+          ? Prisma.sql`AND ("createdAt" < ${cursor.createdAt} OR ("createdAt" = ${cursor.createdAt} AND "id" < ${cursor.id}::uuid))`
+          : cursor.status === 'PENDING'
+            ? Prisma.sql`AND ("status" <> 'PENDING' OR ("status" = 'PENDING' AND ("createdAt" < ${cursor.createdAt} OR ("createdAt" = ${cursor.createdAt} AND "id" < ${cursor.id}::uuid))))`
+            : Prisma.sql`AND "status" <> 'PENDING' AND ("createdAt" < ${cursor.createdAt} OR ("createdAt" = ${cursor.createdAt} AND "id" < ${cursor.id}::uuid))`;
+      const orderBy = query.role === 'seller'
+        ? Prisma.sql`CASE WHEN "status" = 'PENDING' THEN 0 ELSE 1 END ASC, "createdAt" DESC, "id" DESC`
+        : Prisma.sql`"createdAt" DESC, "id" DESC`;
+      const ids = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+        SELECT "id"
+        FROM "RefundRequest"
+        WHERE ${roleColumn} = ${userId}::uuid
+        ${statusPredicate}
+        ${cursorPredicate}
+        ORDER BY ${orderBy}
+        LIMIT ${query.limit + 1}
+      `);
+      const hasMore = ids.length > query.limit;
+      const pageIds = (hasMore ? ids.slice(0, query.limit) : ids).map((row) => row.id);
       const rows = await prisma.refundRequest.findMany({
-        where: {
-          ...(query.role === 'buyer' ? { buyerId: userId } : { sellerId: userId }),
-          ...(query.status === undefined ? {} : { status: query.status }),
-        },
+        where: { id: { in: pageIds } },
         include: {
           buyer: { select: { displayName: true, barcodeId: true } },
           seller: { select: { displayName: true, barcodeId: true } },
           transaction: { select: { amountCoupons: true, createdAt: true } },
           media: { select: { id: true } },
         },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       });
-      if (query.role === 'seller') {
-        rows.sort((left, right) => Number(right.status === 'PENDING') - Number(left.status === 'PENDING'));
-      }
-      const items = await Promise.all(rows.map(async (row) => {
-        const approved = await prisma.refundRequest.aggregate({ where: { transactionId: row.transactionId, status: 'APPROVED' }, _sum: { amountCoupons: true } });
-        return serializeRefund(row, userId, row.transaction.amountCoupons - (approved._sum.amountCoupons ?? 0n));
-      }));
-      response.json({ items });
+      const rowById = new Map(rows.map((row) => [row.id, row]));
+      const orderedRows = pageIds.flatMap((id) => {
+        const row = rowById.get(id);
+        return row === undefined ? [] : [row];
+      });
+      const approved = pageIds.length === 0
+        ? []
+        : await prisma.refundRequest.groupBy({
+          by: ['transactionId'],
+          where: { transactionId: { in: orderedRows.map((row) => row.transactionId) }, status: 'APPROVED' },
+          _sum: { amountCoupons: true },
+        });
+      const approvedByTransaction = new Map(approved.map((row) => [row.transactionId, row._sum.amountCoupons ?? 0n]));
+      response.json({
+        items: orderedRows.map((row) => serializeRefund(row, userId, row.transaction.amountCoupons - (approvedByTransaction.get(row.transactionId) ?? 0n))),
+        nextCursor: hasMore && orderedRows.length > 0
+          ? refundCursor(orderedRows[orderedRows.length - 1]!.status, orderedRows[orderedRows.length - 1]!.createdAt, orderedRows[orderedRows.length - 1]!.id)
+          : null,
+      });
     } catch (error) {
       next(error);
     }
@@ -936,7 +980,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
         memberAccountId: (await couponAccount(prisma, userId)).id,
         charityAccountId: (await prisma.ledgerAccount.findFirstOrThrow({ where: { charityId: charity.id, type: AccountType.CHARITY_COUPON, asset: Asset.COUPON } })).id,
         amountCoupons: parseCoupons(body.amountCoupons),
-        externalRef: `api:me:charity:${charity.id}:${randomUUID()}`,
+        externalRef: `api:me:charity:${charity.id}:${body.idempotencyKey ?? randomUUID()}`,
       });
       response.status(201).json({ transactionId: transaction.id, status: transaction.status });
     } catch (error) {
@@ -955,7 +999,8 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
         ...(body.loanId === undefined ? {} : { loanId: body.loanId }),
         ...(body.mediaIds === undefined ? {} : { mediaIds: body.mediaIds }),
       });
-      response.status(201).json(serializeAid({ ...created, media: [] }));
+      const media = await prisma.mediaAsset.findMany({ where: { aidRequestId: created.id }, select: { id: true } });
+      response.status(201).json(serializeAid({ ...created, media }));
     } catch (error) {
       next(error);
     }
@@ -965,7 +1010,8 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
     try {
       const body = aidDocumentsSchema.parse(request.body);
       const updated = await attachAidDocuments(prisma, { aidRequestId: pathId(request.params.id), applicantId: memberClaims(request).sub, mediaIds: body.mediaIds });
-      response.json(serializeAid({ ...updated, media: [] }));
+      const media = await prisma.mediaAsset.findMany({ where: { aidRequestId: updated.id }, select: { id: true } });
+      response.json(serializeAid({ ...updated, media }));
     } catch (error) {
       next(error);
     }

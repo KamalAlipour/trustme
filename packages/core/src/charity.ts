@@ -2,7 +2,6 @@ import { Prisma, PrismaClient, AccountType, Asset, AidRequestStatus, CharityAgen
 import { DomainError } from './domain-error.js';
 import { postWithClient } from './ledger.js';
 import { withSerializableRetry } from './retry.js';
-import { assertNotRestricted } from './lending.js';
 import { transferCoupons } from './domain.js';
 
 export async function createCharity(
@@ -183,27 +182,21 @@ export async function approveAidRequest(
     const request = await tx.aidRequest.findUniqueOrThrow({ where: { id: input.aidRequestId } });
     await assertAgent(tx, request.charityId, input.agentId);
     if (request.status !== AidRequestStatus.PENDING) throw new DomainError('aid request is not pending', 409);
-    await assertNotRestricted(tx, input.agentId);
     const amount = input.approvedCoupons ?? request.amountCoupons;
     if (amount <= 0n || amount > request.amountCoupons) throw new DomainError('approved amount cannot exceed requested amount');
     const charityAccount = await tx.ledgerAccount.findFirstOrThrow({ where: { charityId: request.charityId, type: AccountType.CHARITY_COUPON, asset: Asset.COUPON } });
     const applicantAccount = await tx.ledgerAccount.findFirstOrThrow({ where: { userId: request.applicantId, type: AccountType.USER_COUPON, asset: Asset.COUPON } });
-    let transaction;
-    try {
-      transaction = await postWithClient(tx, {
-        type: TransactionType.TRANSFER,
-        externalRef: `aid:${request.id}`,
-        userId: input.agentId,
-        status: TransactionStatus.CONFIRMED,
-        amountCoupons: amount,
-        legs: [{ fromAccountId: charityAccount.id, toAccountId: applicantAccount.id, amount, asset: Asset.COUPON }],
-      });
-    } catch (error) {
-      if (error instanceof DomainError && error.message.includes('cannot be negative')) {
-        throw new DomainError('insufficient charity balance', 409);
-      }
-      throw error;
-    }
+    await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "LedgerAccount" WHERE "id" = ${charityAccount.id}::uuid FOR UPDATE`);
+    const lockedCharityAccount = await tx.ledgerAccount.findUniqueOrThrow({ where: { id: charityAccount.id } });
+    if (lockedCharityAccount.balance < amount) throw new DomainError('insufficient charity balance', 409);
+    const transaction = await postWithClient(tx, {
+      type: TransactionType.TRANSFER,
+      externalRef: `aid:${request.id}`,
+      userId: input.agentId,
+      status: TransactionStatus.CONFIRMED,
+      amountCoupons: amount,
+      legs: [{ fromAccountId: charityAccount.id, toAccountId: applicantAccount.id, amount, asset: Asset.COUPON }],
+    });
     return tx.aidRequest.update({
       where: { id: request.id },
       data: {

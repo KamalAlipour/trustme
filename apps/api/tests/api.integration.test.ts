@@ -568,6 +568,11 @@ describe('member API', () => {
     expect(await prisma.adminAuditLog.count({ where: { entityType: 'Charity' } })).toBe(1);
     const donation = await request(app).post(`/v1/me/charities/${charity.body.id}/donations`).set('Authorization', `Bearer ${donor.body.tokens.accessToken}`).send({ amountCoupons: '50', pin: '2468' });
     expect(donation.status).toBe(201);
+    const donationRetry = await request(app).post(`/v1/me/charities/${charity.body.id}/donations`).set('Authorization', `Bearer ${donor.body.tokens.accessToken}`).send({ amountCoupons: '50', pin: '2468', idempotencyKey: 'donation-once' });
+    const donationRetryAgain = await request(app).post(`/v1/me/charities/${charity.body.id}/donations`).set('Authorization', `Bearer ${donor.body.tokens.accessToken}`).send({ amountCoupons: '50', pin: '2468', idempotencyKey: 'donation-once' });
+    expect(donationRetry.status).toBe(201);
+    expect(donationRetryAgain.status).toBe(201);
+    expect(donationRetryAgain.body.transactionId).toBe(donationRetry.body.transactionId);
     const aid = await request(app).post('/v1/me/aid-requests').set('Authorization', `Bearer ${applicant.body.tokens.accessToken}`).send({ charityId: charity.body.id, amountCoupons: '20', description: 'food' });
     expect(aid.status).toBe(201);
     await request(app).post('/v1/auth/register').send({ phone: '+1555000310', pin: '2468' });
@@ -624,13 +629,16 @@ describe('member API', () => {
     const created = await request(app).post('/v1/me/refunds').set('Authorization', `Bearer ${payer.body.tokens.accessToken}`).send({ transactionId: transfer.body.transactionId, amountCoupons: '10', reason: 'returned', mediaIds: [evidence.body.id] });
     expect(created.status).toBe(201);
     expect((await request(app).get(`/v1/me/media/${evidence.body.id}`).set('Authorization', `Bearer ${unrelated.body.tokens.accessToken}`)).status).toBe(404);
-    expect((await request(app).post(`/v1/me/refunds/${created.body.id}/approve`).set('Authorization', `Bearer ${unrelated.body.tokens.accessToken}`).send({ pin: '2468' })).status).toBe(403);
+    expect((await request(app).post(`/v1/me/refunds/${created.body.id}/approve`).set('Authorization', `Bearer ${unrelated.body.tokens.accessToken}`).send({ pin: '2468' })).status).toBe(404);
     expect((await request(app).post(`/v1/me/refunds/${created.body.id}/approve`).set('Authorization', `Bearer ${payee.body.tokens.accessToken}`).send({})).status).toBe(400);
     for (let attempt = 0; attempt < 4; attempt += 1) {
       expect((await request(app).post(`/v1/me/refunds/${created.body.id}/approve`).set('Authorization', `Bearer ${payee.body.tokens.accessToken}`).send({ pin: '1357' })).status).toBe(401);
     }
     expect((await request(app).post(`/v1/me/refunds/${created.body.id}/approve`).set('Authorization', `Bearer ${payee.body.tokens.accessToken}`).send({ pin: '1357' })).status).toBe(423);
-    expect((await request(app).get(`/v1/me/refunds?role=seller`).set('Authorization', `Bearer ${payee.body.tokens.accessToken}`)).body.items).toHaveLength(1);
+    const paged = await request(app).get(`/v1/me/refunds?role=seller&status=PENDING&limit=1`).set('Authorization', `Bearer ${payee.body.tokens.accessToken}`);
+    expect(paged.status).toBe(200);
+    expect(paged.body.items).toHaveLength(1);
+    expect(paged.body.nextCursor).toBeNull();
     expect((await request(app).get('/v1/me/refunds?role=buyer').set('Authorization', `Bearer ${unrelated.body.tokens.accessToken}`)).body.items).toHaveLength(0);
   });
 });

@@ -109,7 +109,14 @@ export async function uploadMedia(request: Request, storageDir: string): Promise
           }
           if (header.length < 16) header = Buffer.concat([header, chunk]).subarray(0, 16);
           hash.update(chunk);
-          output?.write(chunk);
+          if (output === undefined) {
+            fail(new DomainError('media upload failed', 400));
+            return;
+          }
+          if (!output.write(chunk)) {
+            stream.pause();
+            output.once('drain', () => stream.resume());
+          }
         });
         stream.on('limit', () => fail(new DomainError('media file is too large', 413)));
         stream.on('error', (error) => fail(error instanceof DomainError ? error : new DomainError('media upload failed', 400)));
