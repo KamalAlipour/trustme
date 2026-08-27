@@ -27,7 +27,13 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     void (async () => {
       const available = await biometricAvailable().catch(() => false);
       if (active) setBiometric(available);
-      if (await hasStoredCredentials()) {
+      let storedCredentials = false;
+      try {
+        storedCredentials = await hasStoredCredentials();
+      } catch {
+        storedCredentials = false;
+      }
+      if (storedCredentials) {
         try {
           const tokens = await refresh();
           if (active) {
@@ -36,7 +42,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
             setAccessToken(tokens.accessToken);
           }
         } catch {
-          await forgetSession();
+          await forgetSession().catch(() => undefined);
         }
       }
       if (active) setReady(true);
