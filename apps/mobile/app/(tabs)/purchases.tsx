@@ -58,9 +58,6 @@ export default function Purchases() {
           {canRequestRefund(item)
             ? <Pressable onPress={() => item.refundableTransactionId === null ? undefined : setRefundItem({ id: item.refundableTransactionId, amount: refundableRemainder(item) })} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{item.refund === null ? fa.requestRefund : fa.requestAnotherRefund}</Text></Pressable>
             : null}
-          {item.refundableTransactionId !== null && item.direction === 'out' && item.refund !== null && item.refund.status !== 'PENDING' && refundableRemainder(item) !== '0'
-            ? <Text style={styles.muted}>{fa.requestAnotherRefund}</Text>
-            : null}
         </View>
       ))}
       {transactions.hasNextPage ? <Pressable onPress={() => void transactions.fetchNextPage()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>تراکنش‌های بیشتر</Text></Pressable> : null}
