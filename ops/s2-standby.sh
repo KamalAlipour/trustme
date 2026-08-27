@@ -101,7 +101,8 @@ RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=true
+ProtectHome=false
+ReadWritePaths=/root/.ssh
 
 [Install]
 WantedBy=multi-user.target
@@ -118,11 +119,12 @@ remote_ssh=(ssh -i "$TRUSTME_SSH_KEY" -o BatchMode=yes
   -o StrictHostKeyChecking=accept-new "${TRUSTME_SSH_USER}@${TRUSTME_PRIMARY_HOST}")
 escaped_replication_password="${TRUSTME_REPLICATION_PASSWORD//\'/\'\'}"
 {
+  printf "\\set trustme_replication_role '%s'\n" "$TRUSTME_REPLICATION_ROLE"
   printf "\\set trustme_replication_password '%s'\n" "$escaped_replication_password"
-  printf 'do $$ begin if not exists (select 1 from pg_roles where rolname = '
-  printf "'%s') then create role \"%s\" replication login password :" \
-    "$TRUSTME_REPLICATION_ROLE" "$TRUSTME_REPLICATION_ROLE"
-  printf '%s\n' "'trustme_replication_password'; end if; end \$\$;"
+  printf "select format('create role %%I replication login password %%L', "
+  printf ":'trustme_replication_role', :'trustme_replication_password') "
+  printf "where not exists (select 1 from pg_roles where rolname = "
+  printf ":'trustme_replication_role')\\\\gexec\n"
 } | "${remote_ssh[@]}" "sudo -u postgres psql -p ${TRUSTME_PG_PORT} -d postgres -v ON_ERROR_STOP=1"
 unset escaped_replication_password
 "${remote_ssh[@]}" "sudo -u postgres psql -p ${TRUSTME_PG_PORT} -d postgres -v ON_ERROR_STOP=1 -c \"select pg_create_physical_replication_slot('${TRUSTME_REPLICATION_SLOT}') where not exists (select 1 from pg_replication_slots where slot_name = '${TRUSTME_REPLICATION_SLOT}')\""
@@ -133,6 +135,14 @@ if [[ ! -e "$PG_DATA/standby.signal" ]]; then
     -U "$TRUSTME_REPLICATION_ROLE" -D "$PG_DATA" -X stream \
     -S "$TRUSTME_REPLICATION_SLOT" -R -P
 fi
+PG_AUTO_CONF="$PG_DATA/postgresql.auto.conf"
+PRIMARY_CONNINFO="host=127.0.0.1 port=${TUNNEL_PORT} user=${TRUSTME_REPLICATION_ROLE} application_name=trustme-standby passfile=${PGPASS_FILE}"
+if grep -q '^primary_conninfo = ' "$PG_AUTO_CONF"; then
+  sed -i -E "s|^primary_conninfo = .*|primary_conninfo = '${PRIMARY_CONNINFO}'|" "$PG_AUTO_CONF"
+else
+  printf "primary_conninfo = '%s'\n" "$PRIMARY_CONNINFO" >> "$PG_AUTO_CONF"
+fi
+chown postgres:postgres "$PG_AUTO_CONF"
 systemctl start "$(pg_service_name)"
 sudo -u postgres psql -p "$TRUSTME_PG_PORT" -d postgres -Atqc \
   'select pg_is_in_recovery()' | grep -qx t
