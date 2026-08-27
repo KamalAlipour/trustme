@@ -16,7 +16,7 @@ load_trustme_env
 TRUSTME_PG_VERSION="${TRUSTME_PG_VERSION:-}"
 TRUSTME_PG_PORT="${TRUSTME_PG_PORT:-}"
 TRUSTME_REDIS_PORT="${TRUSTME_REDIS_PORT:-}"
-TRUSTME_API_PORT="${TRUSTME_API_PORT:-}"
+API_PORT="${API_PORT:-}"
 TRUSTME_ADMIN_PORT="${TRUSTME_ADMIN_PORT:-}"
 TRUSTME_PG_DATABASE="${TRUSTME_PG_DATABASE:-trustme}"
 TRUSTME_PG_ROLE="${TRUSTME_PG_ROLE:-trustme}"
@@ -28,7 +28,7 @@ require_value TRUSTME_API_HOST
 require_value TRUSTME_ADMIN_HOST
 [[ "$TRUSTME_PG_PORT" == "$TRUSTME_EXPECTED_PG_PORT" ]] || { printf 'TRUSTME_PG_PORT must be %s\n' "$TRUSTME_EXPECTED_PG_PORT" >&2; exit 1; }
 [[ "$TRUSTME_REDIS_PORT" == "$TRUSTME_EXPECTED_REDIS_PORT" ]] || { printf 'TRUSTME_REDIS_PORT must be %s\n' "$TRUSTME_EXPECTED_REDIS_PORT" >&2; exit 1; }
-[[ "$TRUSTME_API_PORT" == "$TRUSTME_EXPECTED_API_PORT" ]] || { printf 'TRUSTME_API_PORT must be %s\n' "$TRUSTME_EXPECTED_API_PORT" >&2; exit 1; }
+[[ "$API_PORT" == "$TRUSTME_EXPECTED_API_PORT" ]] || { printf 'API_PORT must be %s\n' "$TRUSTME_EXPECTED_API_PORT" >&2; exit 1; }
 [[ "$TRUSTME_ADMIN_PORT" == "$TRUSTME_EXPECTED_ADMIN_PORT" ]] || { printf 'TRUSTME_ADMIN_PORT must be %s\n' "$TRUSTME_EXPECTED_ADMIN_PORT" >&2; exit 1; }
 valid_identifier "$TRUSTME_PG_DATABASE" || { printf 'invalid database name\n' >&2; exit 1; }
 valid_identifier "$TRUSTME_PG_ROLE" || { printf 'invalid role name\n' >&2; exit 1; }
