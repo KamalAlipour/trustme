@@ -82,6 +82,23 @@ worker start. On a standby the marker prevents the worker from starting.
 `ops/deploy.sh --rollback` atomically points `current` at the previous release
 and repeats the safe service restart sequence.
 
+## First-run bootstrap
+
+Migrations create no rows, so a fresh database needs the system ledger accounts,
+the default settings, and one admin account before the dashboard can be used.
+Run both from the release directory as the `trustme` user, with the environment
+file loaded:
+
+```text
+npm run prisma:seed
+ADMIN_USERNAME=<name> ADMIN_ROLE=ADMIN npm run admin:create   # password on stdin
+```
+
+`admin:create` upserts by username, requires at least 12 characters, hashes with
+bcrypt cost 12, and prints only the username and role. Prefer piping the
+password from a file or a password manager over `ADMIN_PASSWORD` in the
+environment, so it never reaches the shell history or the process list.
+
 ## Promotion
 
 On Server 2, after confirming that Server 1 is unavailable or has been fenced:
