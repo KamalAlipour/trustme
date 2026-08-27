@@ -318,6 +318,10 @@ describe('admin API', () => {
     expect(unknown.status).toBe(400);
     const invalidFee = await request(app).patch('/admin/settings').set('Authorization', `Bearer ${jwt}`).send({ withdrawalBaseFeeBps: '10001' });
     expect(invalidFee.status).toBe(400);
+    expect(invalidFee.body).toEqual({
+      error: 'validation failed',
+      fields: [{ path: 'withdrawalBaseFeeBps', message: 'fee bps must be between 0 and 10000' }],
+    });
     expect(await prisma.adminAuditLog.count({ where: { action: 'settings.update' } })).toBe(1);
     const ledger = await request(app).get('/admin/ledger').query({ search: `withdrawal:${withdrawal.id}:burn` }).set('Authorization', `Bearer ${jwt}`);
     expect(ledger.status).toBe(200);

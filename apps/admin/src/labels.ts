@@ -73,6 +73,7 @@ export const labels = {
   noRows: 'No records found.',
   loginRequired: 'Please log in to continue.',
   requestFailed: 'Request failed',
+  validationFailed: 'Please correct the highlighted fields.',
 } as const;
 
 export const statusLabels: Record<string, string> = {

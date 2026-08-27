@@ -33,11 +33,13 @@ export async function updateSettingsAction(formData: FormData): Promise<void> {
     await adminApiFetch('/admin/settings', { method: 'PATCH', body: JSON.stringify(body) });
   } catch (error) {
     if (error instanceof ApiResponseError) {
-      const field = error.message.includes('fee bps')
-        ? 'withdrawalBaseFeeBps'
-        : error.message.includes('minimum') ? 'minimumWithdrawalUsdt'
-          : error.message.includes('auto') ? 'autoApprovalLimitUsdt' : 'general';
-      redirect(`/settings?errorField=${field}&error=${encodeURIComponent(error.message)}&flashType=error&flash=${encodeURIComponent(error.message)}`);
+      const field = error.fields[0]?.path;
+      const message = error.fields[0]?.message;
+      const fieldQuery = field === undefined
+        ? ''
+        : `&errorField=${encodeURIComponent(field)}&error=${encodeURIComponent(message ?? labels.validationFailed)}`;
+      const banner = error.fields.length > 0 ? labels.validationFailed : error.message;
+      redirect(`/settings?flashType=error&flash=${encodeURIComponent(banner)}${fieldQuery}`);
     }
     redirect(`/settings?flashType=error&flash=${encodeURIComponent(labels.apiUnavailable)}`);
   }

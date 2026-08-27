@@ -13,15 +13,22 @@ export class ApiForbiddenError extends Error {
 
 export class ApiResponseError extends Error {
   public readonly status: number;
+  public readonly fields: readonly ApiErrorField[];
 
-  public constructor(status: number, message: string) {
+  public constructor(status: number, message: string, fields: readonly ApiErrorField[] = []) {
     super(message);
     this.name = 'ApiResponseError';
     this.status = status;
+    this.fields = fields;
   }
 }
 
-type ApiErrorBody = { error?: string };
+export type ApiErrorField = { path: string; message: string };
+type ApiErrorBody = { error?: string; fields?: ApiErrorField[] };
+
+async function readErrorBody(response: Response): Promise<ApiErrorBody> {
+  return (await response.json().catch(() => ({}))) as ApiErrorBody;
+}
 
 export async function adminApiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = (await cookies()).get(ADMIN_TOKEN_COOKIE)?.value;
@@ -38,8 +45,8 @@ export async function adminApiFetch<T>(path: string, init: RequestInit = {}): Pr
   if (response.status === 401) redirect('/login');
   if (response.status === 403) throw new ApiForbiddenError();
   if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as ApiErrorBody;
-    throw new ApiResponseError(response.status, body.error ?? labels.requestFailed);
+    const body = await readErrorBody(response);
+    throw new ApiResponseError(response.status, body.error ?? labels.requestFailed, body.fields ?? []);
   }
   return (await response.json()) as T;
 }
@@ -52,8 +59,8 @@ export async function loginRequest(username: string, password: string): Promise<
     cache: 'no-store',
   });
   if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as ApiErrorBody;
-    throw new ApiResponseError(response.status, body.error ?? labels.requestFailed);
+    const body = await readErrorBody(response);
+    throw new ApiResponseError(response.status, body.error ?? labels.requestFailed, body.fields ?? []);
   }
   return (await response.json()) as { token: string };
 }

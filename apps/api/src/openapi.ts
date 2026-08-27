@@ -1,6 +1,28 @@
 export const openapiDocument = {
   openapi: '3.0.3',
   info: { title: 'TrustMe Member API', version: '0.1.0' },
+  components: {
+    schemas: {
+      ValidationError: {
+        type: 'object',
+        required: ['error', 'fields'],
+        properties: {
+          error: { type: 'string', example: 'validation failed' },
+          fields: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['path', 'message'],
+              properties: {
+                path: { type: 'string', description: 'Dotted request field path' },
+                message: { type: 'string' },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
   paths: {
     '/v1/users': { post: { responses: { '201': { description: 'Created' }, '401': { description: 'Unauthorized' } } } },
     '/v1/users/{barcodeId}/balance': { get: { responses: { '200': { description: 'Balance' } } } },

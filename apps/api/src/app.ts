@@ -273,7 +273,13 @@ export function createApp(dependencies: ApiDependencies): express.Express {
   app.use((error: unknown, request: Request, response: Response, next: NextFunction) => {
     void next;
     if (error instanceof z.ZodError) {
-      response.status(400).json({ error: error.message });
+      response.status(400).json({
+        error: 'validation failed',
+        fields: error.issues.map((issue) => ({
+          path: issue.path.map((part) => String(part)).join('.'),
+          message: issue.message,
+        })),
+      });
       return;
     }
     if (error instanceof HttpError) {
