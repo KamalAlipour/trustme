@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: trustme
+          POSTGRES_PASSWORD: trustme-ci
+          POSTGRES_DB: trustme
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U trustme -d trustme"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 56379:6379
+    env:
+      DATABASE_URL: postgresql://trustme:trustme-ci@localhost:5432/trustme?schema=public
+      REDIS_URL: redis://localhost:56379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx prisma migrate deploy --schema packages/db/prisma/schema.prisma
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
