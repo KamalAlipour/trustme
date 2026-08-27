@@ -1,4 +1,5 @@
 import * as SecureStore from 'expo-secure-store';
+import { isWebPlatform } from './platform';
 
 const REFRESH_TOKEN_KEY = 'trustcoupon.refreshToken';
 const PIN_KEY = 'trustcoupon.pin';
@@ -8,10 +9,6 @@ const options = { requireAuthentication: true, keychainAccessible: SecureStore.W
 let webRefreshToken: string | null = null;
 let webPin: string | null = null;
 let webSessionMarker = false;
-
-function isWeb(): boolean {
-  return typeof window !== 'undefined';
-}
 
 function readManifestoFlag(): string | null {
   if (typeof window === 'undefined') return null;
@@ -23,7 +20,7 @@ function readManifestoFlag(): string | null {
 }
 
 export async function saveCredentials(refreshToken: string, pin: string): Promise<void> {
-  if (isWeb()) {
+  if (isWebPlatform()) {
     webRefreshToken = refreshToken;
     webPin = pin;
     webSessionMarker = true;
@@ -35,7 +32,7 @@ export async function saveCredentials(refreshToken: string, pin: string): Promis
 }
 
 export async function saveRefreshToken(refreshToken: string): Promise<void> {
-  if (isWeb()) {
+  if (isWebPlatform()) {
     webRefreshToken = refreshToken;
     return;
   }
@@ -43,17 +40,17 @@ export async function saveRefreshToken(refreshToken: string): Promise<void> {
 }
 
 export async function readRefreshToken(): Promise<string | null> {
-  if (isWeb()) return webRefreshToken;
+  if (isWebPlatform()) return webRefreshToken;
   return SecureStore.getItemAsync(REFRESH_TOKEN_KEY, options);
 }
 
 export async function readPin(): Promise<string | null> {
-  if (isWeb()) return webPin;
+  if (isWebPlatform()) return webPin;
   return SecureStore.getItemAsync(PIN_KEY, options);
 }
 
 export async function clearCredentials(): Promise<void> {
-  if (isWeb()) {
+  if (isWebPlatform()) {
     webRefreshToken = null;
     webPin = null;
     webSessionMarker = false;
@@ -67,17 +64,17 @@ export async function clearCredentials(): Promise<void> {
 }
 
 export async function hasStoredCredentials(): Promise<boolean> {
-  if (isWeb()) return webSessionMarker;
+  if (isWebPlatform()) return webSessionMarker;
   return (await SecureStore.getItemAsync(SESSION_MARKER_KEY)) !== null;
 }
 
 export async function hasSeenManifesto(): Promise<boolean> {
-  if (isWeb()) return readManifestoFlag() === '1';
+  if (isWebPlatform()) return readManifestoFlag() === '1';
   return (await SecureStore.getItemAsync(MANIFESTO_SEEN_KEY)) === '1';
 }
 
 export async function markManifestoSeen(): Promise<void> {
-  if (isWeb()) {
+  if (isWebPlatform()) {
     if (typeof window === 'undefined') return;
     try {
       window.localStorage.setItem(MANIFESTO_SEEN_KEY, '1');

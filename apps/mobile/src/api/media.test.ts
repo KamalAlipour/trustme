@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const fileSystem = vi.hoisted(() => ({ getInfoAsync: vi.fn(async () => ({ exists: true, size: 100 })) }));
+const platform = vi.hoisted(() => ({ OS: 'ios' as string }));
 vi.mock('expo-file-system', () => fileSystem);
+vi.mock('react-native', () => ({ Platform: platform }));
 vi.mock('../lib/storage', () => ({
   clearCredentials: vi.fn(async () => undefined),
   readRefreshToken: vi.fn(async () => 'refresh'),

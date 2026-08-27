@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { Link, router } from 'expo-router';
-import { Platform, Text, TextInput } from 'react-native';
+import { Text, TextInput } from 'react-native';
 import { ApiError, LockedError } from '../../src/api/client';
 import { useSession } from '../../src/auth/session';
 import { PinPad } from '../../src/components/PinPad';
 import { Page } from '../../src/components/Screen';
 import { fa } from '../../src/i18n/fa';
+import { isWebPlatform } from '../../src/lib/platform';
 import { styles } from '../../src/styles';
 
 export default function Login() {
@@ -42,7 +43,7 @@ export default function Login() {
     <Page>
       <Text style={styles.title}>{fa.appName}</Text>
       <Text style={styles.heading}>{fa.login}</Text>
-      {Platform.OS === 'web' ? <Text style={styles.muted}>{fa.browserSessionNotice}</Text> : null}
+      {isWebPlatform() ? <Text style={styles.muted}>{fa.browserSessionNotice}</Text> : null}
       <TextInput value={phone} onChangeText={setPhone} placeholder={fa.phone} style={styles.input} keyboardType="phone-pad" textContentType="telephoneNumber" />
       <PinPad value={pin} onChange={setPin} {...(remaining === 0 ? { onSubmit: submit } : {})} />
       {biometric ? <Text style={styles.muted}>در ورود بعدی، احراز هویت دستگاه برای باز کردن نشست استفاده می‌شود.</Text> : null}

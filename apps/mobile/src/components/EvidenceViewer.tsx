@@ -4,6 +4,7 @@ import * as FileSystem from 'expo-file-system';
 import { useAudioPlayer } from 'expo-audio';
 import { API_BASE_URL, getAccessToken } from '../api/client';
 import { fa } from '../i18n/fa';
+import { isWebPlatform } from '../lib/platform';
 import { styles } from '../styles';
 
 type DownloadedEvidence = {
@@ -31,7 +32,7 @@ export function EvidenceViewer({ ids }: { ids: string[] }) {
 
   const download = async (id: string) => {
     setError('');
-    if (typeof window !== 'undefined') {
+    if (isWebPlatform()) {
       setError(fa.browserFileSystemUnavailable);
       return;
     }

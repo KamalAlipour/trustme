@@ -6,7 +6,9 @@ const secureStore = vi.hoisted(() => ({
   getItemAsync: vi.fn(async (): Promise<string | null> => 'refresh'),
   deleteItemAsync: vi.fn(async () => undefined),
 }));
+const platform = vi.hoisted(() => ({ OS: 'ios' as string }));
 vi.mock('expo-secure-store', () => secureStore);
+vi.mock('react-native', () => ({ Platform: platform }));
 
 import { clearCredentials, hasSeenManifesto, hasStoredCredentials, markManifestoSeen, readPin, readRefreshToken, saveCredentials, saveRefreshToken } from './storage';
 
@@ -14,10 +16,12 @@ describe('secure credential storage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.unstubAllGlobals();
+    platform.OS = 'ios';
   });
   it('requires local authentication for refresh token and PIN writes', async () => {
+    vi.stubGlobal('window', { localStorage: { getItem: vi.fn(), setItem: vi.fn() } });
     await saveCredentials('refresh', '2580');
-    expect(secureStore.setItemAsync).toHaveBeenNthCalledWith(1, 'trustcoupon.refreshToken', 'refresh', expect.objectContaining({ requireAuthentication: true }));
+    expect(secureStore.setItemAsync).toHaveBeenNthCalledWith(1, 'trustcoupon.refreshToken', 'refresh', { requireAuthentication: true, keychainAccessible: 'when-unlocked' });
     expect(secureStore.setItemAsync).toHaveBeenNthCalledWith(2, 'trustcoupon.pin', '2580', expect.objectContaining({ requireAuthentication: true }));
     expect(secureStore.setItemAsync).toHaveBeenNthCalledWith(3, 'trustcoupon.session', '1');
   });
@@ -42,6 +46,7 @@ describe('secure credential storage', () => {
   });
 
   it('keeps web credentials in memory only', async () => {
+    platform.OS = 'web';
     vi.stubGlobal('window', { localStorage: { getItem: vi.fn(), setItem: vi.fn() } });
     await saveCredentials('web-refresh', '2580');
     expect(await hasStoredCredentials()).toBe(true);
@@ -57,6 +62,7 @@ describe('secure credential storage', () => {
   });
 
   it('uses localStorage for the non-sensitive web manifesto flag', async () => {
+    platform.OS = 'web';
     const localStorage = { getItem: vi.fn<(key: string) => string | null>(() => null), setItem: vi.fn() };
     vi.stubGlobal('window', { localStorage });
     expect(await hasSeenManifesto()).toBe(false);
