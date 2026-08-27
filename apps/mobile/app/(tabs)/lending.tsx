@@ -5,6 +5,7 @@ import { useSession } from '../../src/auth/session';
 import { useLoans, useInvalidateMoney, useContacts } from '../../src/hooks';
 import { Page, LoadingScreen } from '../../src/components/Screen';
 import { randomFourDigitCode } from '../../src/lib/code';
+import { greaterThan, nextInstallmentAmount } from '../../src/lib/coupons';
 import { formatCoupons, formatDate } from '../../src/lib/format';
 import { fa } from '../../src/i18n/fa';
 import { styles } from '../../src/styles';
@@ -117,39 +118,6 @@ export default function Lending() {
   );
 }
 
-function nextInstallmentAmount(loan: { installments: Array<{ amountCoupons: string; paidCoupons: string }>; outstandingCoupons: string }): string {
-  const installment = loan.installments.find((row) => row.paidCoupons !== row.amountCoupons);
-  return installment ? subtractCoupons(installment.amountCoupons, installment.paidCoupons) : loan.outstandingCoupons;
-}
-
 function isPositiveCoupons(value: string): boolean {
   return /^[1-9]\d*$/.test(value);
-}
-
-function greaterThan(left: string, right: string): boolean {
-  const normalizedLeft = left.replace(/^0+(?=\d)/, '');
-  const normalizedRight = right.replace(/^0+(?=\d)/, '');
-  return normalizedLeft.length > normalizedRight.length
-    || (normalizedLeft.length === normalizedRight.length && normalizedLeft > normalizedRight);
-}
-
-function subtractCoupons(left: string, right: string): string {
-  const result: string[] = [];
-  let borrow = 0;
-  let leftIndex = left.length - 1;
-  let rightIndex = right.length - 1;
-  while (leftIndex >= 0) {
-    let digit = left.charCodeAt(leftIndex) - 48 - borrow;
-    const subtrahend = rightIndex >= 0 ? right.charCodeAt(rightIndex) - 48 : 0;
-    if (digit < subtrahend) {
-      digit += 10;
-      borrow = 1;
-    } else {
-      borrow = 0;
-    }
-    result.push(String(digit - subtrahend));
-    leftIndex -= 1;
-    rightIndex -= 1;
-  }
-  return result.reverse().join('').replace(/^0+(?=\d)/, '');
 }
