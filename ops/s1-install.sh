@@ -96,7 +96,12 @@ if ! sudo -u postgres psql -p "$TRUSTME_PG_PORT" -d postgres -Atqc \
   sudo -u postgres createdb -p "$TRUSTME_PG_PORT" -O "$TRUSTME_PG_ROLE" \
     "$TRUSTME_PG_DATABASE"
 fi
-PG_HBA="$(pg_conftool "$TRUSTME_PG_VERSION" trustme show hba_file)"
+PG_HBA="$(pg_conftool "$TRUSTME_PG_VERSION" trustme show hba_file |
+  sed -n "s/^hba_file = '\\(.*\\)'$/\\1/p")"
+[[ -n "$PG_HBA" && -f "$PG_HBA" ]] || {
+  printf 'could not locate TrustMe pg_hba.conf\n' >&2
+  exit 1
+}
 grep -Fqx "host replication ${TRUSTME_PG_ROLE} 127.0.0.1/32 scram-sha-256" "$PG_HBA" ||
   printf '%s\n' "host replication ${TRUSTME_PG_ROLE} 127.0.0.1/32 scram-sha-256" >> "$PG_HBA"
 systemctl restart "$(pg_service_name)"
