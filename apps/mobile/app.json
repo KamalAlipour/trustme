@@ -1,0 +1,22 @@
+{
+  "expo": {
+    "name": "Trust Coupon",
+    "slug": "trust-coupon",
+    "scheme": "trustcoupon",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "plugins": [
+      "expo-router",
+      "expo-local-authentication",
+      "expo-secure-store",
+      "expo-camera"
+    ],
+    "ios": {
+      "bundleIdentifier": "as.komasi.trustcoupon"
+    },
+    "android": {
+      "package": "as.komasi.trustcoupon"
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "@trustme/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "main": "expo-router/entry",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "lint": "eslint src",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "5.66.8",
+    "expo": "~53.0.0",
+    "expo-camera": "~16.0.0",
+    "expo-local-authentication": "~16.0.0",
+    "expo-router": "~5.1.0",
+    "expo-secure-store": "~14.0.0",
+    "react": "19.0.0",
+    "react-native": "0.79.2"
+  },
+  "devDependencies": {
+    "@types/react": "19.0.10"
+  }
+}
