@@ -1,6 +1,7 @@
 import * as FileSystem from 'expo-file-system';
 import { request } from './client';
 import type { MediaAsset, MediaKind } from './types';
+import { fa } from '../i18n/fa';
 
 const MAX_NON_VIDEO_BYTES = 10 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
@@ -12,6 +13,7 @@ export async function uploadMedia(input: {
   kind: MediaKind;
   mimeType: string;
 }): Promise<UploadedMedia> {
+  if (typeof window !== 'undefined') throw new Error(fa.browserFileSystemUnavailable);
   const info = await FileSystem.getInfoAsync(input.uri, { size: true });
   if (info.exists && info.size !== undefined) {
     const maximum = input.kind === 'VIDEO' ? MAX_VIDEO_BYTES : MAX_NON_VIDEO_BYTES;

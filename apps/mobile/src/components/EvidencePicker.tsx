@@ -32,9 +32,9 @@ export function EvidencePicker({ mediaIds, onChange }: { mediaIds: string[]; onC
       const media = await uploadMedia({ uri, kind, mimeType });
       setItems((current) => current.map((item) => item.localUri === uri ? { ...item, media, state: 'ready' } : item));
       onChange(mediaIds.includes(media.id) ? mediaIds : [...mediaIds, media.id]);
-    } catch {
+    } catch (cause) {
       setItems((current) => current.map((item) => item.localUri === uri ? { ...item, state: 'failed' } : item));
-      setError(fa.uploadFailed);
+      setError(cause instanceof Error && cause.message === fa.browserFileSystemUnavailable ? cause.message : fa.uploadFailed);
     }
   };
 

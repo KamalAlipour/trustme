@@ -10,6 +10,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@expo/metro-runtime": "~5.0.5",
     "@tanstack/react-query": "5.66.8",
     "expo": "~53.0.0",
     "expo-audio": "^0.4.9",
@@ -21,7 +22,9 @@
     "expo-router": "~5.1.0",
     "expo-secure-store": "~14.0.0",
     "react": "19.0.0",
-    "react-native": "0.79.2"
+    "react-dom": "^19.0.0",
+    "react-native": "0.79.2",
+    "react-native-web": "^0.20.0"
   },
   "devDependencies": {
     "@types/react": "19.0.10"

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Link, router } from 'expo-router';
-import { Text, TextInput } from 'react-native';
+import { Platform, Text, TextInput } from 'react-native';
 import { ApiError, LockedError } from '../../src/api/client';
 import { useSession } from '../../src/auth/session';
 import { PinPad } from '../../src/components/PinPad';
@@ -42,6 +42,7 @@ export default function Login() {
     <Page>
       <Text style={styles.title}>{fa.appName}</Text>
       <Text style={styles.heading}>{fa.login}</Text>
+      {Platform.OS === 'web' ? <Text style={styles.muted}>{fa.browserSessionNotice}</Text> : null}
       <TextInput value={phone} onChangeText={setPhone} placeholder={fa.phone} style={styles.input} keyboardType="phone-pad" textContentType="telephoneNumber" />
       <PinPad value={pin} onChange={setPin} {...(remaining === 0 ? { onSubmit: submit } : {})} />
       {biometric ? <Text style={styles.muted}>در ورود بعدی، احراز هویت دستگاه برای باز کردن نشست استفاده می‌شود.</Text> : null}

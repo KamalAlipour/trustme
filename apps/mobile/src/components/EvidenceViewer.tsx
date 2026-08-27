@@ -31,6 +31,10 @@ export function EvidenceViewer({ ids }: { ids: string[] }) {
 
   const download = async (id: string) => {
     setError('');
+    if (typeof window !== 'undefined') {
+      setError(fa.browserFileSystemUnavailable);
+      return;
+    }
     const token = getAccessToken();
     const directory = FileSystem.cacheDirectory;
     if (token === null || directory === null) {
