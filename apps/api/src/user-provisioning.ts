@@ -16,6 +16,9 @@ export type UserProvisioningInput = {
   barcodeId?: string;
   aliasName?: string;
   displayName?: string;
+  email?: string;
+  pinHash?: string;
+  pinUpdatedAt?: Date;
 };
 
 export function isBarcodeUniqueViolation(error: unknown): boolean {
@@ -35,6 +38,9 @@ export async function createUserWithAccounts(
       barcodeId: input.barcodeId,
       ...(input.aliasName === undefined ? {} : { aliasName: input.aliasName }),
       ...(input.displayName === undefined ? {} : { displayName: input.displayName }),
+      ...(input.email === undefined ? {} : { email: input.email }),
+      ...(input.pinHash === undefined ? {} : { pinHash: input.pinHash }),
+      ...(input.pinUpdatedAt === undefined ? {} : { pinUpdatedAt: input.pinUpdatedAt }),
     },
   });
   await tx.ledgerAccount.create({ data: { type: AccountType.USER_COUPON, asset: Asset.COUPON, userId: user.id } });

@@ -1,4 +1,4 @@
-import { beforeAll, afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { beforeAll, afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { getAddress, HDNodeWallet } from 'ethers';
 import { Redis } from 'ioredis';
@@ -59,7 +59,7 @@ async function addSystemAccounts() {
   };
 }
 
-function appFixture(chainProvider?: AdminChainProvider, queueOverride?: ApiDependencies['queue'], configOverride: Partial<typeof config> = {}) {
+function appFixture(chainProvider?: AdminChainProvider, queueOverride?: ApiDependencies['queue'], configOverride: Partial<typeof config> = {}, captureEmailCode = true) {
   const calls: unknown[][] = [];
   const emailCodes = new Map<string, string>();
   const queue = { add: async (...args: unknown[]) => { calls.push(args); return {}; } } as unknown as ApiDependencies['queue'];
@@ -70,7 +70,7 @@ function appFixture(chainProvider?: AdminChainProvider, queueOverride?: ApiDepen
     queue: queueOverride ?? queue,
     redis,
     chainProvider,
-    logEmailCode: (email, code) => emailCodes.set(email, code),
+    ...(captureEmailCode ? { logEmailCode: (email: string, code: string) => emailCodes.set(email, code) } : {}),
   });
   return { app, calls, emailCodes };
 }
@@ -170,12 +170,45 @@ describe('member API', () => {
     expect((await request(app).post('/v1/auth/login').send({ phone: '+1555000122', pin: '2468' })).status).toBe(423);
   });
 
-  it('returns 503 for email delivery none and never returns email codes', async () => {
+  it('registers with an unverified email when delivery is unavailable', async () => {
     const { app } = appFixture(undefined, undefined, { emailDelivery: 'none' });
     const response = await request(app).post('/v1/auth/register').send({ phone: '+1555000125', pin: '2468', email: 'member@example.com' });
-    expect(response.status).toBe(503);
-    expect(response.body).toEqual({ error: 'email delivery not configured' });
+    expect(response.status).toBe(201);
+    expect(response.body.member.emailVerified).toBe(false);
     expect(response.body).not.toHaveProperty('code');
+  });
+
+  it('logs email codes in log mode without returning them', async () => {
+    const writes: string[] = [];
+    const spy = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: string | Uint8Array) => {
+      writes.push(chunk.toString());
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      const { app } = appFixture(undefined, undefined, { emailDelivery: 'log' }, false);
+      const response = await request(app).post('/v1/auth/register').send({ phone: '+1555000125', pin: '2468', email: 'logged@example.com' });
+      expect(response.status).toBe(201);
+      const code = writes.join('').match(/member email code (\d{6})/)?.[1];
+      expect(code).toMatch(/^\d{6}$/);
+      expect(response.text).not.toContain(code);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('keeps a verified email until a replacement code is confirmed and rejects a taken address', async () => {
+    const { app, emailCodes } = appFixture();
+    const registered = await request(app).post('/v1/auth/register').send({ phone: '+1555000133', pin: '2468', email: 'old@example.com' });
+    const accessToken = registered.body.tokens.accessToken as string;
+    expect((await request(app).post('/v1/me/email/verify').set('Authorization', `Bearer ${accessToken}`).send({ code: emailCodes.get('old@example.com') })).status).toBe(200);
+    const replacement = await request(app).post('/v1/me/email').set('Authorization', `Bearer ${accessToken}`).send({ email: 'typo@example.com' });
+    expect(replacement.status).toBe(202);
+    expect(await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000133' } })).toMatchObject({ email: 'old@example.com', emailVerifiedAt: expect.any(Date) });
+    const replacementVerified = await request(app).post('/v1/me/email/verify').set('Authorization', `Bearer ${accessToken}`).send({ code: emailCodes.get('typo@example.com') });
+    expect(replacementVerified.status).toBe(200);
+    const taken = await request(app).post('/v1/auth/register').send({ phone: '+1555000134', pin: '2468', email: 'taken@example.com' });
+    expect(taken.status).toBe(201);
+    expect((await request(app).post('/v1/me/email').set('Authorization', `Bearer ${accessToken}`).send({ email: 'taken@example.com' })).status).toBe(409);
   });
 
   it('rotates refresh tokens and revokes every device on reuse', async () => {
@@ -201,6 +234,9 @@ describe('member API', () => {
     expect(verified.body.emailVerified).toBe(true);
     const requested = await request(app).post('/v1/auth/pin-reset/request').send({ email: 'reset@example.com' });
     expect(requested.status).toBe(202);
+    const malformedCode = await request(app).post('/v1/auth/pin-reset/confirm').send({ email: 'reset@example.com', code: '1234', pin: '0000' });
+    expect(malformedCode.status).toBe(400);
+    expect(malformedCode.body.error).toBe('code must be exactly six digits');
     const reset = await request(app).post('/v1/auth/pin-reset/confirm').send({ email: 'reset@example.com', code: emailCodes.get('reset@example.com'), pin: '1357' });
     expect(reset.status).toBe(200);
     expect((await request(app).get('/v1/me').set('Authorization', `Bearer ${accessToken}`)).status).toBe(401);
@@ -219,6 +255,41 @@ describe('member API', () => {
     expect((await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000128' } })).pinAttempts).toBe(1);
   });
 
+  it('keeps Restricted Mode active on /v1/me while allowing loan repayment', async () => {
+    const { app } = appFixture();
+    for (const [phone, barcode] of [['+1555000136', 'restricted-borrower'], ['+1555000137', 'restricted-guarantor'], ['+1555000138', 'restricted-lender']] as const) {
+      expect((await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone, barcodeId: barcode })).status).toBe(201);
+    }
+    const borrower = await prisma.user.findUniqueOrThrow({ where: { barcodeId: 'restricted-borrower' } });
+    const guarantor = await prisma.user.findUniqueOrThrow({ where: { barcodeId: 'restricted-guarantor' } });
+    const lender = await prisma.user.findUniqueOrThrow({ where: { barcodeId: 'restricted-lender' } });
+    const systems = await addSystemAccounts();
+    await account(AccountType.GUARANTEE_LOCK, Asset.COUPON);
+    for (const [user, amount, externalRef] of [[guarantor, 10_000_000n, 'restricted-guarantor-fund'], [lender, 10_000_000n, 'restricted-lender-fund']] as const) {
+      const userAccount = await prisma.ledgerAccount.findFirstOrThrow({ where: { userId: user.id, type: AccountType.USER_COUPON, asset: Asset.COUPON } });
+      await postDeposit(prisma, { externalRef, userId: user.id, userCouponAccountId: userAccount.id, externalOnchainAccountId: systems.external.id, vaultAccountId: systems.vault.id, issuanceAccountId: systems.issuance.id, amountMicroUsdt: amount });
+    }
+    const borrowerToken = await memberToken(app, borrower.phoneNumber);
+    const guarantorToken = await memberToken(app, guarantor.phoneNumber);
+    const loanResponse = await request(app).post('/v1/me/loans').set('Authorization', `Bearer ${borrowerToken}`).send({
+      principalCoupons: '2',
+      installments: [{ amountCoupons: '2', dueAt: new Date(Date.now() + 86_400_000).toISOString() }],
+      guarantors: [{ barcodeId: guarantor.barcodeId, amountCoupons: '2' }],
+    });
+    expect(loanResponse.status).toBe(201);
+    const loanId = loanResponse.body.id as string;
+    const guaranteeId = loanResponse.body.guarantees[0].id as string;
+    expect((await request(app).post(`/v1/me/guarantees/${guaranteeId}/approve`).set('Authorization', `Bearer ${guarantorToken}`).send({ code: '1234', pin: '2468' })).status).toBe(200);
+    expect((await request(app).post(`/v1/me/guarantees/${guaranteeId}/activate`).set('Authorization', `Bearer ${borrowerToken}`).send({ code: '1234' })).status).toBe(200);
+    expect((await request(app).post(`/v1/loans/${loanId}/disburse`).set('Authorization', `Bearer ${token}`).send({ barcodeId: lender.barcodeId })).status).toBe(200);
+    const blockedTransfer = await request(app).post('/v1/me/transfers').set('Authorization', `Bearer ${guarantorToken}`).send({ toBarcodeId: borrower.barcodeId, amountCoupons: '1', idempotencyKey: 'restricted-transfer', pin: '2468' });
+    expect(blockedTransfer.status).toBe(400);
+    expect(blockedTransfer.body.error).toContain('restricted');
+    const repayment = await request(app).post(`/v1/me/loans/${loanId}/repay`).set('Authorization', `Bearer ${borrowerToken}`).send({ amountCoupons: '1', idempotencyKey: 'restricted-repayment' });
+    expect(repayment.status).toBe(200);
+    expect(repayment.body.outstandingCoupons).toBe('1');
+  });
+
   it('rejects service, admin, malformed, and expired tokens on /v1/me', async () => {
     const { app } = appFixture();
     const admin = await createAdmin(AdminRole.ADMIN);
@@ -232,6 +303,14 @@ describe('member API', () => {
     }
     const sameSecretAdmin = createAdminJwt(admin.id, admin.username, admin.role, config.memberJwtSecret, config.adminJwtTtlSeconds);
     expect((await request(app).get('/v1/me').set('Authorization', `Bearer ${sameSecretAdmin}`)).status).toBe(401);
+  });
+
+  it('returns 404 for malformed member resource ids', async () => {
+    const { app } = appFixture();
+    await request(app).post('/v1/auth/register').send({ phone: '+1555000135', pin: '2468' });
+    const accessToken = (await request(app).post('/v1/auth/login').send({ phone: '+1555000135', pin: '2468' })).body.tokens.accessToken as string;
+    const response = await request(app).delete('/v1/me/devices/not-a-uuid').set('Authorization', `Bearer ${accessToken}`);
+    expect(response.status).toBe(404);
   });
 
   it('rejects an expired member JWT', async () => {

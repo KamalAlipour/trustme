@@ -17,7 +17,7 @@ export type EmailSender = {
 export type MemberClaims = { sub: string; typ: 'member'; sid: string; iat: number; exp: number };
 export type MemberAuthDependencies = { config: ApiConfig; prisma: PrismaClient; emailSender?: EmailSender; logEmailCode?: (email: string, code: string) => void };
 
-const dummyPinHash = '$2b$12$LQv3c1yqBWx8w7m8M6qvUe8Qx3QmE4Qf8k4xw2z7Q8n6wYk7b8s9u';
+const dummyPinHash = bcrypt.hash(randomBytes(32).toString('hex'), 12);
 const genericLoginError = new HttpError(401, 'invalid phone or PIN');
 const emailCodePattern = /^\d{6}$/;
 const registerSchema = z.object({
@@ -73,7 +73,9 @@ export function requireMember(secret: string, prisma: PrismaClient): RequestHand
       if (!claims) { response.status(401).json({ error: 'unauthorized' }); return; }
       const device = await prisma.memberDevice.findUnique({ where: { id: claims.sid } });
       if (!device || device.userId !== claims.sub || device.revokedAt !== null || device.expiresAt <= new Date()) { response.status(401).json({ error: 'unauthorized' }); return; }
-      await prisma.memberDevice.update({ where: { id: device.id }, data: { lastSeenAt: new Date() } });
+      if (device.lastSeenAt <= new Date(Date.now() - 5 * 60_000)) {
+        await prisma.memberDevice.update({ where: { id: device.id }, data: { lastSeenAt: new Date() } });
+      }
       (request as MemberRequest).member = claims;
       next();
     } catch (error) { next(error); }
@@ -106,7 +108,7 @@ export async function verifyMemberPin(prisma: PrismaClient, userId: string, pin:
     if (!user) return 'invalid' as const;
     const now = new Date();
     if (user.pinLockedUntil && user.pinLockedUntil > now) return { locked: true as const, retryAfter: Math.ceil((user.pinLockedUntil.getTime() - now.getTime()) / 1000) };
-    const valid = await bcrypt.compare(pin, user.pinHash ?? dummyPinHash);
+    const valid = await bcrypt.compare(pin, user.pinHash ?? await dummyPinHash);
     if (valid && user.pinHash) {
       await tx.user.update({ where: { id: user.id }, data: { pinAttempts: 0, pinLockCount: 0, pinLockedUntil: null } });
       return 'valid' as const;
@@ -163,6 +165,30 @@ export async function verifyEmailCode(prisma: PrismaClient, userId: string, emai
   if (result !== 'valid') throw new HttpError(401, 'invalid email verification code');
 }
 
+export async function verifyAndSetEmail(prisma: PrismaClient, userId: string, code: string) {
+  const result = await withSerializableRetry(prisma, async (tx) => {
+    const verification = await tx.emailVerification.findFirst({
+      where: { userId, purpose: EmailVerificationPurpose.VERIFY_EMAIL, consumedAt: null },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    });
+    if (!verification || verification.expiresAt <= new Date() || verification.attempts >= 5) return null;
+    await tx.$queryRaw`SELECT id FROM "EmailVerification" WHERE id = ${verification.id}::uuid FOR UPDATE`;
+    if (!await bcrypt.compare(code, verification.codeHash)) {
+      const attempts = verification.attempts + 1;
+      await tx.emailVerification.update({
+        where: { id: verification.id },
+        data: { attempts, ...(attempts >= 5 ? { consumedAt: new Date() } : {}) },
+      });
+      return null;
+    }
+    const now = new Date();
+    await tx.emailVerification.update({ where: { id: verification.id }, data: { consumedAt: now } });
+    return tx.user.update({ where: { id: userId }, data: { email: verification.email, emailVerifiedAt: now } });
+  });
+  if (result === null) throw new HttpError(401, 'invalid email verification code');
+  return result;
+}
+
 export function createMemberAuthRouter(dependencies: MemberAuthDependencies): express.Router {
   const { config, prisma, emailSender: injectedSender, logEmailCode } = dependencies;
   const sender = injectedSender ?? smtpSender(config);
@@ -179,10 +205,15 @@ export function createMemberAuthRouter(dependencies: MemberAuthDependencies): ex
     try {
       const body = register(request.body);
       if (await prisma.user.findUnique({ where: { phoneNumber: body.phone } })) throw new HttpError(409, 'phone already registered');
-      if (body.email !== undefined && config.emailDelivery === 'none') throw new HttpError(503, 'email delivery not configured');
-      const user = await provisionUser(prisma, config, { phoneNumber: body.phone, ...(body.displayName === undefined ? {} : { displayName: body.displayName }) }, generateBarcodeId);
-      await prisma.user.update({ where: { id: user.id }, data: { pinHash: await bcrypt.hash(body.pin, 12), pinUpdatedAt: new Date(), ...(body.email === undefined ? {} : { email: body.email }) } });
-      if (body.email !== undefined) {
+      const pinUpdatedAt = new Date();
+      const user = await provisionUser(prisma, config, {
+        phoneNumber: body.phone,
+        pinHash: await bcrypt.hash(body.pin, 12),
+        pinUpdatedAt,
+        ...(body.displayName === undefined ? {} : { displayName: body.displayName }),
+        ...(body.email === undefined ? {} : { email: body.email }),
+      }, generateBarcodeId);
+      if (body.email !== undefined && config.emailDelivery !== 'none') {
         await issueEmailCode(prisma, config, sender, logEmailCode, user.id, body.email, EmailVerificationPurpose.VERIFY_EMAIL);
       }
       response.status(201).json(await tokenResponse(prisma, config, user.id, request.header('x-device-label') ?? 'Unknown device'));
@@ -192,7 +223,7 @@ export function createMemberAuthRouter(dependencies: MemberAuthDependencies): ex
     try {
       const body = loginSchema.parse(request.body);
       const user = await prisma.user.findUnique({ where: { phoneNumber: body.phone } });
-      if (!user) { await bcrypt.compare(body.pin, dummyPinHash); throw genericLoginError; }
+      if (!user) { await bcrypt.compare(body.pin, await dummyPinHash); throw genericLoginError; }
       await verifyMemberPin(prisma, user.id, body.pin);
       response.json(await tokenResponse(prisma, config, user.id, request.header('x-device-label') ?? 'Unknown device'));
     } catch (error) { next(error); }
@@ -258,7 +289,8 @@ export function createMemberAuthRouter(dependencies: MemberAuthDependencies): ex
       const email = emailValue(request.body?.email);
       const code = String(request.body?.code ?? '');
       const pin = String(request.body?.pin ?? '');
-      if (!emailCodePattern.test(code) || !fourDigitCodeSchema.safeParse(pin).success || isWeakPin(pin)) throw new HttpError(400, 'PIN is too weak');
+      if (!emailCodePattern.test(code)) throw new HttpError(400, 'code must be exactly six digits');
+      if (!fourDigitCodeSchema.safeParse(pin).success || isWeakPin(pin)) throw new HttpError(400, 'PIN is too weak');
       const user = await prisma.user.findUnique({ where: { email } });
       if (!user || user.emailVerifiedAt === null) throw new HttpError(401, 'invalid email verification code');
       await verifyEmailCode(prisma, user.id, email, EmailVerificationPurpose.PIN_RESET, code);

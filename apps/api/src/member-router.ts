@@ -30,7 +30,7 @@ import {
 import { DomainError } from '@trustme/core';
 import type { QueueLike } from './app.js';
 import { HttpError } from './http-error.js';
-import { isWeakPin, issueEmailCode, memberClaims, serializeMember, smtpSender, verifyEmailCode, verifyMemberPin } from './member-auth.js';
+import { isWeakPin, issueEmailCode, memberClaims, serializeMember, smtpSender, verifyAndSetEmail, verifyMemberPin } from './member-auth.js';
 import type { ApiConfig } from './config.js';
 
 export type MemberRouterDependencies = {
@@ -68,6 +68,7 @@ const contactSchema = z.object({ barcodeId: barcodeIdSchema, alias: z.string().t
 const contactPatchSchema = z.object({ alias: z.string().trim().min(1).max(128) });
 const transactionQuerySchema = z.object({ cursor: z.string().min(1).optional(), limit: z.coerce.number().int().min(1).max(100).default(25) });
 const contactsQuerySchema = z.object({ query: z.string().optional(), sort: z.enum(['alias', 'recent']).default('alias') });
+const idSchema = z.string().uuid();
 
 function parseCoupons(value: string): bigint {
   return BigInt(value);
@@ -75,6 +76,11 @@ function parseCoupons(value: string): bigint {
 
 function forbidden(): never {
   throw new HttpError(403, 'forbidden');
+}
+
+function pathId(value: string): string {
+  if (!idSchema.safeParse(value).success) throw new HttpError(404, 'resource not found');
+  return value;
 }
 
 async function member(prisma: PrismaClient, userId: string) {
@@ -252,7 +258,8 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       const email = body.email.trim().toLowerCase();
       const userId = memberClaims(request).sub;
       if (dependencies.config.emailDelivery === 'none') throw new HttpError(503, 'email delivery not configured');
-      await prisma.user.update({ where: { id: userId }, data: { email, emailVerifiedAt: null } });
+      const existing = await prisma.user.findUnique({ where: { email } });
+      if (existing !== null && existing.id !== userId) throw new HttpError(409, 'email already in use');
       await issueEmailCode(prisma, dependencies.config, sender, dependencies.logEmailCode, userId, email, EmailVerificationPurpose.VERIFY_EMAIL);
       response.status(202).json({ expiresAt: new Date(Date.now() + 15 * 60_000) });
     } catch (error) {
@@ -263,12 +270,13 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
   router.post('/email/verify', async (request, response, next) => {
     try {
       const body = emailCodeSchema.parse(request.body);
-      const user = await member(prisma, memberClaims(request).sub);
-      if (user.email === null) throw new HttpError(400, 'email is not set');
-      await verifyEmailCode(prisma, user.id, user.email, EmailVerificationPurpose.VERIFY_EMAIL, body.code);
-      const updated = await prisma.user.update({ where: { id: user.id }, data: { emailVerifiedAt: new Date() } });
+      const updated = await verifyAndSetEmail(prisma, memberClaims(request).sub, body.code);
       response.json(serializeMember(updated));
     } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        next(new HttpError(409, 'email already in use'));
+        return;
+      }
       next(error);
     }
   });
@@ -286,7 +294,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
   router.delete('/devices/:id', async (request, response, next) => {
     try {
       const claims = memberClaims(request);
-      const device = await prisma.memberDevice.findUniqueOrThrow({ where: { id: request.params.id } });
+      const device = await prisma.memberDevice.findUniqueOrThrow({ where: { id: pathId(request.params.id) } });
       if (device.userId !== claims.sub) forbidden();
       await prisma.memberDevice.update({ where: { id: device.id }, data: { revokedAt: new Date() } });
       response.status(204).send();
@@ -432,7 +440,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
   router.post('/escrows/:id/release', async (request, response, next) => {
     try {
       const body = codeSchema.parse(request.body);
-      const hold = await prisma.escrowHold.findUniqueOrThrow({ where: { id: request.params.id } });
+      const hold = await prisma.escrowHold.findUniqueOrThrow({ where: { id: pathId(request.params.id) } });
       if (hold.recipientId !== memberClaims(request).sub) forbidden();
       const released = await releaseEscrow(prisma, { holdId: hold.id, recipientAccountId: (await couponAccount(prisma, hold.recipientId)).id, code: body.code });
       response.json({ id: released?.id, status: released?.status });
@@ -443,7 +451,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
 
   router.post('/escrows/:id/cancel', async (request, response, next) => {
     try {
-      const hold = await prisma.escrowHold.findUniqueOrThrow({ where: { id: request.params.id } });
+      const hold = await prisma.escrowHold.findUniqueOrThrow({ where: { id: pathId(request.params.id) } });
       if (hold.senderId !== memberClaims(request).sub) forbidden();
       const cancelled = await cancelEscrow(prisma, { holdId: hold.id, senderAccountId: (await couponAccount(prisma, hold.senderId)).id });
       response.json({ id: cancelled.id, status: cancelled.status });
@@ -527,7 +535,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
   router.patch('/contacts/:id', async (request, response, next) => {
     try {
       const body = contactPatchSchema.parse(request.body);
-      const contact = await prisma.contact.findUniqueOrThrow({ where: { id: request.params.id } });
+      const contact = await prisma.contact.findUniqueOrThrow({ where: { id: pathId(request.params.id) } });
       if (contact.ownerId !== memberClaims(request).sub) forbidden();
       const updated = await prisma.contact.update({ where: { id: contact.id }, data: { alias: body.alias }, include: { contactUser: { select: { displayName: true, barcodeId: true } } } });
       response.json({ id: updated.id, alias: updated.alias, barcodeId: updated.contactUser.barcodeId, displayName: updated.contactUser.displayName, lastActivityAt: updated.lastActivityAt, createdAt: updated.createdAt });
@@ -538,7 +546,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
 
   router.delete('/contacts/:id', async (request, response, next) => {
     try {
-      const contact = await prisma.contact.findUniqueOrThrow({ where: { id: request.params.id } });
+      const contact = await prisma.contact.findUniqueOrThrow({ where: { id: pathId(request.params.id) } });
       if (contact.ownerId !== memberClaims(request).sub) forbidden();
       await prisma.contact.delete({ where: { id: contact.id } });
       response.status(204).send();
@@ -584,7 +592,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
   router.post('/loans/:id/repay', async (request, response, next) => {
     try {
       const body = repaymentSchema.parse(request.body);
-      const loan = await prisma.loan.findUniqueOrThrow({ where: { id: request.params.id } });
+      const loan = await prisma.loan.findUniqueOrThrow({ where: { id: pathId(request.params.id) } });
       if (loan.borrowerId !== memberClaims(request).sub) forbidden();
       if (loan.lenderId === null) throw new DomainError('loan has no lender');
       await repayLoan(prisma, {
@@ -625,7 +633,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
   router.post('/guarantees/:id/approve', async (request, response, next) => {
     try {
       const body = approvalSchema.parse(request.body);
-      const guarantee = await prisma.guarantee.findUniqueOrThrow({ where: { id: request.params.id } });
+      const guarantee = await prisma.guarantee.findUniqueOrThrow({ where: { id: pathId(request.params.id) } });
       if (guarantee.guarantorId !== memberClaims(request).sub) forbidden();
       await verifyMemberPin(prisma, guarantee.guarantorId, body.pin);
       const approved = await approveGuarantee(prisma, {
@@ -643,7 +651,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
   router.post('/guarantees/:id/activate', async (request, response, next) => {
     try {
       const body = codeSchema.parse(request.body);
-      const guarantee = await prisma.guarantee.findUniqueOrThrow({ where: { id: request.params.id }, include: { loan: true } });
+      const guarantee = await prisma.guarantee.findUniqueOrThrow({ where: { id: pathId(request.params.id) }, include: { loan: true } });
       if (guarantee.loan.borrowerId !== memberClaims(request).sub) forbidden();
       const activated = await activateGuarantee(prisma, { guaranteeId: guarantee.id, code: body.code });
       if (activated === null) throw new DomainError('guarantee activation failed');
@@ -655,7 +663,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
 
   router.post('/guarantees/:id/decline', async (request, response, next) => {
     try {
-      const guarantee = await prisma.guarantee.findUniqueOrThrow({ where: { id: request.params.id } });
+      const guarantee = await prisma.guarantee.findUniqueOrThrow({ where: { id: pathId(request.params.id) } });
       if (guarantee.guarantorId !== memberClaims(request).sub) forbidden();
       const declined = await cancelGuarantee(prisma, {
         guaranteeId: guarantee.id,

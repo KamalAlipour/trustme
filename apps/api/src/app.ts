@@ -158,7 +158,7 @@ export function createApp(dependencies: ApiDependencies): express.Express {
   app.use(express.json({ limit: config.bodyLimit }));
   app.use(pinoHttp({ logger }));
   app.use('/v1', rateLimit({ windowMs: config.rateLimitWindowMs, limit: config.rateLimitMax, standardHeaders: true, legacyHeaders: false }));
-  const logEmailCode = dependencies.logEmailCode ?? ((email: string, code: string) => logger.info({ email, emailCode: code }, 'member email code'));
+  const logEmailCode = dependencies.logEmailCode ?? ((email: string, code: string) => logger.info({ email }, `member email code ${code}`));
   app.use('/v1/auth', createMemberAuthRouter({
     config,
     prisma,
