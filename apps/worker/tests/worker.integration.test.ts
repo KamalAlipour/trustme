@@ -1,4 +1,7 @@
 import { beforeAll, afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { HDNodeWallet, id, Transaction, zeroPadValue, getAddress } from 'ethers';
 import { AccountType, Asset, DepositSweepStatus, PrismaClient, WithdrawalStatus } from '@trustme/db';
 import { postDeposit, requestWithdrawal } from '@trustme/core';
@@ -66,6 +69,17 @@ async function sweepFixture() {
     data: { address: derived.address },
   });
   return { user, accountNode, depositAddress: updatedAddress, derived };
+}
+
+async function withMnemonicFile<T>(contents: string, run: (filePath: string) => Promise<T>): Promise<T> {
+  const directory = await mkdtemp(join(tmpdir(), 'trustme-worker-'));
+  const filePath = join(directory, 'mnemonic.txt');
+  await writeFile(filePath, contents, 'utf8');
+  try {
+    return await run(filePath);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 }
 
 class TransientSweepProvider extends FakeChainProvider {
@@ -422,12 +436,71 @@ describe('deposit sweep', () => {
       usdtContractAddress: usdt,
       hotWalletPrivateKey: HDNodeWallet.createRandom().privateKey,
       depositWalletMnemonicPath: '/definitely/missing/trustme-deposit-wallet.txt',
+      depositDerivationPath: "m/44'/60'/0'/0",
       depositXpub: wallet.neuter().extendedKey,
     } as WorkerConfig;
     const warnings: string[] = [];
 
     await expect(loadDepositAccountNode(config, { warn: (message) => warnings.push(message) })).resolves.toBeNull();
     expect(warnings).toEqual(['deposit sweeping disabled: deposit wallet mnemonic is unavailable']);
+  });
+
+  it('loads a mnemonic-derived xpub from a configured non-default path', async () => {
+    const generated = HDNodeWallet.createRandom();
+    const phrase = generated.mnemonic?.phrase;
+    if (phrase === undefined) throw new Error('generated wallet did not include a mnemonic');
+    const derivationPath = "m/44'/60'/0'/0/0/44'/60'/0'/0";
+    const accountNode = HDNodeWallet.fromPhrase(phrase, undefined, derivationPath);
+    const config = {
+      depositWalletMnemonicPath: '',
+      depositDerivationPath: derivationPath,
+      depositXpub: accountNode.neuter().extendedKey,
+    } as WorkerConfig;
+
+    await withMnemonicFile(`# generated for this test\n\n${phrase}\n`, async (filePath) => {
+      config.depositWalletMnemonicPath = filePath;
+      await expect(loadDepositAccountNode(config, { warn: () => undefined }))
+        .resolves.toMatchObject({ depth: 9, address: accountNode.address });
+    });
+  });
+
+  it('ignores comments and blank lines in the mnemonic file', async () => {
+    const generated = HDNodeWallet.createRandom();
+    const phrase = generated.mnemonic?.phrase;
+    if (phrase === undefined) throw new Error('generated wallet did not include a mnemonic');
+    const derivationPath = "m/44'/60'/0'/0";
+    const accountNode = HDNodeWallet.fromPhrase(phrase, undefined, derivationPath);
+    const config = {
+      depositWalletMnemonicPath: '',
+      depositDerivationPath: derivationPath,
+      depositXpub: accountNode.neuter().extendedKey,
+    } as WorkerConfig;
+
+    await withMnemonicFile(`  # first header\n\n# second header\n ${phrase} \n`, async (filePath) => {
+      config.depositWalletMnemonicPath = filePath;
+      await expect(loadDepositAccountNode(config, { warn: () => undefined }))
+        .resolves.toMatchObject({ address: accountNode.address });
+    });
+  });
+
+  it('rejects a derivation path and xpub mismatch with an actionable error', async () => {
+    const generated = HDNodeWallet.createRandom();
+    const phrase = generated.mnemonic?.phrase;
+    if (phrase === undefined) throw new Error('generated wallet did not include a mnemonic');
+    const derivationPath = "m/44'/60'/0'/0/0/44'/60'/0'/0";
+    const configuredPath = "m/44'/60'/0'/0";
+    const wrongAccountNode = HDNodeWallet.fromPhrase(phrase, undefined, configuredPath);
+    const config = {
+      depositWalletMnemonicPath: '',
+      depositDerivationPath: derivationPath,
+      depositXpub: wrongAccountNode.neuter().extendedKey,
+    } as WorkerConfig;
+
+    await withMnemonicFile(phrase, async (filePath) => {
+      config.depositWalletMnemonicPath = filePath;
+      await expect(loadDepositAccountNode(config, { warn: () => undefined }))
+        .rejects.toThrow(`deposit wallet xpub does not match configured derivation path ${derivationPath}`);
+    });
   });
 });
 

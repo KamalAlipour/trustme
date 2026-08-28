@@ -36,12 +36,17 @@ against the production servers.
 2. Run `ops/s1-install.sh` on Server 1.
 3. Fill `/etc/trustme/trustme.env` from `ops/env/trustme.env.example` using the
    secret-management process. Keep it mode `0640`, owned by `root:trustme`.
-   Configure `DEPOSIT_XPUB` and `DEPOSIT_WALLET_MNEMONIC_PATH` together to
+   Configure `DEPOSIT_XPUB`, `DEPOSIT_DERIVATION_PATH`, and
+   `DEPOSIT_WALLET_MNEMONIC_PATH` together to
    enable automatic USDT sweeping. The mnemonic file must be owned by
-   `root:trustme` with mode `0640`; it is read only by the worker. If either
-   setting is absent or the file is unreadable, sweeping stays disabled and
-   the worker still starts. The worker validates that the mnemonic-derived
-   account xpub matches `DEPOSIT_XPUB` before starting.
+   `root:trustme` with mode `0640`; it is read only by the worker. If
+   `DEPOSIT_XPUB` is absent or the file is unreadable, sweeping stays disabled
+   and the worker still starts. The mnemonic file may contain blank lines and
+   whole-line `#` comments; they are ignored before parsing. The worker
+   derives the account node at `DEPOSIT_DERIVATION_PATH` and validates that
+   its xpub matches `DEPOSIT_XPUB` before starting. This path must be exactly
+   the path used when the configured xpub was generated; a mismatch aborts
+   worker startup by design.
    `SWEEP_MIN_MICRO_USDT` sets the minimum sweep balance,
    `SWEEP_MAX_GAS_TOP_UP_WEI` caps native-gas funding,
    `SWEEP_SCAN_INTERVAL_MS` controls the scan cadence, and

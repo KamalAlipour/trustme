@@ -19,8 +19,6 @@ export * from './dispatch.js';
 export * from './queues.js';
 export * from './sweep.js';
 
-const depositDerivationPath = "m/44'/60'/0'/0";
-
 export async function loadDepositAccountNode(
   config: WorkerConfig,
   log: { warn: (message: string) => void },
@@ -38,11 +36,18 @@ export async function loadDepositAccountNode(
   }
   let node: HDNodeWallet;
   try {
-    node = HDNodeWallet.fromPhrase(mnemonic.trim(), undefined, depositDerivationPath);
+    const cleanedMnemonic = mnemonic
+      .split(/\r?\n/)
+      .filter((line) => line.trim() !== '' && !line.trimStart().startsWith('#'))
+      .join(' ')
+      .trim();
+    node = HDNodeWallet.fromPhrase(cleanedMnemonic, undefined, config.depositDerivationPath);
   } catch {
     throw new Error('deposit wallet mnemonic is invalid');
   }
-  if (node.neuter().extendedKey !== config.depositXpub) throw new Error('deposit wallet xpub does not match configured xpub');
+  if (node.neuter().extendedKey !== config.depositXpub) {
+    throw new Error(`deposit wallet xpub does not match configured derivation path ${config.depositDerivationPath}`);
+  }
   return node;
 }
 
