@@ -21,7 +21,7 @@ export default function Scan() {
           router.replace({ pathname: (returnTo ?? '/(tabs)') as '/(tabs)' | '/contacts', params: { barcodeId: data } });
         }}
       />
-      <View style={{ position: 'absolute', top: 60, left: 20, right: 20 }}><Button title="لغو" onPress={() => router.back()} /></View>
+      <View style={{ position: 'absolute', top: 60, start: 20, end: 20 }}><Button title="لغو" onPress={() => router.back()} /></View>
     </View>
   );
 }
