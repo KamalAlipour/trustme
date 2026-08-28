@@ -11,8 +11,19 @@
       "expo-local-authentication",
       "expo-secure-store",
       "expo-camera",
-      ["expo-image-picker", { "photosPermission": "برای انتخاب مدرک تصویری به دسترسی عکس‌ها نیاز است.", "cameraPermission": "برای ثبت مدرک تصویری به دسترسی دوربین نیاز است." }],
-      ["expo-audio", { "microphonePermission": "برای ضبط مدرک صوتی به دسترسی میکروفون نیاز است." }]
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "برای انتخاب مدرک تصویری به دسترسی عکس‌ها نیاز است.",
+          "cameraPermission": "برای ثبت مدرک تصویری به دسترسی دوربین نیاز است."
+        }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "برای ضبط مدرک صوتی به دسترسی میکروفون نیاز است."
+        }
+      ]
     ],
     "ios": {
       "bundleIdentifier": "as.komasi.trustcoupon",
@@ -24,7 +35,20 @@
     },
     "android": {
       "package": "as.komasi.trustcoupon",
-      "permissions": ["RECORD_AUDIO", "CAMERA"]
-    }
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.CAMERA",
+        "android.permission.USE_BIOMETRIC",
+        "android.permission.USE_FINGERPRINT",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
+      ]
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "8ecf7ded-08c6-4f23-930a-ae92de35e6fa"
+      }
+    },
+    "owner": "kamalalipour"
   }
 }
