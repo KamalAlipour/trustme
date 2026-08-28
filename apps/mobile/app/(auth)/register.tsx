@@ -4,11 +4,12 @@ import { Pressable, Text, TextInput } from 'react-native';
 import { ApiError } from '../../src/api/client';
 import { useSession } from '../../src/auth/session';
 import { Page } from '../../src/components/Screen';
-import { fa } from '../../src/i18n/fa';
+import { useTranslation } from '../../src/i18n';
 import { isWeakPin } from '../../src/lib/pin';
 import { styles } from '../../src/styles';
 
 export default function Register() {
+  const { t } = useTranslation();
   const { signUp } = useSession();
   const [phone, setPhone] = useState('');
   const [displayName, setDisplayName] = useState('');
@@ -18,27 +19,27 @@ export default function Register() {
   const [error, setError] = useState('');
   const submit = async () => {
     setError('');
-    if (pin !== confirm) { setError('رمزها یکسان نیستند.'); return; }
-    if (isWeakPin(pin)) { setError('رمز تکراری یا دنباله‌دار قابل استفاده نیست.'); return; }
+    if (pin !== confirm) { setError(t.pinMismatch); return; }
+    if (isWeakPin(pin)) { setError(t.weakPin); return; }
     try {
       await signUp(phone, pin, displayName || undefined, email.trim() || undefined);
       router.replace('/');
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : fa.unknownError);
+      setError(cause instanceof ApiError ? cause.message : t.unknownError);
     }
   };
   return (
     <Page>
-      <Text style={styles.title}>{fa.register}</Text>
-      <TextInput value={phone} onChangeText={setPhone} placeholder={fa.phone} style={styles.input} keyboardType="phone-pad" />
-      <TextInput value={displayName} onChangeText={setDisplayName} placeholder={fa.displayName} style={styles.input} />
-      <TextInput value={email} onChangeText={setEmail} placeholder={fa.email} style={styles.input} keyboardType="email-address" autoCapitalize="none" />
-      <TextInput value={pin} onChangeText={(value) => setPin(value.replace(/\D/g, '').slice(0, 4))} placeholder={fa.pin} style={styles.input} keyboardType="number-pad" secureTextEntry />
-      <TextInput value={confirm} onChangeText={(value) => setConfirm(value.replace(/\D/g, '').slice(0, 4))} placeholder={fa.confirmPin} style={styles.input} keyboardType="number-pad" secureTextEntry />
-      <Pressable onPress={() => void submit()} style={styles.button}><Text style={styles.buttonText}>{fa.continue}</Text></Pressable>
-      {email.trim() ? <Text style={styles.muted}>{fa.emailCodeSent} {fa.noRecovery}</Text> : null}
+      <Text style={styles.title}>{t.register}</Text>
+      <TextInput value={phone} onChangeText={setPhone} placeholder={t.phone} style={styles.input} keyboardType="phone-pad" />
+      <TextInput value={displayName} onChangeText={setDisplayName} placeholder={t.displayName} style={styles.input} />
+      <TextInput value={email} onChangeText={setEmail} placeholder={t.email} style={styles.input} keyboardType="email-address" autoCapitalize="none" />
+      <TextInput value={pin} onChangeText={(value) => setPin(value.replace(/\D/g, '').slice(0, 4))} placeholder={t.pin} style={styles.input} keyboardType="number-pad" secureTextEntry />
+      <TextInput value={confirm} onChangeText={(value) => setConfirm(value.replace(/\D/g, '').slice(0, 4))} placeholder={t.confirmPin} style={styles.input} keyboardType="number-pad" secureTextEntry />
+      <Pressable onPress={() => void submit()} style={styles.button}><Text style={styles.buttonText}>{t.continue}</Text></Pressable>
+      {email.trim() ? <Text style={styles.muted}>{t.emailCodeSent} {t.noRecovery}</Text> : null}
       {error ? <Text style={styles.danger}>{error}</Text> : null}
-      <Pressable onPress={() => router.replace('/(auth)/login')} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>حساب دارید؟ ورود</Text></Pressable>
+      <Pressable onPress={() => router.replace('/(auth)/login')} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.accountExists}</Text></Pressable>
     </Page>
   );
 }

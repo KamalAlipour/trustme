@@ -2,6 +2,8 @@ import * as FileSystem from 'expo-file-system';
 import { request } from './client';
 import type { MediaAsset, MediaKind } from './types';
 import { isWebPlatform } from '../lib/platform';
+import type { Translations } from '../i18n/en';
+import { en } from '../i18n/en';
 
 const MAX_NON_VIDEO_BYTES = 10 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
@@ -19,12 +21,11 @@ export async function uploadMedia(input: {
   uri: string;
   kind: MediaKind;
   mimeType: string;
-}): Promise<UploadedMedia> {
+}, t: Translations = en): Promise<UploadedMedia> {
   if (isWebPlatform()) throw new BrowserFileSystemUnavailableError();
   const info = await FileSystem.getInfoAsync(input.uri, { size: true });
-  if (info.exists && info.size !== undefined) {
-    const maximum = input.kind === 'VIDEO' ? MAX_VIDEO_BYTES : MAX_NON_VIDEO_BYTES;
-    if (info.size > maximum) throw new Error(input.kind === 'VIDEO' ? 'ویدئو نمی‌تواند بیشتر از ۵۰ مگابایت باشد.' : 'فایل نمی‌تواند بیشتر از ۱۰ مگابایت باشد.');
+  if (info.exists && info.size !== undefined && info.size > (input.kind === 'VIDEO' ? MAX_VIDEO_BYTES : MAX_NON_VIDEO_BYTES)) {
+    throw new Error(t[input.kind === 'VIDEO' ? 'fileTooLargeVideo' : 'fileTooLarge']);
   }
   const opaqueName = input.kind === 'VIDEO'
     ? 'evidence.mp4'
