@@ -36,6 +36,23 @@ against the production servers.
 2. Run `ops/s1-install.sh` on Server 1.
 3. Fill `/etc/trustme/trustme.env` from `ops/env/trustme.env.example` using the
    secret-management process. Keep it mode `0640`, owned by `root:trustme`.
+   Configure `DEPOSIT_XPUB` and `DEPOSIT_WALLET_MNEMONIC_PATH` together to
+   enable automatic USDT sweeping. The mnemonic file must be owned by
+   `root:trustme` with mode `0640`; it is read only by the worker. If either
+   setting is absent or the file is unreadable, sweeping stays disabled and
+   the worker still starts. The worker validates that the mnemonic-derived
+   account xpub matches `DEPOSIT_XPUB` before starting.
+   `SWEEP_MIN_MICRO_USDT` sets the minimum sweep balance,
+   `SWEEP_MAX_GAS_TOP_UP_WEI` caps native-gas funding,
+   `SWEEP_SCAN_INTERVAL_MS` controls the scan cadence, and
+   `SWEEP_BATCH_SIZE` limits addresses considered per scan.
+   `SWEEP_FAILURE_BACKOFF_MS` delays replacement sweeps after a permanent
+   failure, while `SWEEP_MAX_ATTEMPTS` disarms an address after that many
+   consecutive failed sweep records. Failed records remain available for
+   admin attention. To re-arm an address, an authorized operator must set its
+   `DepositAddress.sweepPendingAt` marker again (for example, with an
+   `UPDATE "DepositAddress" SET "sweepPendingAt" = NOW() WHERE "id" = ...`
+   maintenance statement).
 4. Deploy a reviewed ref with `ops/deploy.sh --ref <git-ref>`.
 5. Run `ops/s2-standby.sh` on Server 2.
 
