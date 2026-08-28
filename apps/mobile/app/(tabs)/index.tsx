@@ -57,6 +57,7 @@ export default function Home() {
   return (
     <Page>
       <View style={styles.row}><Text style={styles.title}>{fa.home}</Text><Pressable onPress={() => router.push('/contacts')}><Text style={styles.secondaryButtonText}>{fa.contacts}</Text></Pressable></View>
+      <Pressable onPress={() => router.push('/barcodes')} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{fa.barcodeSearch}</Text></Pressable>
       <View style={styles.card}>
         <Text style={styles.muted}>{fa.balance}</Text>
         <Text style={{ ...styles.title, fontSize: 34 }}>{formatCoupons(balance.data?.coupons ?? '0')}</Text>

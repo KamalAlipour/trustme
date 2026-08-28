@@ -14,6 +14,7 @@ import { postWithClient } from './ledger.js';
 import { DomainError } from './domain-error.js';
 import { fourDigitCodeSchema } from './schemas.js';
 import { withSerializableRetry } from './retry.js';
+import { assertSameDemoSide } from './demo.js';
 
 const lockedGuaranteeStatuses = [GuaranteeStatus.CONFIRMATION_PENDING, GuaranteeStatus.CODE_LOCKED, GuaranteeStatus.ACTIVE];
 
@@ -153,6 +154,7 @@ export async function createLoanRequest(
     await assertNotRestricted(tx, input.borrowerId);
     await assertNoPinResetQuarantine(tx, input.borrowerId);
     for (const guarantorId of [...guarantorIds].sort()) {
+      await assertSameDemoSide(tx, input.borrowerId, guarantorId);
       await assertNotRestricted(tx, guarantorId);
       await assertNoPinResetQuarantine(tx, guarantorId);
     }
@@ -193,8 +195,9 @@ export async function approveGuarantee(
     if (guarantee.status !== GuaranteeStatus.PENDING) throw new DomainError('guarantee is not pending');
     const loan = await tx.loan.findUniqueOrThrow({ where: { id: guarantee.loanId } });
     if (loan.status !== LoanStatus.REQUESTED) throw new DomainError('loan is not awaiting guarantees');
-        await assertNotRestricted(tx, guarantee.guarantorId);
-        await assertNoPinResetQuarantine(tx, guarantee.guarantorId);
+    await assertSameDemoSide(tx, loan.borrowerId, guarantee.guarantorId);
+    await assertNotRestricted(tx, guarantee.guarantorId);
+    await assertNoPinResetQuarantine(tx, guarantee.guarantorId);
     await requireUserCouponAccount(tx, input.guarantorAccountId, guarantee.guarantorId);
     const lockAccount = await guaranteeLockAccount(tx, input.guaranteeLockAccountId);
     const transaction = await postWithClient(tx, {
@@ -251,6 +254,7 @@ export async function cancelGuarantee(
       throw new DomainError('guarantee cannot be cancelled in its current state');
     }
     const loan = await tx.loan.findUniqueOrThrow({ where: { id: guarantee.loanId } });
+    await assertSameDemoSide(tx, loan.borrowerId, guarantee.guarantorId);
     if (loan.status === LoanStatus.ACTIVE) throw new DomainError('guarantee cannot be cancelled after loan disbursement');
     if (guarantee.status !== GuaranteeStatus.PENDING) {
       const lockAccount = await guaranteeLockAccount(tx, input.guaranteeLockAccountId);
@@ -282,6 +286,7 @@ export async function disburseLoan(
     const loan = await tx.loan.findUniqueOrThrow({ where: { id: input.loanId } });
     if (loan.status !== LoanStatus.REQUESTED) throw new DomainError('loan is not awaiting disbursement');
     if (input.lenderId === loan.borrowerId) throw new DomainError('lender cannot be the borrower');
+    await assertSameDemoSide(tx, input.lenderId, loan.borrowerId);
     await assertNotRestricted(tx, input.lenderId);
     await assertNoPinResetQuarantine(tx, input.lenderId);
     await requireUserCouponAccount(tx, input.lenderAccountId, input.lenderId);
@@ -323,9 +328,10 @@ export async function repayLoan(
     await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "Loan" WHERE "id" = ${input.loanId}::uuid FOR UPDATE`);
     const loan = await tx.loan.findUniqueOrThrow({ where: { id: input.loanId } });
     if (loan.status !== LoanStatus.ACTIVE && loan.status !== LoanStatus.DEFAULTED) throw new DomainError('loan is not active');
+    if (loan.lenderId === null) throw new DomainError('loan has no lender');
+    await assertSameDemoSide(tx, loan.borrowerId, loan.lenderId);
     if (input.amountCoupons > loan.outstandingCoupons) throw new DomainError('repayment exceeds outstanding debt');
     await requireUserCouponAccount(tx, input.borrowerAccountId, loan.borrowerId);
-    if (loan.lenderId === null) throw new DomainError('loan has no lender');
     await requireUserCouponAccount(tx, input.lenderAccountId, loan.lenderId);
     await postWithClient(tx, {
       type: TransactionType.LOAN_REPAY,
@@ -382,8 +388,10 @@ export async function claimGuarantees(prisma: PrismaClient, input: { loanId: str
     const loan = await tx.loan.findUniqueOrThrow({ where: { id: input.loanId } });
     if (loan.status !== LoanStatus.ACTIVE) throw new DomainError('loan is not active');
     if (loan.lenderId === null) throw new DomainError('loan has no lender');
+    await assertSameDemoSide(tx, loan.borrowerId, loan.lenderId);
     await requireUserCouponAccount(tx, input.lenderAccountId, loan.lenderId);
     const guarantees = await tx.guarantee.findMany({ where: { loanId: loan.id, status: GuaranteeStatus.ACTIVE }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
+    for (const guarantee of guarantees) await assertSameDemoSide(tx, loan.borrowerId, guarantee.guarantorId);
     if (guarantees.length === 0) throw new DomainError('loan has no active guarantees');
     const overdueInstallment = (await tx.loanInstallment.findMany({
       where: { loanId: loan.id, dueAt: { lt: new Date() } },

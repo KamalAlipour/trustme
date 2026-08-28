@@ -16,10 +16,11 @@ import {
 
 const prisma = new PrismaClient();
 
-async function user(barcodeId: string) {
-  const created = await prisma.user.create({ data: { phoneNumber: `+1555${barcodeId}`, barcodeId } });
+async function user(barcodeId: string, isDemo = false) {
+  const created = await prisma.user.create({ data: { phoneNumber: `+1555${barcodeId}`, barcodeId, isDemo } });
   const account = await prisma.ledgerAccount.create({ data: { userId: created.id, type: AccountType.USER_COUPON, asset: Asset.COUPON } });
-  return { ...created, account };
+  const escrowAccount = await prisma.ledgerAccount.create({ data: { userId: created.id, type: AccountType.ESCROW, asset: Asset.COUPON } });
+  return { ...created, account, escrowAccount };
 }
 
 async function system(type: AccountType, asset: Asset) {
@@ -86,6 +87,35 @@ beforeEach(async () => {
 afterAll(async () => prisma.$disconnect());
 
 describe('lending domain', () => {
+  it('rejects mixed demo and real transfers, escrows, loans, and withdrawals', async () => {
+    const fixture = await setup();
+    const demo = await user('demo', true);
+    await expect(transferCoupons(prisma, {
+      userId: fixture.borrower.id,
+      counterpartyUserId: demo.id,
+      fromAccountId: fixture.borrower.account.id,
+      toAccountId: demo.account.id,
+      amountCoupons: 1n,
+      externalRef: 'mixed:transfer',
+    })).rejects.toThrow('demo and real accounts cannot exchange coupons');
+    await expect(createEscrowHold(prisma, {
+      senderId: fixture.borrower.id,
+      recipientId: demo.id,
+      senderAccountId: fixture.borrower.account.id,
+      escrowAccountId: demo.escrowAccount.id,
+      amountCoupons: 1n,
+      code: '1234',
+      expiresAt: new Date(Date.now() + 60_000),
+    })).rejects.toThrow('demo and real accounts cannot exchange coupons');
+    await expect(createLoanRequest(prisma, {
+      borrowerId: fixture.borrower.id,
+      principalCoupons: 1n,
+      installments: [{ amountCoupons: 1n, dueAt: new Date(Date.now() + 86_400_000) }],
+      guarantors: [{ guarantorId: demo.id, amountCoupons: 1n }],
+    })).rejects.toThrow('demo and real accounts cannot exchange coupons');
+    await expect(requestWithdrawal(prisma, withdrawalInput(fixture, demo))).rejects.toThrow('demo accounts cannot withdraw');
+  });
+
   it('allocates repayments and releases all guarantees on settlement', async () => {
     const fixture = await setup();
     const initialCouponCollateral = await couponCollateralTotal();

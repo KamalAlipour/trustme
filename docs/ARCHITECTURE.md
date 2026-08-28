@@ -64,6 +64,7 @@ Account types:
 | `USER_COUPON` | COUPON | >= 0 | a member's spendable coupons |
 | `ESCROW` | COUPON | >= 0 | coupons locked by a one-time code |
 | `SYSTEM_COUPON_ISSUANCE` | COUPON | <= 0 | mint/burn counter-account; its negative balance is the total coupons in circulation |
+| `SYSTEM_DEMO_ISSUANCE` | COUPON | <= 0 | isolated test-data mint counter; never included in real circulation or solvency |
 | `SYSTEM_VAULT_USDT` | USDT | >= 0 | USDT actually held by the platform |
 | `SYSTEM_WITHDRAWAL_PENDING` | USDT | >= 0 | USDT committed to a payout that has not confirmed on-chain |
 | `SYSTEM_FEE_COLLECTION` | USDT | >= 0 | fees earned |
@@ -86,6 +87,15 @@ Account types:
    so an in-flight withdrawal is counted as both held custody and a payout
    obligation. The admin dashboard surfaces the component breakdown and marks
    the system solvent only when the surplus is non-negative.
+
+Demo coupons use a separate `SYSTEM_DEMO_ISSUANCE` circuit and `DEMO_ISSUE`
+transactions. The demo issuance account and demo users are excluded from real
+coupon circulation and solvency calculations, so demo balances never increase
+fund, reserve, or collateral figures. Demo users have no PIN and cannot log in
+or withdraw. Transfers, escrows, loans, and guarantees require all
+participating users to be on the same demo/real side; mixed operations are
+rejected at the domain boundary. Demo data can therefore support search and
+demonstrations without becoming value in the real economy.
 
 **Concurrency.** A posting runs inside a single `prisma.$transaction` at
 `Serializable`, and locks the touched accounts with `SELECT ... FOR UPDATE`

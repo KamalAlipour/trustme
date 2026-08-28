@@ -16,6 +16,7 @@ export type OverviewData = {
   transactionCount24hByType: Record<string, number>;
   chain: { available: boolean; headBlock?: number; nextBlock?: string; lag?: string };
   hotWallet: { available: boolean; usdt?: string; nativeWei?: string };
+  demo: { couponsInCirculation: string; userCount: number };
 };
 
 export function availabilityLabel(available: boolean): string {
@@ -52,6 +53,13 @@ export function Overview({ data }: Readonly<{ data: OverviewData }>) {
           <StatCard label={labels.custody} value={data.solvency.custodyUsdt} />
           <StatCard label={labels.obligations} value={data.solvency.obligationsUsdt} />
         </div>
+        <section className="mt-4 rounded-lg border border-slate-300 bg-slate-50 p-5 shadow-sm">
+          <h2 className="text-lg font-semibold">{labels.demoData}</h2>
+          <div className="mt-3 grid gap-4 md:grid-cols-2">
+            <StatCard label={labels.demoCouponsInCirculation} value={data.demo.couponsInCirculation} />
+            <StatCard label={labels.demoUsers} value={String(data.demo.userCount)} />
+          </div>
+        </section>
       </div>
       <div className="grid gap-6 lg:grid-cols-2">
         <section className="rounded-lg border bg-white p-5 shadow-sm">

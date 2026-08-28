@@ -2,6 +2,7 @@ import { prisma, AccountType, Asset } from './index.js';
 
 const accounts = [
   { type: AccountType.SYSTEM_COUPON_ISSUANCE, asset: Asset.COUPON },
+  { type: AccountType.SYSTEM_DEMO_ISSUANCE, asset: Asset.COUPON },
   { type: AccountType.SYSTEM_VAULT_USDT, asset: Asset.USDT },
   { type: AccountType.SYSTEM_WITHDRAWAL_PENDING, asset: Asset.USDT },
   { type: AccountType.SYSTEM_FEE_COLLECTION, asset: Asset.USDT },
