@@ -1,10 +1,10 @@
 import { clearCredentials, readRefreshToken, saveRefreshToken } from '../lib/storage';
-import type { AuthResponse, Tokens } from './types';
+import type { AuthResponse, SecuritySetup, Tokens } from './types';
 
 export const API_BASE_URL = (process.env.EXPO_PUBLIC_API_URL ?? 'https://api-trustme.komasi.as').replace(/\/$/, '');
 
 export class ApiError extends Error {
-  public constructor(public readonly status: number, public readonly body: { error?: string; retryAfter?: number } = {}) {
+  public constructor(public readonly status: number, public readonly body: { error?: string; retryAfter?: number; remaining?: SecuritySetup['remaining'] } = {}) {
     super(body.error ?? 'request failed');
     this.name = 'ApiError';
   }
@@ -27,7 +27,8 @@ export class SessionExpiredError extends ApiError {
 }
 
 let accessToken: string | null = null;
-let refreshFlight: Promise<Tokens> | null = null;
+type RefreshResult = Tokens & { member?: AuthResponse['member'] };
+let refreshFlight: Promise<RefreshResult> | null = null;
 let onSessionExpired: (() => void) | undefined;
 
 export function setSessionExpiredHandler(handler: (() => void) | undefined): void {
@@ -63,7 +64,7 @@ async function parseResponse(response: Response): Promise<unknown> {
   }
 }
 
-async function refreshSession(): Promise<Tokens> {
+async function refreshSession(): Promise<RefreshResult> {
   if (refreshFlight !== null) return refreshFlight;
   refreshFlight = (async () => {
     const refreshToken = await readRefreshToken();
@@ -73,11 +74,11 @@ async function refreshSession(): Promise<Tokens> {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ refreshToken }),
     });
-    const body = await parseResponse(response) as { tokens?: Tokens; error?: string; retryAfter?: number };
+    const body = await parseResponse(response) as { tokens?: Tokens; member?: AuthResponse['member']; error?: string; retryAfter?: number };
     if (!response.ok || body.tokens === undefined) return expireSession();
     accessToken = body.tokens.accessToken;
     await saveRefreshToken(body.tokens.refreshToken);
-    return body.tokens;
+    return { ...body.tokens, ...(body.member === undefined ? {} : { member: body.member }) };
   })();
   try {
     return await refreshFlight;
@@ -86,7 +87,7 @@ async function refreshSession(): Promise<Tokens> {
   }
 }
 
-export function refresh(): Promise<Tokens> {
+export function refresh(): Promise<RefreshResult> {
   return refreshSession();
 }
 
@@ -118,7 +119,7 @@ async function authenticatedFetch(path: string, options: RequestOptions = {}): P
     return authenticatedFetch(path, { ...options, retried: true });
   }
   if (response.status === 401 && auth === 'member') return expireSession();
-  if (!response.ok) throw new ApiError(response.status, await parseResponse(response) as { error?: string; retryAfter?: number });
+  if (!response.ok) throw new ApiError(response.status, await parseResponse(response) as { error?: string; retryAfter?: number; remaining?: SecuritySetup['remaining'] });
   return response;
 }
 

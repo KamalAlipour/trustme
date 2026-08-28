@@ -178,6 +178,33 @@ transactions use independent nonces and run on the separate sweep queue.
 
 ## 7. Admin dashboard
 
+## Member security setup
+
+Member registration may include an email address and starts with incomplete
+security setup. The API is authoritative for email verification, biometric
+enrolment, and setup completion; member routes remain unavailable until the
+required steps are complete. Native clients enrol local device biometrics and
+use that biometric check to unlock a device-held key. Browser clients and
+native devices without usable biometrics may acknowledge setup with the PIN
+without setting the biometric-enrolled flag; the API reports this as
+`biometricPending` so a later phone can offer real enrolment. This is not
+server-verified biometric attestation: a future device-key attestation flow is
+a deliberate follow-up.
+
+The security-setup migration grandfathered existing users with a non-null PIN
+by acknowledging their setup rather than claiming a biometric enrolment that
+never happened, and setting the setup-completed timestamp. This preserves
+access for accounts created before the feature; a subsequent PIN reset clears
+the state and requires setup again.
+
+Resetting a member PIN revokes active devices, clears biometric enrolment and
+setup completion, and places the account in a timed quarantine. While
+`PIN_RESET_QUARANTINE_HOURS` has not elapsed, withdrawals, transfers, escrow,
+and other outgoing-value operations are blocked. Administrators can see the
+quarantine timestamp on the member record and the resulting availability
+blocker; the member must complete email verification (when required) and
+biometric setup again after the quarantine reset.
+
 Next.js App Router, protected by JWT with roles `VIEWER`, `APPROVER`, `ADMIN`;
 passwords are argon2 hashes, and approval actions are written to an append-only
 `AdminAuditLog`.

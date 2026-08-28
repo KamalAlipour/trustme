@@ -6,6 +6,7 @@ import {
   createEscrowHold,
   postDeposit,
   quoteWithdrawalForUsdt,
+  readWithdrawalAvailability,
   rejectWithdrawal,
   refundWithdrawal,
   releaseEscrow,
@@ -194,6 +195,40 @@ describe('money and ledger domain', () => {
       toAccountId: fixtureAccounts.users[1]!,
       amountCoupons: 1n,
     })).rejects.toThrow('cannot be negative');
+  });
+
+  it('blocks outgoing value during PIN reset quarantine and restores it after expiry', async () => {
+    const fixtureAccounts = await fixture(2);
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: (await prisma.user.findFirstOrThrow()).id } });
+    await postDeposit(prisma, {
+      externalRef: 'deposit:quarantine:0',
+      userId: user.id,
+      userCouponAccountId: fixtureAccounts.users[0]!,
+      externalOnchainAccountId: fixtureAccounts.external,
+      vaultAccountId: fixtureAccounts.vault,
+      issuanceAccountId: fixtureAccounts.issuance,
+      amountMicroUsdt: 1_000_000_000n,
+    });
+    await prisma.user.update({ where: { id: user.id }, data: { pinResetQuarantineUntil: new Date(Date.now() + 60_000) } });
+    await expect(readWithdrawalAvailability(prisma, user.id)).resolves.toMatchObject({ blockers: ['pin_reset_quarantine'] });
+    await expect(transferCoupons(prisma, {
+      externalRef: 'transfer:quarantine',
+      fromAccountId: fixtureAccounts.users[0]!,
+      toAccountId: fixtureAccounts.users[1]!,
+      amountCoupons: 1n,
+      userId: user.id,
+    })).rejects.toThrow('account is quarantined');
+    await expect(createEscrowHold(prisma, {
+      senderId: user.id,
+      recipientId: (await prisma.user.findFirstOrThrow({ where: { id: { not: user.id } } })).id,
+      senderAccountId: fixtureAccounts.users[0]!,
+      escrowAccountId: fixtureAccounts.escrows[0]!,
+      amountCoupons: 1n,
+      code: '1234',
+      expiresAt: new Date(Date.now() + 60_000),
+    })).rejects.toThrow('account is quarantined');
+    await prisma.user.update({ where: { id: user.id }, data: { pinResetQuarantineUntil: new Date(Date.now() - 1) } });
+    await expect(readWithdrawalAvailability(prisma, user.id)).resolves.not.toMatchObject({ blockers: ['pin_reset_quarantine'] });
   });
 
   it('calculates fee, net, and approval boundaries with integer arithmetic', () => {

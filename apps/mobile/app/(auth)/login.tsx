@@ -23,14 +23,14 @@ export default function Login() {
     return () => clearInterval(timer);
   }, [lockedUntil]);
   useEffect(() => {
-    if (ready && member !== null) router.replace('/(tabs)');
+    if (ready && member !== null) router.replace('/');
   }, [member, ready]);
 
   const submit = async () => {
     setError('');
     try {
       await signIn(phone, pin);
-      router.replace('/(tabs)');
+      router.replace('/');
     } catch (cause) {
       if (cause instanceof LockedError) {
         setLockedUntil(Date.now() + cause.retryAfter * 1000);

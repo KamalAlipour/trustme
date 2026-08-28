@@ -15,7 +15,7 @@ import { couponsFromMicroUsdt, withdrawalQuote } from './money.js';
 import { evmAddressSchema, fourDigitCodeSchema } from './schemas.js';
 import { withSerializableRetry } from './retry.js';
 import { DomainError } from './domain-error.js';
-import { assertNotRestricted, readWithdrawalAvailabilityInTransaction } from './lending.js';
+import { assertNoPinResetQuarantine, assertNotRestricted, readWithdrawalAvailabilityInTransaction } from './lending.js';
 
 export async function postDeposit(
   prisma: PrismaClient,
@@ -64,7 +64,10 @@ export async function transferCoupons(
 ) {
   if (input.amountCoupons <= 0n) throw new DomainError('transfer amount must be positive');
   return withSerializableRetry(prisma, async (tx) => {
-    if (input.userId !== undefined) await assertNotRestricted(tx, input.userId);
+    if (input.userId !== undefined) {
+      await assertNotRestricted(tx, input.userId);
+      await assertNoPinResetQuarantine(tx, input.userId);
+    }
     return postWithClient(tx, {
       type: TransactionType.TRANSFER,
       externalRef: input.externalRef,
@@ -99,6 +102,7 @@ export async function createEscrowHold(
     const existing = await tx.escrowHold.findFirst({ where: { transaction: { externalRef } } });
     if (existing) return existing;
     await assertNotRestricted(tx, input.senderId);
+    await assertNoPinResetQuarantine(tx, input.senderId);
     const transaction = await postWithClient(tx, {
       type: TransactionType.ESCROW_HOLD,
       externalRef,
@@ -231,9 +235,11 @@ export async function requestWithdrawal(
   const transactionStatus = status === WithdrawalStatus.APPROVED ? TransactionStatus.APPROVED : TransactionStatus.PENDING_APPROVAL;
   return withSerializableRetry(prisma, async (tx: Prisma.TransactionClient) => {
     await assertNotRestricted(tx, input.userId);
+    await assertNoPinResetQuarantine(tx, input.userId);
     const availability = await readWithdrawalAvailabilityInTransaction(tx, input.userId);
     if (availability.blockers.includes('pending_code')) throw new DomainError('withdrawal blocked by pending code');
     if (availability.blockers.includes('unresolved_claim')) throw new DomainError('withdrawal blocked by unresolved claim');
+    if (availability.blockers.includes('pin_reset_quarantine')) throw new DomainError('withdrawal blocked by PIN reset quarantine');
     if (input.couponsGross > availability.availableToWithdrawCoupons) throw new DomainError('withdrawal exceeds available balance');
     if (input.cooldownHours < 0) throw new DomainError('withdrawal cooldown must be non-negative');
     const eligibleAt = new Date(Date.now() + input.cooldownHours * 60 * 60 * 1000);

@@ -155,6 +155,10 @@ model User {
   pinAttempts          Int                 @default(0)
   pinLockCount         Int                 @default(0)
   pinLockedUntil       DateTime?
+  securitySetupCompletedAt DateTime?
+  biometricEnrolledAt  DateTime?
+  setupAcknowledgedAt DateTime?
+  pinResetQuarantineUntil DateTime?
   dustMicroUsdt        BigInt              @default(0)
   activeGuaranteeCount Int                 @default(0)
   createdAt            DateTime            @default(now())
@@ -177,6 +181,8 @@ model User {
   mediaAssets          MediaAsset[]
   buyerRefunds         RefundRequest[]     @relation("RefundBuyer")
   sellerRefunds        RefundRequest[]     @relation("RefundSeller")
+
+  @@index([pinResetQuarantineUntil])
 }
 
 model MemberDevice {

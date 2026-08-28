@@ -41,7 +41,7 @@ import {
 import { DomainError } from '@trustme/core';
 import type { QueueLike } from './app.js';
 import { HttpError } from './http-error.js';
-import { isWeakPin, issueEmailCode, memberClaims, serializeMember, smtpSender, verifyAndSetEmail, verifyMemberPin } from './member-auth.js';
+import { isWeakPin, issueEmailCode, memberClaims, requireCompletedSetup, securitySetupStatus, serializeMember, smtpSender, verifyAndSetEmail, verifyMemberPin } from './member-auth.js';
 import type { ApiConfig } from './config.js';
 import { deleteMediaFile, mediaPath, uploadMedia } from './media.js';
 
@@ -326,6 +326,26 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
   const sender = dependencies.emailSender ?? smtpSender(dependencies.config);
   const router = express.Router();
   const mediaLimiter = rateLimit({ windowMs: 60 * 60_000, limit: 20, keyGenerator: (request) => memberClaims(request).sub });
+  const setupAllowedPaths = new Set(['/security-setup', '/email', '/email/verify', '/logout']);
+  router.use((request, response, next) => {
+    if (setupAllowedPaths.has(request.path)) {
+      next();
+      return;
+    }
+    requireCompletedSetup(dependencies.config, prisma)(request, response, next);
+  });
+
+  router.get('/security-setup', async (request, response, next) => {
+    try {
+      const user = await prisma.user.findUniqueOrThrow({
+        where: { id: memberClaims(request).sub },
+        select: { emailVerifiedAt: true, biometricEnrolledAt: true, setupAcknowledgedAt: true, securitySetupCompletedAt: true },
+      });
+      response.json(securitySetupStatus(user, dependencies.config.requireEmailVerification));
+    } catch (error) {
+      next(error);
+    }
+  });
 
   router.get('/', async (request, response, next) => {
     try {
@@ -379,7 +399,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
   router.post('/email/verify', async (request, response, next) => {
     try {
       const body = emailCodeSchema.parse(request.body);
-      const updated = await verifyAndSetEmail(prisma, memberClaims(request).sub, body.code);
+      const updated = await verifyAndSetEmail(prisma, memberClaims(request).sub, body.code, dependencies.config.requireEmailVerification);
       response.json(serializeMember(updated));
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {

@@ -204,6 +204,42 @@ the operator's failover checklist.
 
 ## Required operator input and caveats
 
+## Member security configuration
+
+Set `REQUIRE_EMAIL_VERIFICATION=true` to require email verification before
+member security setup completes, and configure a real email delivery channel
+(`log` is suitable only for non-production testing). Startup refuses the
+conflicting pair `REQUIRE_EMAIL_VERIFICATION=true` and
+`EMAIL_DELIVERY=none`, because registrations could not complete setup.
+The default is `REQUIRE_EMAIL_VERIFICATION=false`, so registration does not
+depend on SMTP or email-code delivery unless an operator enables the setting.
+`PIN_RESET_QUARANTINE_HOURS` controls the outgoing-value quarantine after a
+PIN reset and defaults to 72 hours.
+
+Biometric enrolment records local device biometrics used to unlock a
+device-held key; it is not server-side biometric attestation. Browser clients
+and native devices without usable enrolled biometrics can complete setup with
+the PIN acknowledgement path and are shown a notice that native biometrics
+require the mobile app or can be enabled later. The API reports this state as
+`biometricPending` without claiming that biometrics were enrolled.
+
+The security-setup migration backfills existing PIN-protected accounts with
+acknowledgement and setup-completed timestamps (not a biometric enrolment they
+never performed) so the feature does not lock out
+members who were created before its release. This is a deliberate
+grandfathering carve-out; a PIN reset clears the setup state and requires the
+member to establish it again.
+
+After a PIN reset, the old devices are revoked, biometric enrolment is cleared,
+and withdrawals, transfers, escrow, and other outgoing-value operations are
+blocked until quarantine expiry. An administrator sees the quarantine
+timestamp and `pin_reset_quarantine` availability blocker in the member
+record/withdrawal view. After the quarantine, the member signs in and
+re-establishes the required setup. If a sweep or other operational marker is
+being managed separately, operators re-arm it by setting its pending marker;
+the security quarantine itself expires automatically according to the configured
+duration.
+
 The user must still provide and authorize:
 
 * distinct TrustMe API and admin hostnames;

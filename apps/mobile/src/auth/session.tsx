@@ -1,15 +1,17 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { authenticate, forgetSession, logout, refresh, request, setAccessToken, setSessionExpiredHandler } from '../api/client';
-import type { AuthResponse, Member } from '../api/types';
+import type { AuthResponse, Member, SecuritySetup } from '../api/types';
 import { hasStoredCredentials, saveCredentials } from '../lib/storage';
 import { biometricAvailable, unlockPin } from '../lib/biometrics';
 
 type SessionContextValue = {
   member: Member | null;
+  setup: SecuritySetup | null;
   ready: boolean;
   biometric: boolean;
   signIn: (phone: string, pin: string) => Promise<void>;
   signUp: (phone: string, pin: string, displayName?: string, email?: string) => Promise<AuthResponse>;
+  refreshSetup: () => Promise<SecuritySetup>;
   signOut: () => Promise<void>;
   getStepUpPin: () => Promise<string | null>;
 };
@@ -18,6 +20,7 @@ const SessionContext = createContext<SessionContextValue | null>(null);
 
 export function SessionProvider({ children }: { children: React.ReactNode }) {
   const [member, setMember] = useState<Member | null>(null);
+  const [setup, setSetup] = useState<SecuritySetup | null>(null);
   const [ready, setReady] = useState(false);
   const [biometric, setBiometric] = useState(false);
 
@@ -37,8 +40,9 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         try {
           const tokens = await refresh();
           if (active) {
-            const response = await request<Member>('/v1/me');
-            setMember(response);
+            if (tokens.member !== undefined) setMember(tokens.member);
+            const setupResponse = await request<SecuritySetup>('/v1/me/security-setup');
+            setSetup(setupResponse);
             setAccessToken(tokens.accessToken);
           }
         } catch {
@@ -55,12 +59,14 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
 
   const value = useMemo<SessionContextValue>(() => ({
     member,
+    setup,
     ready,
     biometric,
     signIn: async (phone, pin) => {
       const result = await authenticate('/v1/auth/login', { phone, pin });
       await saveCredentials(result.tokens.refreshToken, pin);
       setMember(result.member);
+      setSetup(await request<SecuritySetup>('/v1/me/security-setup'));
     },
     signUp: async (phone, pin, displayName, email) => {
       const result = await authenticate('/v1/auth/register', {
@@ -71,6 +77,12 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       });
       await saveCredentials(result.tokens.refreshToken, pin);
       setMember(result.member);
+      setSetup(await request<SecuritySetup>('/v1/me/security-setup'));
+      return result;
+    },
+    refreshSetup: async () => {
+      const result = await request<SecuritySetup>('/v1/me/security-setup');
+      setSetup(result);
       return result;
     },
     signOut: async () => {
@@ -84,7 +96,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         return null;
       }
     },
-  }), [biometric, member, ready]);
+  }), [biometric, member, ready, setup]);
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }

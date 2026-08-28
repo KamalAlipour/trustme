@@ -11,6 +11,8 @@ const config = {
   memberJwtTtlSeconds: 900,
   memberRefreshTtlDays: 60,
   emailDelivery: 'none' as const,
+  requireEmailVerification: true,
+  pinResetQuarantineHours: 72,
   nodeEnv: 'test',
   polygonRpcUrl: 'http://127.0.0.1:8545',
   usdtContractAddress: '0x52908400098527886E0F7030069857D2E4169EE7',
