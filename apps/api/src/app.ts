@@ -48,6 +48,26 @@ export { HttpError } from './http-error.js';
 type RedisLike = { ping(): Promise<string> };
 export type QueueLike = Pick<Queue, 'add'>;
 
+function useConfiguredCors(app: express.Express, allowedOrigins: string[]): void {
+  const allowed = new Set(allowedOrigins);
+  app.use((request, response, next) => {
+    const origin = request.header('origin');
+    if (origin === undefined || !allowed.has(origin)) {
+      next();
+      return;
+    }
+    response.setHeader('Access-Control-Allow-Origin', origin);
+    response.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    response.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
+    response.setHeader('Vary', 'Origin');
+    if (request.method === 'OPTIONS') {
+      response.status(204).end();
+      return;
+    }
+    next();
+  });
+}
+
 const couponsSchema = z.string().regex(/^[1-9]\d*$/, 'amountCoupons must be a positive decimal string');
 const userBodySchema = z.object({
   phone: z.string().min(1),
@@ -158,6 +178,7 @@ export function createApp(dependencies: ApiDependencies): express.Express {
   app.use(express.json({ limit: config.bodyLimit }));
   app.use(pinoHttp({ logger }));
   app.use('/v1', rateLimit({ windowMs: config.rateLimitWindowMs, limit: config.rateLimitMax, standardHeaders: true, legacyHeaders: false }));
+  useConfiguredCors(app, config.allowedOrigins);
   const logEmailCode = dependencies.logEmailCode ?? ((email: string, code: string) => logger.info({ email }, `member email code ${code}`));
   app.use('/v1/auth', createMemberAuthRouter({
     config,

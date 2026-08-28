@@ -17,4 +17,9 @@ describe('API configuration', () => {
   it('rejects email-code logging in production', () => {
     expect(() => loadApiConfig({ ...validEnvironment, NODE_ENV: 'production', EMAIL_DELIVERY: 'log' })).toThrow('EMAIL_DELIVERY=log is not allowed in production');
   });
+
+  it('parses configured browser origins', () => {
+    expect(loadApiConfig({ ...validEnvironment, API_ALLOWED_ORIGINS: 'https://app-trustcoupon.komasi.as, https://example.test ' }).allowedOrigins)
+      .toEqual(['https://app-trustcoupon.komasi.as', 'https://example.test']);
+  });
 });
