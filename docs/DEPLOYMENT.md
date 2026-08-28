@@ -224,7 +224,8 @@ require the mobile app or can be enabled later. The API reports this state as
 `biometricPending` without claiming that biometrics were enrolled.
 
 The security-setup migration backfills existing PIN-protected accounts with
-biometric and setup-completed timestamps so the feature does not lock out
+acknowledgement and setup-completed timestamps (not a biometric enrolment they
+never performed) so the feature does not lock out
 members who were created before its release. This is a deliberate
 grandfathering carve-out; a PIN reset clears the setup state and requires the
 member to establish it again.

@@ -192,7 +192,8 @@ server-verified biometric attestation: a future device-key attestation flow is
 a deliberate follow-up.
 
 The security-setup migration grandfathered existing users with a non-null PIN
-by setting their biometric and setup-completed timestamps. This preserves
+by acknowledging their setup rather than claiming a biometric enrolment that
+never happened, and setting the setup-completed timestamp. This preserves
 access for accounts created before the feature; a subsequent PIN reset clears
 the state and requires setup again.
 
