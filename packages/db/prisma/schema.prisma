@@ -90,6 +90,14 @@ enum WithdrawalStatus {
   REFUNDED
 }
 
+enum DepositSweepStatus {
+  PENDING
+  GAS_FUNDING
+  BROADCAST
+  CONFIRMED
+  FAILED
+}
+
 enum AdminRole {
   VIEWER
   APPROVER
@@ -216,12 +224,32 @@ model Contact {
 }
 
 model DepositAddress {
-  id              String   @id @default(uuid()) @db.Uuid
-  userId          String   @db.Uuid
-  derivationIndex Int      @unique @default(autoincrement())
-  address         String   @unique
-  createdAt       DateTime @default(now())
-  user            User     @relation(fields: [userId], references: [id])
+  id              String         @id @default(uuid()) @db.Uuid
+  userId          String         @db.Uuid
+  derivationIndex Int            @unique @default(autoincrement())
+  address         String         @unique
+  createdAt       DateTime       @default(now())
+  sweepPendingAt  DateTime?
+  user            User           @relation(fields: [userId], references: [id])
+  sweeps          DepositSweep[]
+
+  @@index([sweepPendingAt])
+}
+
+model DepositSweep {
+  id               String            @id @default(uuid()) @db.Uuid
+  depositAddressId String            @db.Uuid
+  amountMicroUsdt  BigInt
+  gasTxHash        String?
+  sweepTxHash      String?           @unique
+  status           DepositSweepStatus @default(PENDING)
+  attempts         Int               @default(0)
+  lastError        String?
+  createdAt        DateTime          @default(now())
+  confirmedAt      DateTime?
+  depositAddress   DepositAddress    @relation(fields: [depositAddressId], references: [id])
+
+  @@index([depositAddressId])
 }
 
 model LedgerAccount {

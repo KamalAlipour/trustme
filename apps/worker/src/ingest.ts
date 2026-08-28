@@ -19,6 +19,7 @@ export type IngestResult = {
   ignored: number;
   rewound: boolean;
   scannedThrough: number | null;
+  sweepDepositAddressIds: string[];
 };
 
 async function getCursor(prisma: PrismaClient, startBlock: number) {
@@ -42,9 +43,9 @@ function decodeTransfer(log: ChainLog): { to: string; amount: bigint } | null {
 
 async function matchingDeposits(prisma: PrismaClient, logs: ChainLog[]) {
   const addresses = [...new Set(logs.map((log) => decodeTransfer(log)?.to).filter((address): address is string => address !== undefined))];
-  if (addresses.length === 0) return new Map<string, { userId: string; address: string }>();
-  const rows = await prisma.$queryRaw<Array<{ userId: string; address: string }>>(
-    Prisma.sql`SELECT "userId", "address" FROM "DepositAddress" WHERE lower("address") IN (${Prisma.join(addresses.map((address) => Prisma.sql`${address.toLowerCase()}`))})`,
+  if (addresses.length === 0) return new Map<string, { id: string; userId: string; address: string }>();
+  const rows = await prisma.$queryRaw<Array<{ id: string; userId: string; address: string }>>(
+    Prisma.sql`SELECT "id", "userId", "address" FROM "DepositAddress" WHERE lower("address") IN (${Prisma.join(addresses.map((address) => Prisma.sql`${address.toLowerCase()}`))})`,
   );
   return new Map(rows.map((row) => [row.address.toLowerCase(), row]));
 }
@@ -63,15 +64,17 @@ export async function ingestOnce(
   let ignored = 0;
   let rewound = false;
   let scannedThrough: number | null = null;
+  const sweepDepositAddressIds = new Set<string>();
   for (let chunk = 0; chunk < config.ingestChunksPerTick; chunk += 1) {
     const result = await ingestRange(prisma, provider, config, log);
     processed += result.processed;
     ignored += result.ignored;
     rewound ||= result.rewound;
     if (result.scannedThrough !== null) scannedThrough = result.scannedThrough;
+    for (const depositAddressId of result.sweepDepositAddressIds) sweepDepositAddressIds.add(depositAddressId);
     if (result.rewound || result.scannedThrough === null) break;
   }
-  return { processed, ignored, rewound, scannedThrough };
+  return { processed, ignored, rewound, scannedThrough, sweepDepositAddressIds: [...sweepDepositAddressIds] };
 }
 
 async function ingestRange(
@@ -91,12 +94,12 @@ async function ingestRange(
         data: { nextBlock: BigInt(rewoundTo), lastBlockHash: null },
       });
       log.error(`deep chain reorg detected; rewound cursor from ${nextBlock} to ${rewoundTo}`);
-      return { processed: 0, ignored: 0, rewound: true, scannedThrough: null };
+      return { processed: 0, ignored: 0, rewound: true, scannedThrough: null, sweepDepositAddressIds: [] };
     }
   }
   const head = await provider.getBlockNumber();
   const safeHead = head - config.confirmations;
-  if (safeHead < nextBlock) return { processed: 0, ignored: 0, rewound: false, scannedThrough: null };
+  if (safeHead < nextBlock) return { processed: 0, ignored: 0, rewound: false, scannedThrough: null, sweepDepositAddressIds: [] };
   const toBlock = Math.min(nextBlock + config.maxBlockRange - 1, safeHead);
   const logs = await provider.getLogs({
     address: config.usdtContractAddress,
@@ -110,6 +113,7 @@ async function ingestRange(
   const issuance = await systemAccount(prisma, AccountType.SYSTEM_COUPON_ISSUANCE, Asset.COUPON);
   let processed = 0;
   let ignored = 0;
+  const sweepDepositAddressIds = new Set<string>();
   for (const chainLog of logs) {
     const transfer = decodeTransfer(chainLog);
     const depositAddress = transfer ? deposits.get(transfer.to.toLowerCase()) : undefined;
@@ -130,6 +134,11 @@ async function ingestRange(
       amountMicroUsdt: transfer.amount,
       txHash: chainLog.transactionHash,
     });
+    await prisma.depositAddress.updateMany({
+      where: { id: depositAddress.id, sweepPendingAt: null },
+      data: { sweepPendingAt: new Date() },
+    });
+    sweepDepositAddressIds.add(depositAddress.id);
     processed += 1;
   }
   const blockHash = await provider.getBlockHash(toBlock);
@@ -138,5 +147,5 @@ async function ingestRange(
     where: { id: 1 },
     data: { nextBlock: BigInt(toBlock + 1), lastBlockHash: blockHash },
   });
-  return { processed, ignored, rewound: false, scannedThrough: toBlock };
+  return { processed, ignored, rewound: false, scannedThrough: toBlock, sweepDepositAddressIds: [...sweepDepositAddressIds] };
 }

@@ -1,10 +1,13 @@
 import { beforeAll, afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { id, zeroPadValue, getAddress } from 'ethers';
-import { AccountType, Asset, PrismaClient, WithdrawalStatus } from '@trustme/db';
+import { HDNodeWallet, id, Transaction, zeroPadValue, getAddress } from 'ethers';
+import { AccountType, Asset, DepositSweepStatus, PrismaClient, WithdrawalStatus } from '@trustme/db';
 import { postDeposit, requestWithdrawal } from '@trustme/core';
 import { confirmWithdrawal, dispatchWithdrawal } from '../src/dispatch.js';
 import { ingestOnce } from '../src/ingest.js';
+import { loadDepositAccountNode } from '../src/index.js';
 import { FakeChainProvider, FakeTransactionSigner } from '../src/provider.js';
+import { fundSweepGas, sweepDepositAddress } from '../src/sweep.js';
+import type { WorkerConfig } from '../src/config.js';
 
 const prisma = new PrismaClient();
 const usdt = getAddress(`0x${'aa'.repeat(20)}`);
@@ -15,6 +18,12 @@ const dispatchConfig = {
   confirmations: 2,
   gasSafetyMultiplierBps: 12_500,
   gasLimitCeiling: 200_000,
+};
+const sweepConfig = {
+  ...dispatchConfig,
+  hotWalletAddress: getAddress(`0x${'dd'.repeat(20)}`),
+  sweepMinMicroUsdt: 1_000_000,
+  sweepMaxGasTopUpWei: 500_000_000_000_000_000n,
 };
 
 async function account(type: AccountType, asset: Asset, userId?: string) {
@@ -43,11 +52,25 @@ async function fixture() {
   return { user, userAccount, depositAddress, external, vault, pending, fees, issuance, onchainLog };
 }
 
+async function sweepFixture() {
+  const user = await prisma.user.create({ data: { phoneNumber: '+1555000888', barcodeId: `sweep-${Date.now()}-${Math.random()}` } });
+  const accountNode = HDNodeWallet.createRandom();
+  const depositAddress = await prisma.depositAddress.create({
+    data: { userId: user.id, address: `pending:${user.id}`, sweepPendingAt: new Date() },
+  });
+  const derived = accountNode.deriveChild(depositAddress.derivationIndex);
+  const updatedAddress = await prisma.depositAddress.update({
+    where: { id: depositAddress.id },
+    data: { address: derived.address },
+  });
+  return { user, accountNode, depositAddress: updatedAddress, derived };
+}
+
 beforeAll(async () => {
   await prisma.$connect();
 });
 beforeEach(async () => {
-  await prisma.$executeRawUnsafe('TRUNCATE TABLE "MediaAsset", "RefundRequest", "AidRequest", "CharityAgent", "Charity", "AdminAuditLog", "AdminUser", "Withdrawal", "EscrowHold", "EmailVerification", "MemberDevice", "Contact", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User", "ChainCursor" CASCADE');
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "MediaAsset", "RefundRequest", "AidRequest", "CharityAgent", "Charity", "AdminAuditLog", "AdminUser", "Withdrawal", "DepositSweep", "EscrowHold", "EmailVerification", "MemberDevice", "Contact", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User", "ChainCursor" CASCADE');
 });
 afterAll(async () => {
   await prisma.$disconnect();
@@ -145,6 +168,168 @@ describe('chain ingest', () => {
     await expect(ingestOnce(prisma, provider, config)).resolves.toMatchObject({ rewound: true, scannedThrough: 109 });
     expect(provider.logReads).toBe(1);
     expect(await prisma.chainCursor.findUniqueOrThrow({ where: { id: 1 } })).toMatchObject({ nextBlock: 100n, lastBlockHash: null });
+  });
+});
+
+describe('deposit sweep', () => {
+  it('clears the pending marker and leaves below-threshold dust in place', async () => {
+    const fixtureAccounts = await sweepFixture();
+    const provider = new FakeChainProvider({
+      tokenBalances: new Map([[`${usdt.toLowerCase()}:${fixtureAccounts.derived.address.toLowerCase()}`, 999_999n]]),
+    });
+
+    await expect(sweepDepositAddress(prisma, provider, fixtureAccounts.accountNode, sweepConfig, fixtureAccounts.depositAddress.id))
+      .resolves.toMatchObject({ status: 'skipped' });
+    expect(await prisma.depositAddress.findUniqueOrThrow({ where: { id: fixtureAccounts.depositAddress.id } })).toMatchObject({ sweepPendingAt: null });
+    expect(await prisma.depositSweep.count()).toBe(0);
+    expect(provider.sentTransactions).toHaveLength(0);
+  });
+
+  it('sweeps the full current USDT balance to the hot wallet', async () => {
+    const fixtureAccounts = await sweepFixture();
+    const balance = 12_345_678n;
+    const provider = new FakeChainProvider({
+      tokenBalances: new Map([[`${usdt.toLowerCase()}:${fixtureAccounts.derived.address.toLowerCase()}`, balance]]),
+      nativeBalances: new Map([[fixtureAccounts.derived.address.toLowerCase(), 1_000_000_000_000_000_000n]]),
+      pendingNonce: 7,
+    });
+
+    await expect(sweepDepositAddress(prisma, provider, fixtureAccounts.accountNode, sweepConfig, fixtureAccounts.depositAddress.id))
+      .resolves.toMatchObject({ status: 'broadcast' });
+    expect(provider.sentTransactions).toHaveLength(1);
+    const transaction = Transaction.from(provider.sentTransactions[0]);
+    expect(transaction.from).toBe(fixtureAccounts.derived.address);
+    expect(transaction.to).toBe(usdt);
+    expect(transaction.nonce).toBe(7);
+    expect(transaction.data).toContain(balance.toString(16));
+    expect((await prisma.depositSweep.findFirstOrThrow()).amountMicroUsdt).toBe(balance);
+  });
+
+  it('funds native gas through the hot wallet before signing the deposit transfer', async () => {
+    const fixtureAccounts = await sweepFixture();
+    const balance = 5_000_000n;
+    const receipts = new Map();
+    const nativeBalances = new Map<string, bigint>([
+      [fixtureAccounts.derived.address.toLowerCase(), 0n],
+      [sweepConfig.hotWalletAddress.toLowerCase(), 1_000_000_000_000_000_000n],
+    ]);
+    const provider = new FakeChainProvider({
+      tokenBalances: new Map([[`${usdt.toLowerCase()}:${fixtureAccounts.derived.address.toLowerCase()}`, balance]]),
+      nativeBalances,
+      receipts,
+    });
+    const hotSigner = new FakeTransactionSigner(sweepConfig.hotWalletAddress, '0x02');
+
+    const pending = await sweepDepositAddress(prisma, provider, fixtureAccounts.accountNode, sweepConfig, fixtureAccounts.depositAddress.id);
+    expect(pending).toMatchObject({ status: 'gas-funding' });
+    const sweep = await prisma.depositSweep.findFirstOrThrow();
+    const gas = await fundSweepGas(prisma, provider, fixtureAccounts.accountNode, hotSigner, sweepConfig, sweep.id);
+    expect(gas.status).toBe('broadcast');
+    expect(hotSigner.signCount).toBe(1);
+    expect(provider.sentTransactions).toHaveLength(1);
+
+    receipts.set(gas.status === 'broadcast' ? gas.txHash : '', { status: 1, blockNumber: 1, transactionHash: gas.status === 'broadcast' ? gas.txHash : '' });
+    nativeBalances.set(fixtureAccounts.derived.address.toLowerCase(), 1_000_000_000_000_000_000n);
+    const resumed = await sweepDepositAddress(prisma, provider, fixtureAccounts.accountNode, sweepConfig, fixtureAccounts.depositAddress.id);
+    expect(resumed.status).toBe('broadcast');
+    expect(hotSigner.signCount).toBe(1);
+    expect(provider.sentTransactions).toHaveLength(2);
+    expect(Transaction.from(provider.sentTransactions[1]).from).toBe(fixtureAccounts.derived.address);
+  });
+
+  it('fails an excessive gas shortfall without signing', async () => {
+    const fixtureAccounts = await sweepFixture();
+    const provider = new FakeChainProvider({
+      tokenBalances: new Map([[`${usdt.toLowerCase()}:${fixtureAccounts.derived.address.toLowerCase()}`, 5_000_000n]]),
+      nativeBalances: new Map([[fixtureAccounts.derived.address.toLowerCase(), 0n]]),
+    });
+    const config = { ...sweepConfig, sweepMaxGasTopUpWei: 1n };
+
+    await expect(sweepDepositAddress(prisma, provider, fixtureAccounts.accountNode, config, fixtureAccounts.depositAddress.id))
+      .resolves.toMatchObject({ status: 'failed' });
+    expect(await prisma.depositSweep.findFirstOrThrow()).toMatchObject({ status: DepositSweepStatus.FAILED });
+    expect(provider.sentTransactions).toHaveLength(0);
+  });
+
+  it('fails a derived-address mismatch without signing', async () => {
+    const fixtureAccounts = await sweepFixture();
+    const wrongNode = HDNodeWallet.createRandom();
+    const provider = new FakeChainProvider({
+      tokenBalances: new Map([[`${usdt.toLowerCase()}:${fixtureAccounts.depositAddress.address.toLowerCase()}`, 5_000_000n]]),
+    });
+
+    await expect(sweepDepositAddress(prisma, provider, wrongNode, sweepConfig, fixtureAccounts.depositAddress.id))
+      .resolves.toMatchObject({ status: 'failed' });
+    expect(await prisma.depositSweep.findFirstOrThrow()).toMatchObject({ status: DepositSweepStatus.FAILED, lastError: 'deposit address derivation mismatch' });
+    expect(provider.sentTransactions).toHaveLength(0);
+  });
+
+  it('does not double-broadcast a sweep already marked BROADCAST', async () => {
+    const fixtureAccounts = await sweepFixture();
+    const provider = new FakeChainProvider({
+      tokenBalances: new Map([[`${usdt.toLowerCase()}:${fixtureAccounts.derived.address.toLowerCase()}`, 5_000_000n]]),
+      nativeBalances: new Map([[fixtureAccounts.derived.address.toLowerCase(), 1_000_000_000_000_000_000n]]),
+    });
+
+    await sweepDepositAddress(prisma, provider, fixtureAccounts.accountNode, sweepConfig, fixtureAccounts.depositAddress.id);
+    await expect(sweepDepositAddress(prisma, provider, fixtureAccounts.accountNode, sweepConfig, fixtureAccounts.depositAddress.id))
+      .resolves.toMatchObject({ status: 'waiting' });
+    expect(provider.sentTransactions).toHaveLength(1);
+  });
+
+  it('confirms a sweep and clears its pending marker after enough blocks', async () => {
+    const fixtureAccounts = await sweepFixture();
+    const receipts = new Map();
+    const provider = new FakeChainProvider({
+      head: 100,
+      tokenBalances: new Map([[`${usdt.toLowerCase()}:${fixtureAccounts.derived.address.toLowerCase()}`, 5_000_000n]]),
+      nativeBalances: new Map([[fixtureAccounts.derived.address.toLowerCase(), 1_000_000_000_000_000_000n]]),
+      receipts,
+    });
+
+    const first = await sweepDepositAddress(prisma, provider, fixtureAccounts.accountNode, sweepConfig, fixtureAccounts.depositAddress.id);
+    if (first.status !== 'broadcast') throw new Error('expected sweep broadcast');
+    receipts.set(first.txHash, { status: 1, blockNumber: 99, transactionHash: first.txHash });
+    await expect(sweepDepositAddress(prisma, provider, fixtureAccounts.accountNode, sweepConfig, fixtureAccounts.depositAddress.id))
+      .resolves.toMatchObject({ status: 'confirmed' });
+    expect(await prisma.depositSweep.findFirstOrThrow()).toMatchObject({ status: DepositSweepStatus.CONFIRMED, confirmedAt: expect.any(Date) });
+    expect(await prisma.depositAddress.findUniqueOrThrow({ where: { id: fixtureAccounts.depositAddress.id } })).toMatchObject({ sweepPendingAt: null });
+  });
+
+  it('leaves the pending marker set when the sweep receipt fails', async () => {
+    const fixtureAccounts = await sweepFixture();
+    const receipts = new Map();
+    const provider = new FakeChainProvider({
+      head: 100,
+      tokenBalances: new Map([[`${usdt.toLowerCase()}:${fixtureAccounts.derived.address.toLowerCase()}`, 5_000_000n]]),
+      nativeBalances: new Map([[fixtureAccounts.derived.address.toLowerCase(), 1_000_000_000_000_000_000n]]),
+      receipts,
+    });
+
+    const first = await sweepDepositAddress(prisma, provider, fixtureAccounts.accountNode, sweepConfig, fixtureAccounts.depositAddress.id);
+    if (first.status !== 'broadcast') throw new Error('expected sweep broadcast');
+    receipts.set(first.txHash, { status: 0, blockNumber: 99, transactionHash: first.txHash });
+    await expect(sweepDepositAddress(prisma, provider, fixtureAccounts.accountNode, sweepConfig, fixtureAccounts.depositAddress.id))
+      .resolves.toMatchObject({ status: 'failed' });
+    expect(await prisma.depositSweep.findFirstOrThrow()).toMatchObject({ status: DepositSweepStatus.FAILED });
+    expect((await prisma.depositAddress.findUniqueOrThrow({ where: { id: fixtureAccounts.depositAddress.id } })).sweepPendingAt).not.toBeNull();
+  });
+
+  it('disables sweeping when the mnemonic file is unavailable', async () => {
+    const wallet = HDNodeWallet.createRandom();
+    const config = {
+      databaseUrl: 'postgresql://localhost/trustme',
+      redisUrl: 'redis://localhost',
+      polygonRpcUrl: 'http://127.0.0.1:8545',
+      usdtContractAddress: usdt,
+      hotWalletPrivateKey: HDNodeWallet.createRandom().privateKey,
+      depositWalletMnemonicPath: '/definitely/missing/trustme-deposit-wallet.txt',
+      depositXpub: wallet.neuter().extendedKey,
+    } as WorkerConfig;
+    const warnings: string[] = [];
+
+    await expect(loadDepositAccountNode(config, { warn: (message) => warnings.push(message) })).resolves.toBeNull();
+    expect(warnings).toEqual(['deposit sweeping disabled: deposit wallet mnemonic is unavailable']);
   });
 });
 

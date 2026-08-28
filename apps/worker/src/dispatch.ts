@@ -1,11 +1,12 @@
 import { getAddress, Interface, keccak256, type TransactionRequest } from 'ethers';
 import { AccountType, Asset, Prisma, PrismaClient, TransactionStatus, TransactionType, WithdrawalStatus } from '@trustme/db';
 import { getHotWalletBalances as readHotWalletBalances, postTransaction, withSerializableRetry } from '@trustme/core';
+import { assertChainHealthy, type ChainHealthConfig } from './chain-health.js';
 import type { ChainProvider, ChainReceipt, TransactionSigner } from './provider.js';
 
 const usdtInterface = new Interface(['function transfer(address to, uint256 amount) returns (bool)']);
 
-export type DispatchConfig = {
+export type DispatchConfig = ChainHealthConfig & {
   usdtContractAddress: string;
   chainId: number;
   confirmations: number;
@@ -44,7 +45,7 @@ function feeFields(fees: Awaited<ReturnType<ChainProvider['estimateFees']>>): Pi
   return fees.gasPrice === undefined ? {} : { gasPrice: fees.gasPrice };
 }
 
-function feeFieldsWithType(
+export function feeFieldsWithType(
   fees: Awaited<ReturnType<ChainProvider['estimateFees']>>,
 ): Pick<TransactionRequest, 'gasPrice' | 'maxFeePerGas' | 'maxPriorityFeePerGas' | 'type'> {
   if (fees.maxFeePerGas !== undefined && fees.maxPriorityFeePerGas !== undefined) {
@@ -54,7 +55,7 @@ function feeFieldsWithType(
   throw new Error('provider returned no usable fee estimate');
 }
 
-function calculateGasLimit(estimatedGas: bigint, config: DispatchConfig): bigint {
+export function calculateGasLimit(estimatedGas: bigint, config: DispatchConfig): bigint {
   if (estimatedGas <= 0n) throw new Error('provider returned an invalid gas estimate');
   const gasLimit = (estimatedGas * BigInt(config.gasSafetyMultiplierBps) + 9_999n) / 10_000n;
   if (gasLimit > BigInt(config.gasLimitCeiling)) throw new Error('estimated gas exceeds configured ceiling');
@@ -63,7 +64,7 @@ function calculateGasLimit(estimatedGas: bigint, config: DispatchConfig): bigint
 
 export const getHotWalletBalances = readHotWalletBalances;
 
-function isKnownBroadcastError(error: unknown, expectedHash: string): boolean {
+export function isKnownBroadcastError(error: unknown, expectedHash: string): boolean {
   if (!(error instanceof Error)) return false;
   if (/already known/i.test(error.message)) return true;
   if (!/nonce too low/i.test(error.message)) return false;
@@ -87,13 +88,7 @@ export async function dispatchWithdrawal(
   let signedTransaction: string;
   let txHash: string;
   try {
-    const head = await provider.getBlockNumber();
-    const cursor = await prisma.chainCursor.findUnique({ where: { id: 1 }, select: { nextBlock: true } });
-    if (cursor !== null && BigInt(head) < cursor.nextBlock) throw new Error('chain head is behind the stored cursor');
-    const blockTimestamp = await provider.getBlockTimestamp(head);
-    if (blockTimestamp === null || Math.floor(Date.now() / 1000) - blockTimestamp > (config.chainMaxBlockAgeSeconds ?? 120)) {
-      throw new Error('chain head is stale');
-    }
+    await assertChainHealthy(prisma, provider, config);
     const fees = await provider.estimateFees();
     const feeTransaction = feeFieldsWithType(fees);
     const transactionWithoutGas: TransactionRequest = {

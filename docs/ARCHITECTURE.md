@@ -109,7 +109,9 @@ reorg re-scan or double-clicked admin button is harmless.
 3. The chain ingest worker walks `Transfer(address,address,uint256)` logs of the
    USDT contract from a persisted cursor, in bounded block ranges, and only up
    to `head - CONFIRMATIONS` (12). Logs whose `to` is not a known deposit
-   address are dropped.
+   address are dropped. A tick can process several confirmed ranges, bounded by
+   `INGEST_CHUNKS_PER_TICK`, so a temporary outage can be caught up without
+   changing the RPC request-size limit.
 4. Each accepted log posts, once (see idempotency):
    - `USDT`: `EXTERNAL_ONCHAIN → SYSTEM_VAULT_USDT`, the full amount;
    - `COUPON`: `SYSTEM_COUPON_ISSUANCE → USER_COUPON`, `amount / 10_000` floored.
@@ -117,6 +119,22 @@ reorg re-scan or double-clicked admin button is harmless.
 Reorgs shallower than 12 blocks cannot affect us; the cursor also stores the
 block hash so a deeper reorg is detected and the scan rewinds instead of
 silently skipping blocks.
+
+After an accepted deposit is posted, the worker marks its deposit address for
+the sweep queue. The sweep loop orders pending addresses by that marker and
+reads the current on-chain USDT balance. Balances below
+`SWEEP_MIN_MICRO_USDT` remain as dust. Otherwise the worker derives the
+per-address signer from the mnemonic-backed account node, verifies the derived
+address against the database, estimates a safe ERC-20 transfer, and sweeps the
+full current balance into the hot wallet. If the address needs native gas, a
+gas-funding transaction is recorded in `DepositSweep` and signed by the hot
+wallet through the serialized withdrawal dispatch queue; the sweep resumes
+after that transaction is mined. Sweep records are an audit trail only and
+create no ledger entries. A failed receipt keeps the pending marker for retry.
+The sweep cadence and batch are controlled by `SWEEP_SCAN_INTERVAL_MS` and
+`SWEEP_BATCH_SIZE`; `SWEEP_MAX_GAS_TOP_UP_WEI` caps native-gas funding for one
+deposit address. `DEPOSIT_WALLET_MNEMONIC_PATH` points to the signing mnemonic
+file and `DEPOSIT_XPUB` identifies the matching public account node.
 
 ## 5. Internal circulation
 
@@ -150,6 +168,10 @@ silently skipping blocks.
    `SYSTEM_FEE_COLLECTION → SYSTEM_VAULT_USDT`,
    `SYSTEM_COUPON_ISSUANCE → USER_COUPON`) and the member has their coupons back.
 
+All hot-wallet signing work, including native-gas top-ups for deposit sweeps,
+must use `DISPATCH_QUEUE`, whose concurrency is one. Deposit-key ERC-20 sweep
+transactions use independent nonces and run on the separate sweep queue.
+
 ## 7. Admin dashboard
 
 Next.js App Router, protected by JWT with roles `VIEWER`, `APPROVER`, `ADMIN`;
@@ -175,7 +197,7 @@ passwords are argon2 hashes, and approval actions are written to an append-only
 | Web | own nginx vhost / own hostname | vhost installed at failover |
 | Secrets | `/etc/trustme/trustme.env`, owned by `root:trustme`, mode 0640 | provisioned separately, never committed |
 
-The chain ingest and dispatch workers run **only on the primary**: a standby
+The chain ingest, dispatch, and deposit-sweep workers run **only on the primary**: a standby
 that starts signing payouts is the one failure mode this system cannot tolerate,
 so the API and worker refuse to start when the failover marker file is present.
 The default marker is `/etc/trustme/FAILED_OVER`, overridable through
