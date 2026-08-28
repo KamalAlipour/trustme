@@ -1,4 +1,8 @@
-import { StyleSheet } from 'react-native';
+import { Platform, StyleSheet, type TextStyle } from 'react-native';
+
+const textAlignStart: TextStyle['textAlign'] = Platform.OS === 'web'
+  ? ('start' as unknown as TextStyle['textAlign'])
+  : 'auto';
 
 export const colors = {
   ink: '#16202A',
@@ -15,18 +19,18 @@ export const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background, padding: 20 },
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, backgroundColor: colors.background },
   scroll: { padding: 20, gap: 16 },
-  title: { color: colors.ink, fontSize: 26, fontWeight: '700', textAlign: 'right' },
-  heading: { color: colors.ink, fontSize: 20, fontWeight: '700', textAlign: 'right' },
-  text: { color: colors.ink, fontSize: 16, textAlign: 'right', lineHeight: 25 },
-  muted: { color: colors.muted, fontSize: 14, textAlign: 'right', lineHeight: 22 },
+  title: { color: colors.ink, fontSize: 26, fontWeight: '700', textAlign: textAlignStart },
+  heading: { color: colors.ink, fontSize: 20, fontWeight: '700', textAlign: textAlignStart },
+  text: { color: colors.ink, fontSize: 16, textAlign: textAlignStart, lineHeight: 25 },
+  muted: { color: colors.muted, fontSize: 14, textAlign: textAlignStart, lineHeight: 22 },
   card: { backgroundColor: colors.card, borderRadius: 18, padding: 18, gap: 10, borderWidth: 1, borderColor: colors.border },
-  input: { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border, borderRadius: 12, padding: 13, fontSize: 16, color: colors.ink, textAlign: 'right' },
+  input: { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border, borderRadius: 12, padding: 13, fontSize: 16, color: colors.ink, textAlign: textAlignStart },
   button: { backgroundColor: colors.primary, borderRadius: 12, padding: 14, alignItems: 'center' },
   buttonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
   secondaryButton: { borderColor: colors.primary, borderWidth: 1, borderRadius: 12, padding: 13, alignItems: 'center' },
   secondaryButtonText: { color: colors.primary, fontSize: 16, fontWeight: '700' },
-  danger: { color: colors.danger, fontSize: 14, textAlign: 'right' },
-  notice: { color: colors.success, fontSize: 14, textAlign: 'right' },
+  danger: { color: colors.danger, fontSize: 14, textAlign: textAlignStart },
+  notice: { color: colors.success, fontSize: 14, textAlign: textAlignStart },
   row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 },
   pill: { borderRadius: 99, backgroundColor: '#E5F2F5', paddingHorizontal: 10, paddingVertical: 5 },
   divider: { height: 1, backgroundColor: colors.border },

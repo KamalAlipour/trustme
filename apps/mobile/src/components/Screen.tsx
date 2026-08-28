@@ -1,9 +1,10 @@
 import React from 'react';
 import { ActivityIndicator, ScrollView, Text, View } from 'react-native';
+import { getRtlDirectionProps } from '../lib/platform';
 import { colors, styles } from '../styles';
 
 export function LoadingScreen() {
-  return <View style={styles.centered}><ActivityIndicator color={colors.primary} /><Text style={styles.muted}>در حال بارگذاری…</Text></View>;
+  return <View {...getRtlDirectionProps()} style={styles.centered}><ActivityIndicator color={colors.primary} /><Text style={styles.muted}>در حال بارگذاری…</Text></View>;
 }
 
 export function ErrorMessage({ message, onRetry }: { message: string; onRetry?: () => void }) {
@@ -11,5 +12,5 @@ export function ErrorMessage({ message, onRetry }: { message: string; onRetry?: 
 }
 
 export function Page({ children }: { children: React.ReactNode }) {
-  return <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">{children}</ScrollView>;
+  return <ScrollView {...getRtlDirectionProps()} contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">{children}</ScrollView>;
 }
