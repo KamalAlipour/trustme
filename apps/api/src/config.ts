@@ -2,6 +2,10 @@ import { z } from 'zod';
 import { evmAddressSchema } from '@trustme/core';
 
 const integer = z.coerce.number().int().positive();
+const boolean = z.preprocess((value) => {
+  if (typeof value === 'string') return value.toLowerCase() === 'true';
+  return value;
+}, z.boolean());
 
 export const apiConfigSchema = z.object({
   databaseUrl: z.string().min(1),
@@ -14,6 +18,8 @@ export const apiConfigSchema = z.object({
   memberJwtTtlSeconds: integer.default(900),
   memberRefreshTtlDays: integer.default(60),
   emailDelivery: z.enum(['none', 'log', 'smtp']).default('none'),
+  requireEmailVerification: boolean.default(false),
+  pinResetQuarantineHours: integer.default(72),
   smtpHost: z.string().optional(),
   smtpPort: integer.optional(),
   smtpUser: z.string().optional(),
@@ -47,6 +53,8 @@ export function loadApiConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     memberJwtTtlSeconds: env.MEMBER_JWT_TTL_SECONDS,
     memberRefreshTtlDays: env.MEMBER_REFRESH_TTL_DAYS,
     emailDelivery: env.EMAIL_DELIVERY,
+    requireEmailVerification: env.REQUIRE_EMAIL_VERIFICATION,
+    pinResetQuarantineHours: env.PIN_RESET_QUARANTINE_HOURS,
     smtpHost: env.SMTP_HOST,
     smtpPort: env.SMTP_PORT,
     smtpUser: env.SMTP_USER,

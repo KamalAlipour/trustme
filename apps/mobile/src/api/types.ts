@@ -18,6 +18,13 @@ export type Tokens = {
 };
 
 export type AuthResponse = { tokens: Tokens; member: Member };
+export type SecuritySetup = {
+  emailVerified: boolean;
+  biometricEnrolled: boolean;
+  requiresEmailVerification: boolean;
+  remaining: Array<'email_verification' | 'biometric_enrolment'>;
+  completedAt: string | null;
+};
 export type Balance = { barcodeId: string; coupons: string; dustMicroUsdt: string; depositAddress: string | null };
 export type Transaction = {
   id: string;

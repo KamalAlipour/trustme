@@ -24,6 +24,8 @@ const config = {
   memberJwtTtlSeconds: 900,
   memberRefreshTtlDays: 60,
   emailDelivery: 'log' as const,
+  requireEmailVerification: false,
+  pinResetQuarantineHours: 72,
   smtpHost: undefined,
   smtpPort: undefined,
   smtpUser: undefined,
@@ -91,10 +93,15 @@ async function adminToken(app: ReturnType<typeof appFixture>['app'], username: s
 
 async function memberToken(app: ReturnType<typeof appFixture>['app'], phone: string, displayName?: string) {
   const user = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: phone } });
-  await prisma.user.update({ where: { id: user.id }, data: { pinHash: await bcrypt.hash('2468', 12), ...(displayName === undefined ? {} : { displayName }) } });
+  await prisma.user.update({ where: { id: user.id }, data: { pinHash: await bcrypt.hash('2468', 12), biometricEnrolledAt: new Date(), securitySetupCompletedAt: new Date(), ...(displayName === undefined ? {} : { displayName }) } });
   const login = await request(app).post('/v1/auth/login').send({ phone, pin: '2468' });
   expect(login.status).toBe(200);
   return login.body.tokens.accessToken as string;
+}
+
+async function completeMemberSetup(phone: string) {
+  const user = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: phone } });
+  await prisma.user.update({ where: { id: user.id }, data: { biometricEnrolledAt: new Date(), securitySetupCompletedAt: new Date() } });
 }
 
 async function createPendingWithdrawal(app: ReturnType<typeof appFixture>['app'], barcodeId: string, phone: string, couponsGross = '150000') {
@@ -144,11 +151,44 @@ describe('member API', () => {
     expect(registered.body).not.toHaveProperty('pin');
     expect(registered.body.member).toMatchObject({ displayName: 'Coupon User', barcodeId: expect.stringMatching(/^TC[0-9ABCDEFGHJKMNPQRSTVWXYZ]{14}$/), phone: '*-*-0120', isRestricted: false });
     const profile = await request(app).get('/v1/me').set('Authorization', `Bearer ${registered.body.tokens.accessToken}`);
-    expect(profile.status).toBe(200);
+    expect(profile.status).toBe(403);
+    expect(profile.body).toEqual({ error: 'setup_incomplete', remaining: ['biometric_enrolment'] });
+    expect((await request(app).get('/v1/me/security-setup').set('Authorization', `Bearer ${registered.body.tokens.accessToken}`)).status).toBe(200);
+    expect((await request(app).post('/v1/member/security/biometric').set('Authorization', `Bearer ${registered.body.tokens.accessToken}`).send({ pin: '2468' })).status).toBe(200);
+    expect((await request(app).get('/v1/me').set('Authorization', `Bearer ${registered.body.tokens.accessToken}`)).status).toBe(200);
     expect(await prisma.ledgerAccount.count({ where: { user: { phoneNumber: '+1555000120' } } })).toBe(2);
     expect(await prisma.depositAddress.count({ where: { user: { phoneNumber: '+1555000120' } } })).toBe(1);
     expect((await request(app).post('/v1/auth/login').send({ phone: '+1555000120', pin: '2468' })).status).toBe(200);
-    expect((await request(app).post('/v1/auth/register').send({ phone: '+1555000120', pin: '2468' })).status).toBe(409);
+    expect((await request(app).post('/v1/auth/register').send({ phone: '+1555000120', pin: '2468', email: 'duplicate@example.com' })).status).toBe(409);
+  });
+
+  it('allows registration without email by default and reports only biometric setup remaining', async () => {
+    const { app } = appFixture();
+    const registered = await request(app).post('/v1/auth/register').send({ phone: '+1555000119', pin: '2468' });
+    expect(registered.status).toBe(201);
+    const setup = await request(app).get('/v1/me/security-setup').set('Authorization', `Bearer ${registered.body.tokens.accessToken}`);
+    expect(setup.status).toBe(200);
+    expect(setup.body.remaining).toEqual(['biometric_enrolment']);
+    expect(setup.body.requiresEmailVerification).toBe(false);
+  });
+
+  it('rejects biometric setup with the wrong PIN without changing enrollment state', async () => {
+    const { app } = appFixture();
+    const registered = await request(app).post('/v1/auth/register').send({ phone: '+1555000117', pin: '2468' });
+    const response = await request(app)
+      .post('/v1/member/security/biometric')
+      .set('Authorization', `Bearer ${registered.body.tokens.accessToken}`)
+      .send({ pin: '1357' });
+    expect(response.status).toBe(401);
+    expect((await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000117' } })).biometricEnrolledAt).toBeNull();
+  });
+
+  it('requires email only when mandatory verification is enabled', async () => {
+    const { app } = appFixture(undefined, undefined, { requireEmailVerification: true });
+    const response = await request(app).post('/v1/auth/register').send({ phone: '+1555000118', pin: '2468' });
+    expect(response.status).toBe(201);
+    const setup = await request(app).get('/v1/me/security-setup').set('Authorization', `Bearer ${response.body.tokens.accessToken}`);
+    expect(setup.body.remaining).toEqual(['email_verification', 'biometric_enrolment']);
   });
 
   it('rejects weak PINs and keeps unknown login indistinguishable', async () => {
@@ -231,6 +271,7 @@ describe('member API', () => {
     expect(registered.status).toBe(201);
     expect(emailCodes.get('reset@example.com')).toMatch(/^\d{6}$/);
     const accessToken = registered.body.tokens.accessToken as string;
+    await prisma.user.update({ where: { phoneNumber: '+1555000127' }, data: { biometricEnrolledAt: new Date(), securitySetupCompletedAt: new Date() } });
     const verified = await request(app).post('/v1/me/email/verify').set('Authorization', `Bearer ${accessToken}`).send({ code: emailCodes.get('reset@example.com') });
     expect(verified.status).toBe(200);
     expect(verified.body.emailVerified).toBe(true);
@@ -241,6 +282,14 @@ describe('member API', () => {
     expect(malformedCode.body.error).toBe('code must be exactly six digits');
     const reset = await request(app).post('/v1/auth/pin-reset/confirm').send({ email: 'reset@example.com', code: emailCodes.get('reset@example.com'), pin: '1357' });
     expect(reset.status).toBe(200);
+    const resetUser = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000127' } });
+    expect(resetUser).toMatchObject({
+      biometricEnrolledAt: null,
+      securitySetupCompletedAt: null,
+      pinResetQuarantineUntil: expect.any(Date),
+    });
+    expect(resetUser.pinResetQuarantineUntil!.getTime()).toBeGreaterThan(Date.now());
+    expect((await prisma.memberDevice.findMany({ where: { userId: resetUser.id } })).some((device) => device.revokedAt !== null)).toBe(true);
     expect((await request(app).get('/v1/me').set('Authorization', `Bearer ${accessToken}`)).status).toBe(401);
     expect((await request(app).post('/v1/auth/login').send({ phone: '+1555000127', pin: '1357' })).status).toBe(200);
   });
@@ -310,6 +359,7 @@ describe('member API', () => {
   it('returns 404 for malformed member resource ids', async () => {
     const { app } = appFixture();
     await request(app).post('/v1/auth/register').send({ phone: '+1555000135', pin: '2468' });
+    await completeMemberSetup('+1555000135');
     const accessToken = (await request(app).post('/v1/auth/login').send({ phone: '+1555000135', pin: '2468' })).body.tokens.accessToken as string;
     const response = await request(app).delete('/v1/me/devices/not-a-uuid').set('Authorization', `Bearer ${accessToken}`);
     expect(response.status).toBe(404);
@@ -597,6 +647,8 @@ describe('member API', () => {
     const { app } = appFixture();
     const seller = await request(app).post('/v1/auth/register').send({ phone: '+1555000301', pin: '2468' });
     const buyer = await request(app).post('/v1/auth/register').send({ phone: '+1555000302', pin: '2468' });
+    await completeMemberSetup('+1555000301');
+    await completeMemberSetup('+1555000302');
     const systems = await addSystemAccounts();
     const sellerUser = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000301' } });
     const sellerAccount = await prisma.ledgerAccount.findFirstOrThrow({ where: { userId: sellerUser.id, type: AccountType.USER_COUPON, asset: Asset.COUPON } });
@@ -621,6 +673,9 @@ describe('member API', () => {
     const donor = await request(app).post('/v1/auth/register').send({ phone: '+1555000303', pin: '2468' });
     const applicant = await request(app).post('/v1/auth/register').send({ phone: '+1555000304', pin: '2468' });
     const agent = await request(app).post('/v1/auth/register').send({ phone: '+1555000305', pin: '2468' });
+    await completeMemberSetup('+1555000303');
+    await completeMemberSetup('+1555000304');
+    await completeMemberSetup('+1555000305');
     const systems = await addSystemAccounts();
     const donorUser = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000303' } });
     const donorAccount = await prisma.ledgerAccount.findFirstOrThrow({ where: { userId: donorUser.id, type: AccountType.USER_COUPON, asset: Asset.COUPON } });
@@ -641,6 +696,8 @@ describe('member API', () => {
     expect(aid.status).toBe(201);
     await request(app).post('/v1/auth/register').send({ phone: '+1555000310', pin: '2468' });
     await request(app).post('/v1/auth/register').send({ phone: '+1555000311', pin: '2468' });
+    await completeMemberSetup('+1555000310');
+    await completeMemberSetup('+1555000311');
     const foreignUser = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000310' } });
     const foreignGuarantorUser = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000311' } });
     const foreignLoan = await createLoanRequest(prisma, {
@@ -670,6 +727,9 @@ describe('member API', () => {
     const payer = await request(app).post('/v1/auth/register').send({ phone: '+1555000306', pin: '2468' });
     const payee = await request(app).post('/v1/auth/register').send({ phone: '+1555000307', pin: '2468' });
     const unrelated = await request(app).post('/v1/auth/register').send({ phone: '+1555000308', pin: '2468' });
+    await completeMemberSetup('+1555000306');
+    await completeMemberSetup('+1555000307');
+    await completeMemberSetup('+1555000308');
     const systems = await addSystemAccounts();
     const payerUser = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000306' } });
     const payerAccount = await prisma.ledgerAccount.findFirstOrThrow({ where: { userId: payerUser.id, type: AccountType.USER_COUPON, asset: Asset.COUPON } });

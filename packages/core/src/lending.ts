@@ -20,7 +20,7 @@ const lockedGuaranteeStatuses = [GuaranteeStatus.CONFIRMATION_PENDING, Guarantee
 export type LoanInstallmentInput = { dueAt: Date; amountCoupons: bigint };
 export type LoanGuarantorInput = { guarantorId: string; amountCoupons: bigint };
 
-export type WithdrawalBlocker = 'restricted' | 'pending_code' | 'unresolved_claim';
+export type WithdrawalBlocker = 'restricted' | 'pending_code' | 'unresolved_claim' | 'pin_reset_quarantine';
 export type WithdrawalAvailability = {
   balanceCoupons: bigint;
   lockedGuaranteeCoupons: bigint;
@@ -34,6 +34,14 @@ export async function assertNotRestricted(tx: Prisma.TransactionClient, userId: 
   await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "User" WHERE "id" = ${userId}::uuid FOR UPDATE`);
   const user = await tx.user.findUniqueOrThrow({ where: { id: userId }, select: { activeGuaranteeCount: true } });
   if (user.activeGuaranteeCount > 0) throw new DomainError('account is restricted by an active guarantee');
+}
+
+export async function assertNoPinResetQuarantine(tx: Prisma.TransactionClient, userId: string): Promise<void> {
+  await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "User" WHERE "id" = ${userId}::uuid FOR UPDATE`);
+  const user = await tx.user.findUniqueOrThrow({ where: { id: userId }, select: { pinResetQuarantineUntil: true } });
+  if (user.pinResetQuarantineUntil !== null && user.pinResetQuarantineUntil > new Date()) {
+    throw new DomainError('account is quarantined after a PIN reset');
+  }
 }
 
 async function lockUser(tx: Prisma.TransactionClient, userId: string) {
@@ -77,12 +85,13 @@ async function readAvailability(tx: Prisma.TransactionClient | PrismaClient, use
     tx.escrowHold.count({ where: { senderId: userId, status: { in: ['ACTIVE', 'LOCKED'] } } }),
     tx.guarantee.count({ where: { guarantorId: userId, status: { in: [GuaranteeStatus.CONFIRMATION_PENDING, GuaranteeStatus.CODE_LOCKED] } } }),
     tx.loan.count({ where: { borrowerId: userId, status: LoanStatus.DEFAULTED, outstandingCoupons: { gt: 0n } } }),
-    tx.user.findUniqueOrThrow({ where: { id: userId }, select: { activeGuaranteeCount: true } }),
+    tx.user.findUniqueOrThrow({ where: { id: userId }, select: { activeGuaranteeCount: true, pinResetQuarantineUntil: true } }),
   ]);
   const blockers: WithdrawalBlocker[] = [];
   if (user.activeGuaranteeCount > 0) blockers.push('restricted');
   if (pendingEscrow > 0 || pendingGuarantee > 0) blockers.push('pending_code');
   if (unresolvedClaim > 0) blockers.push('unresolved_claim');
+  if (user.pinResetQuarantineUntil !== null && user.pinResetQuarantineUntil > new Date()) blockers.push('pin_reset_quarantine');
   const balanceCoupons = account.balance;
   const lockedGuaranteeCoupons = locked._sum.amountCoupons ?? 0n;
   const outstandingDebtCoupons = debt._sum.outstandingCoupons ?? 0n;
@@ -142,7 +151,11 @@ export async function createLoanRequest(
   const loanId = randomUUID();
   return withSerializableRetry(prisma, async (tx) => {
     await assertNotRestricted(tx, input.borrowerId);
-    for (const guarantorId of [...guarantorIds].sort()) await assertNotRestricted(tx, guarantorId);
+    await assertNoPinResetQuarantine(tx, input.borrowerId);
+    for (const guarantorId of [...guarantorIds].sort()) {
+      await assertNotRestricted(tx, guarantorId);
+      await assertNoPinResetQuarantine(tx, guarantorId);
+    }
     const loan = await tx.loan.create({
       data: {
         id: loanId,
@@ -180,7 +193,8 @@ export async function approveGuarantee(
     if (guarantee.status !== GuaranteeStatus.PENDING) throw new DomainError('guarantee is not pending');
     const loan = await tx.loan.findUniqueOrThrow({ where: { id: guarantee.loanId } });
     if (loan.status !== LoanStatus.REQUESTED) throw new DomainError('loan is not awaiting guarantees');
-    await assertNotRestricted(tx, guarantee.guarantorId);
+        await assertNotRestricted(tx, guarantee.guarantorId);
+        await assertNoPinResetQuarantine(tx, guarantee.guarantorId);
     await requireUserCouponAccount(tx, input.guarantorAccountId, guarantee.guarantorId);
     const lockAccount = await guaranteeLockAccount(tx, input.guaranteeLockAccountId);
     const transaction = await postWithClient(tx, {
@@ -269,6 +283,7 @@ export async function disburseLoan(
     if (loan.status !== LoanStatus.REQUESTED) throw new DomainError('loan is not awaiting disbursement');
     if (input.lenderId === loan.borrowerId) throw new DomainError('lender cannot be the borrower');
     await assertNotRestricted(tx, input.lenderId);
+    await assertNoPinResetQuarantine(tx, input.lenderId);
     await requireUserCouponAccount(tx, input.lenderAccountId, input.lenderId);
     await requireUserCouponAccount(tx, input.borrowerAccountId, loan.borrowerId);
     const guarantees = await tx.guarantee.findMany({ where: { loanId: loan.id } });

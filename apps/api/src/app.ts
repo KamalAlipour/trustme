@@ -39,7 +39,7 @@ import { type ApiConfig } from './config.js';
 import { openapiDocument } from './openapi.js';
 import { createAdminRouter, EthersAdminChainProvider, type AdminChainProvider } from './admin.js';
 import { HttpError } from './http-error.js';
-import { createMemberAuthRouter, requireMember } from './member-auth.js';
+import { createMemberAuthRouter, createMemberSecurityRouter, requireMember } from './member-auth.js';
 import { createMemberRouter } from './member-router.js';
 import { provisionUser } from './user-provisioning.js';
 
@@ -190,6 +190,12 @@ export function createApp(dependencies: ApiDependencies): express.Express {
     config,
     prisma,
     queue,
+    ...(dependencies.emailSender === undefined ? {} : { emailSender: dependencies.emailSender }),
+    logEmailCode,
+  }));
+  app.use('/v1/member', requireMember(config.memberJwtSecret, prisma), createMemberSecurityRouter({
+    config,
+    prisma,
     ...(dependencies.emailSender === undefined ? {} : { emailSender: dependencies.emailSender }),
     logEmailCode,
   }));

@@ -4,7 +4,7 @@ import express, { type Request, type RequestHandler } from 'express';
 import rateLimit from 'express-rate-limit';
 import nodemailer from 'nodemailer';
 import { z } from 'zod';
-import { EmailVerificationPurpose, PrismaClient } from '@trustme/db';
+import { EmailVerificationPurpose, Prisma, PrismaClient } from '@trustme/db';
 import { generateBarcodeId, phoneNumberSchema, fourDigitCodeSchema, withSerializableRetry } from '@trustme/core';
 import { HttpError } from './http-error.js';
 import { isBarcodeUniqueViolation, provisionUser } from './user-provisioning.js';
@@ -58,6 +58,48 @@ export function verifyMemberJwt(token: string, secret: string): MemberClaims | n
 }
 
 export type MemberRequest = Request & { member?: MemberClaims };
+export type SecuritySetupStatus = {
+  emailVerified: boolean;
+  biometricEnrolled: boolean;
+  requiresEmailVerification: boolean;
+  remaining: Array<'email_verification' | 'biometric_enrolment'>;
+  completedAt: Date | null;
+};
+
+export function securitySetupStatus(user: {
+  emailVerifiedAt: Date | null;
+  biometricEnrolledAt: Date | null;
+  securitySetupCompletedAt: Date | null;
+}, requireEmailVerification: boolean): SecuritySetupStatus {
+  const remaining: Array<'email_verification' | 'biometric_enrolment'> = [];
+  if (requireEmailVerification && user.emailVerifiedAt === null) remaining.push('email_verification');
+  if (user.biometricEnrolledAt === null) remaining.push('biometric_enrolment');
+  return {
+    emailVerified: user.emailVerifiedAt !== null,
+    biometricEnrolled: user.biometricEnrolledAt !== null,
+    requiresEmailVerification: requireEmailVerification,
+    remaining,
+    completedAt: user.securitySetupCompletedAt,
+  };
+}
+
+export async function recomputeSecuritySetupCompletion(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  requireEmailVerification: boolean,
+) {
+  const user = await tx.user.findUniqueOrThrow({
+    where: { id: userId },
+    select: { pinHash: true, emailVerifiedAt: true, biometricEnrolledAt: true, securitySetupCompletedAt: true },
+  });
+  const complete = user.pinHash !== null &&
+    user.biometricEnrolledAt !== null &&
+    (!requireEmailVerification || user.emailVerifiedAt !== null);
+  return tx.user.update({
+    where: { id: userId },
+    data: { securitySetupCompletedAt: complete ? (user.securitySetupCompletedAt ?? new Date()) : null },
+  });
+}
 export function memberClaims(request: Request): MemberClaims {
   const claims = (request as MemberRequest).member;
   if (!claims) throw new Error('member authentication required');
@@ -79,6 +121,30 @@ export function requireMember(secret: string, prisma: PrismaClient): RequestHand
       (request as MemberRequest).member = claims;
       next();
     } catch (error) { next(error); }
+  };
+}
+
+export function requireCompletedSetup(config: ApiConfig, prisma: PrismaClient): RequestHandler {
+  return async (request, response, next) => {
+    try {
+      const claims = memberClaims(request);
+      const user = await prisma.user.findUnique({
+        where: { id: claims.sub },
+        select: { emailVerifiedAt: true, biometricEnrolledAt: true, securitySetupCompletedAt: true },
+      });
+      if (user === null) {
+        response.status(401).json({ error: 'unauthorized' });
+        return;
+      }
+      const setup = securitySetupStatus(user, config.requireEmailVerification);
+      if (setup.remaining.length > 0 || setup.completedAt === null) {
+        response.status(403).json({ error: 'setup_incomplete', remaining: setup.remaining });
+        return;
+      }
+      next();
+    } catch (error) {
+      next(error);
+    }
   };
 }
 
@@ -165,7 +231,7 @@ export async function verifyEmailCode(prisma: PrismaClient, userId: string, emai
   if (result !== 'valid') throw new HttpError(401, 'invalid email verification code');
 }
 
-export async function verifyAndSetEmail(prisma: PrismaClient, userId: string, code: string) {
+export async function verifyAndSetEmail(prisma: PrismaClient, userId: string, code: string, requireEmailVerification: boolean) {
   const result = await withSerializableRetry(prisma, async (tx) => {
     const verification = await tx.emailVerification.findFirst({
       where: { userId, purpose: EmailVerificationPurpose.VERIFY_EMAIL, consumedAt: null },
@@ -183,7 +249,8 @@ export async function verifyAndSetEmail(prisma: PrismaClient, userId: string, co
     }
     const now = new Date();
     await tx.emailVerification.update({ where: { id: verification.id }, data: { consumedAt: now } });
-    return tx.user.update({ where: { id: userId }, data: { email: verification.email, emailVerifiedAt: now } });
+    await tx.user.update({ where: { id: userId }, data: { email: verification.email, emailVerifiedAt: now } });
+    return recomputeSecuritySetupCompletion(tx, userId, requireEmailVerification);
   });
   if (result === null) throw new HttpError(401, 'invalid email verification code');
   return result;
@@ -264,6 +331,7 @@ export function createMemberAuthRouter(dependencies: MemberAuthDependencies): ex
         };
       });
       if (result.kind !== 'rotated') throw new HttpError(401, 'unauthorized');
+      const member = serializeMember(await prisma.user.findUniqueOrThrow({ where: { id: result.userId } }));
       response.json({
         tokens: {
           accessToken: createMemberJwt(result.userId, result.sid, config.memberJwtSecret, config.memberJwtTtlSeconds),
@@ -271,6 +339,7 @@ export function createMemberAuthRouter(dependencies: MemberAuthDependencies): ex
           refreshToken: result.refreshToken,
           refreshExpiresAt: result.refreshExpiresAt,
         },
+        member,
       });
     } catch (error) { next(error); }
   });
@@ -295,11 +364,31 @@ export function createMemberAuthRouter(dependencies: MemberAuthDependencies): ex
       if (!user || user.emailVerifiedAt === null) throw new HttpError(401, 'invalid email verification code');
       await verifyEmailCode(prisma, user.id, email, EmailVerificationPurpose.PIN_RESET, code);
       await prisma.$transaction([
-        prisma.user.update({ where: { id: user.id }, data: { pinHash: await bcrypt.hash(pin, 12), pinUpdatedAt: new Date(), pinAttempts: 0, pinLockCount: 0, pinLockedUntil: null } }),
+        prisma.user.update({ where: { id: user.id }, data: { pinHash: await bcrypt.hash(pin, 12), pinUpdatedAt: new Date(), pinAttempts: 0, pinLockCount: 0, pinLockedUntil: null, pinResetQuarantineUntil: new Date(Date.now() + config.pinResetQuarantineHours * 60 * 60 * 1000), biometricEnrolledAt: null, securitySetupCompletedAt: null } }),
         prisma.memberDevice.updateMany({ where: { userId: user.id, revokedAt: null }, data: { revokedAt: new Date() } }),
       ]);
       response.json(await tokenResponse(prisma, config, user.id, request.header('x-device-label') ?? 'Unknown device'));
     } catch (error) { next(error); }
+  });
+  return router;
+}
+
+export function createMemberSecurityRouter(dependencies: MemberAuthDependencies): express.Router {
+  const router = express.Router();
+  router.post('/security/biometric', async (request, response, next) => {
+    try {
+      const body = z.object({ pin: fourDigitCodeSchema }).parse(request.body);
+      const userId = memberClaims(request).sub;
+      await verifyMemberPin(dependencies.prisma, userId, body.pin);
+      const updated = await withSerializableRetry(dependencies.prisma, async (tx) => {
+        await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${userId}::uuid FOR UPDATE`;
+        await tx.user.update({ where: { id: userId }, data: { biometricEnrolledAt: new Date() } });
+        return recomputeSecuritySetupCompletion(tx, userId, dependencies.config.requireEmailVerification);
+      });
+      response.json(securitySetupStatus(updated, dependencies.config.requireEmailVerification));
+    } catch (error) {
+      next(error);
+    }
   });
   return router;
 }

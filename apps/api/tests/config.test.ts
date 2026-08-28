@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { loadApiConfig } from '../src/config.js';
+import { assertEmailVerificationDelivery } from '../src/startup-guard.js';
 
 const validEnvironment = {
   DATABASE_URL: 'postgresql://trustme:trustme@localhost:55432/trustme',
@@ -11,6 +12,7 @@ const validEnvironment = {
   POLYGON_RPC_URL: 'http://127.0.0.1:8545',
   USDT_CONTRACT_ADDRESS: '0x52908400098527886E0F7030069857D2E4169EE7',
   HOT_WALLET_ADDRESS: '0x52908400098527886E0F7030069857D2E4169EE7',
+  EMAIL_DELIVERY: 'log',
 };
 
 describe('API configuration', () => {
@@ -21,5 +23,13 @@ describe('API configuration', () => {
   it('parses configured browser origins', () => {
     expect(loadApiConfig({ ...validEnvironment, API_ALLOWED_ORIGINS: 'https://app-trustcoupon.komasi.as, https://example.test ' }).allowedOrigins)
       .toEqual(['https://app-trustcoupon.komasi.as', 'https://example.test']);
+  });
+
+  it('does not require email verification by default', () => {
+    expect(loadApiConfig(validEnvironment).requireEmailVerification).toBe(false);
+  });
+
+  it('rejects mandatory verification without an email delivery channel', () => {
+    expect(() => assertEmailVerificationDelivery(true, 'none')).toThrow('REQUIRE_EMAIL_VERIFICATION=true conflicts with EMAIL_DELIVERY=none');
   });
 });
