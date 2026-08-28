@@ -61,7 +61,7 @@ describe('chain ingest', () => {
       blockHashes: new Map([[100, '0x100'], [101, '0x101'], [102, '0x102'], [103, '0x103']]),
       logs: [fixtureAccounts.onchainLog],
     });
-    const config = { usdtContractAddress: usdt, chainStartBlock: 100, confirmations: 12, maxBlockRange: 2_000, reorgRewindBlocks: 64 };
+    const config = { usdtContractAddress: usdt, chainStartBlock: 100, confirmations: 12, maxBlockRange: 2_000, ingestChunksPerTick: 20, reorgRewindBlocks: 64 };
     await expect(ingestOnce(prisma, provider, config)).resolves.toMatchObject({ processed: 1, scannedThrough: 100 });
     expect((await prisma.ledgerAccount.findUniqueOrThrow({ where: { id: fixtureAccounts.userAccount.id } })).balance).toBe(100_000n);
     await prisma.chainCursor.update({ where: { id: 1 }, data: { nextBlock: 100n, lastBlockHash: null } });
@@ -78,17 +78,72 @@ describe('chain ingest', () => {
       blockHashes: new Map([[100, '0x100']]),
       logs: [unknown, fixtureAccounts.onchainLog],
     });
-    const config = { usdtContractAddress: usdt, chainStartBlock: 100, confirmations: 12, maxBlockRange: 2_000, reorgRewindBlocks: 64 };
+    const config = { usdtContractAddress: usdt, chainStartBlock: 100, confirmations: 12, maxBlockRange: 2_000, ingestChunksPerTick: 20, reorgRewindBlocks: 64 };
     await expect(ingestOnce(prisma, provider, config)).resolves.toMatchObject({ scannedThrough: null, processed: 0 });
     expect(await prisma.transaction.count()).toBe(0);
   });
 
   it('rewinds on a previous-block hash mismatch', async () => {
     const fixtureAccounts = await fixture();
-    const config = { usdtContractAddress: usdt, chainStartBlock: 100, confirmations: 1, maxBlockRange: 10, reorgRewindBlocks: 64 };
+    const config = { usdtContractAddress: usdt, chainStartBlock: 100, confirmations: 1, maxBlockRange: 10, ingestChunksPerTick: 20, reorgRewindBlocks: 64 };
     await prisma.chainCursor.create({ data: { id: 1, nextBlock: 150n, lastBlockHash: '0xold' } });
     const provider = new FakeChainProvider({ head: 200, blockHashes: new Map([[149, '0xnew']]), logs: [fixtureAccounts.onchainLog] });
     await expect(ingestOnce(prisma, provider, config)).resolves.toMatchObject({ rewound: true });
+    expect(await prisma.chainCursor.findUniqueOrThrow({ where: { id: 1 } })).toMatchObject({ nextBlock: 100n, lastBlockHash: null });
+  });
+
+  it('scans multiple confirmed chunks in one tick', async () => {
+    const fixtureAccounts = await fixture();
+    const provider = new FakeChainProvider({
+      head: 130,
+      blockHashes: new Map([[109, '0x109'], [119, '0x119'], [129, '0x129']]),
+      logs: [fixtureAccounts.onchainLog],
+    });
+    const config = { usdtContractAddress: usdt, chainStartBlock: 100, confirmations: 1, maxBlockRange: 10, ingestChunksPerTick: 3, reorgRewindBlocks: 64 };
+
+    await expect(ingestOnce(prisma, provider, config)).resolves.toMatchObject({ processed: 1, scannedThrough: 129 });
+    expect(await prisma.chainCursor.findUniqueOrThrow({ where: { id: 1 } })).toMatchObject({ nextBlock: 130n, lastBlockHash: '0x129' });
+  });
+
+  it('honors the per-tick chunk cap', async () => {
+    await fixture();
+    const provider = new FakeChainProvider({
+      head: 500,
+      blockHashes: new Map([[109, '0x109'], [119, '0x119']]),
+    });
+    const config = { usdtContractAddress: usdt, chainStartBlock: 100, confirmations: 1, maxBlockRange: 10, ingestChunksPerTick: 2, reorgRewindBlocks: 64 };
+
+    await expect(ingestOnce(prisma, provider, config)).resolves.toMatchObject({ scannedThrough: 119 });
+    expect(await prisma.chainCursor.findUniqueOrThrow({ where: { id: 1 } })).toMatchObject({ nextBlock: 120n, lastBlockHash: '0x119' });
+  });
+
+  it('stops scanning after a reorg rewind', async () => {
+    await fixture();
+    class ReorgAfterFirstChunkProvider extends FakeChainProvider {
+      private hashReads = 0;
+      public logReads = 0;
+
+      public override async getBlockHash(blockNumber: number): Promise<string | null> {
+        if (blockNumber === 109) {
+          this.hashReads += 1;
+          return this.hashReads === 1 ? '0x109' : '0xreorg';
+        }
+        return super.getBlockHash(blockNumber);
+      }
+
+      public override async getLogs(filter: Parameters<FakeChainProvider['getLogs']>[0]) {
+        this.logReads += 1;
+        return super.getLogs(filter);
+      }
+    }
+    const provider = new ReorgAfterFirstChunkProvider({
+      head: 200,
+      blockHashes: new Map([[109, '0x109']]),
+    });
+    const config = { usdtContractAddress: usdt, chainStartBlock: 100, confirmations: 1, maxBlockRange: 10, ingestChunksPerTick: 5, reorgRewindBlocks: 64 };
+
+    await expect(ingestOnce(prisma, provider, config)).resolves.toMatchObject({ rewound: true, scannedThrough: 109 });
+    expect(provider.logReads).toBe(1);
     expect(await prisma.chainCursor.findUniqueOrThrow({ where: { id: 1 } })).toMatchObject({ nextBlock: 100n, lastBlockHash: null });
   });
 });
