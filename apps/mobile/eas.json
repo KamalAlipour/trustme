@@ -24,6 +24,7 @@
   "submit": {
     "production": {
       "ios": {
+        "ascAppId": "6806222132",
         "bundleIdentifier": "as.komasi.trustcoupon"
       },
       "android": {
