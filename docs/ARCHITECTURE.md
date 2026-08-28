@@ -135,6 +135,10 @@ The sweep cadence and batch are controlled by `SWEEP_SCAN_INTERVAL_MS` and
 `SWEEP_BATCH_SIZE`; `SWEEP_MAX_GAS_TOP_UP_WEI` caps native-gas funding for one
 deposit address. `DEPOSIT_WALLET_MNEMONIC_PATH` points to the signing mnemonic
 file and `DEPOSIT_XPUB` identifies the matching public account node.
+Transient RPC failures leave the current sweep row retryable. Permanent
+failures are retained for audit and replacement sweeps are delayed by
+`SWEEP_FAILURE_BACKOFF_MS`; after `SWEEP_MAX_ATTEMPTS` consecutive failures,
+the address is disarmed until an operator re-arms its `sweepPendingAt` marker.
 
 ## 5. Internal circulation
 

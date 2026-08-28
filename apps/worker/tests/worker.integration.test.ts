@@ -24,6 +24,8 @@ const sweepConfig = {
   hotWalletAddress: getAddress(`0x${'dd'.repeat(20)}`),
   sweepMinMicroUsdt: 1_000_000,
   sweepMaxGasTopUpWei: 500_000_000_000_000_000n,
+  sweepFailureBackoffMs: 900_000,
+  sweepMaxAttempts: 5,
 };
 
 async function account(type: AccountType, asset: Asset, userId?: string) {
@@ -64,6 +66,15 @@ async function sweepFixture() {
     data: { address: derived.address },
   });
   return { user, accountNode, depositAddress: updatedAddress, derived };
+}
+
+class TransientSweepProvider extends FakeChainProvider {
+  public failEstimateFees = true;
+
+  public override async estimateFees() {
+    if (this.failEstimateFees) throw new Error('temporary RPC failure');
+    return super.estimateFees();
+  }
 }
 
 beforeAll(async () => {
@@ -262,6 +273,93 @@ describe('deposit sweep', () => {
       .resolves.toMatchObject({ status: 'failed' });
     expect(await prisma.depositSweep.findFirstOrThrow()).toMatchObject({ status: DepositSweepStatus.FAILED, lastError: 'deposit address derivation mismatch' });
     expect(provider.sentTransactions).toHaveLength(0);
+  });
+
+  it('leaves a PENDING sweep retryable after a transient RPC failure', async () => {
+    const fixtureAccounts = await sweepFixture();
+    const provider = new TransientSweepProvider({
+      tokenBalances: new Map([[`${usdt.toLowerCase()}:${fixtureAccounts.derived.address.toLowerCase()}`, 5_000_000n]]),
+    });
+
+    await expect(sweepDepositAddress(prisma, provider, fixtureAccounts.accountNode, sweepConfig, fixtureAccounts.depositAddress.id))
+      .rejects.toThrow('temporary RPC failure');
+    const firstSweep = await prisma.depositSweep.findFirstOrThrow();
+    expect(firstSweep).toMatchObject({ status: DepositSweepStatus.PENDING });
+    expect((await prisma.depositAddress.findUniqueOrThrow({ where: { id: fixtureAccounts.depositAddress.id } })).sweepPendingAt).not.toBeNull();
+    provider.failEstimateFees = false;
+    await expect(sweepDepositAddress(prisma, provider, fixtureAccounts.accountNode, sweepConfig, fixtureAccounts.depositAddress.id))
+      .resolves.toMatchObject({ status: 'broadcast', sweepId: firstSweep.id });
+    expect(await prisma.depositSweep.count()).toBe(1);
+  });
+
+  it('does not create a replacement for a recent failed sweep', async () => {
+    const fixtureAccounts = await sweepFixture();
+    await prisma.depositSweep.create({
+      data: {
+        depositAddressId: fixtureAccounts.depositAddress.id,
+        amountMicroUsdt: 5_000_000n,
+        status: DepositSweepStatus.FAILED,
+        lastError: 'permanent failure',
+      },
+    });
+    const provider = new FakeChainProvider({
+      tokenBalances: new Map([[`${usdt.toLowerCase()}:${fixtureAccounts.derived.address.toLowerCase()}`, 5_000_000n]]),
+    });
+
+    await expect(sweepDepositAddress(prisma, provider, fixtureAccounts.accountNode, sweepConfig, fixtureAccounts.depositAddress.id))
+      .resolves.toMatchObject({ status: 'skipped' });
+    expect(await prisma.depositSweep.count()).toBe(1);
+    expect(provider.sentTransactions).toHaveLength(0);
+  });
+
+  it('clears the pending marker after consecutive failures reach the limit', async () => {
+    const fixtureAccounts = await sweepFixture();
+    await prisma.depositSweep.createMany({
+      data: Array.from({ length: sweepConfig.sweepMaxAttempts }, () => ({
+        depositAddressId: fixtureAccounts.depositAddress.id,
+        amountMicroUsdt: 5_000_000n,
+        status: DepositSweepStatus.FAILED,
+        lastError: 'permanent failure',
+      })),
+    });
+    const provider = new FakeChainProvider();
+
+    await expect(sweepDepositAddress(prisma, provider, fixtureAccounts.accountNode, sweepConfig, fixtureAccounts.depositAddress.id))
+      .resolves.toMatchObject({ status: 'skipped' });
+    expect(await prisma.depositSweep.count()).toBe(sweepConfig.sweepMaxAttempts);
+    expect((await prisma.depositAddress.findUniqueOrThrow({ where: { id: fixtureAccounts.depositAddress.id } })).sweepPendingAt).toBeNull();
+  });
+
+  it('allows a second gas top-up when the first mined top-up is still insufficient', async () => {
+    const fixtureAccounts = await sweepFixture();
+    const receipts = new Map();
+    const nativeBalances = new Map<string, bigint>([
+      [fixtureAccounts.derived.address.toLowerCase(), 0n],
+      [sweepConfig.hotWalletAddress.toLowerCase(), 1_000_000_000_000_000_000n],
+    ]);
+    const provider = new FakeChainProvider({
+      tokenBalances: new Map([[`${usdt.toLowerCase()}:${fixtureAccounts.derived.address.toLowerCase()}`, 5_000_000n]]),
+      nativeBalances,
+      receipts,
+    });
+    const hotSigner = new FakeTransactionSigner(sweepConfig.hotWalletAddress, '0x02');
+
+    await expect(sweepDepositAddress(prisma, provider, fixtureAccounts.accountNode, sweepConfig, fixtureAccounts.depositAddress.id))
+      .resolves.toMatchObject({ status: 'gas-funding' });
+    let sweep = await prisma.depositSweep.findFirstOrThrow();
+    const firstTopUp = await fundSweepGas(prisma, provider, fixtureAccounts.accountNode, hotSigner, sweepConfig, sweep.id);
+    if (firstTopUp.status !== 'broadcast') throw new Error('expected first gas top-up broadcast');
+    receipts.set(firstTopUp.txHash, { status: 1, blockNumber: 1, transactionHash: firstTopUp.txHash });
+
+    await expect(sweepDepositAddress(prisma, provider, fixtureAccounts.accountNode, sweepConfig, fixtureAccounts.depositAddress.id))
+      .resolves.toMatchObject({ status: 'gas-funding' });
+    sweep = await prisma.depositSweep.findFirstOrThrow();
+    expect(sweep.status).toBe(DepositSweepStatus.GAS_FUNDING);
+    expect(sweep.gasTxHash).toBeNull();
+    const secondTopUp = await fundSweepGas(prisma, provider, fixtureAccounts.accountNode, hotSigner, sweepConfig, sweep.id);
+    expect(secondTopUp.status).toBe('broadcast');
+    expect(hotSigner.signCount).toBe(2);
+    expect(provider.sentTransactions).toHaveLength(2);
   });
 
   it('does not double-broadcast a sweep already marked BROADCAST', async () => {

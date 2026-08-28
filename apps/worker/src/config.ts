@@ -25,6 +25,8 @@ export const workerConfigSchema = z.object({
   sweepMaxGasTopUpWei: z.coerce.bigint().positive().default(500_000_000_000_000_000n),
   sweepScanIntervalMs: positiveInteger.default(60_000),
   sweepBatchSize: positiveInteger.default(25),
+  sweepFailureBackoffMs: positiveInteger.default(900_000),
+  sweepMaxAttempts: positiveInteger.default(5),
   failoverMarkerPath: z.string().default('/etc/trustme/FAILED_OVER'),
   mediaStorageDir: z.string().default('/var/lib/trustme/media'),
 });
@@ -53,6 +55,8 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
     sweepMaxGasTopUpWei: env.SWEEP_MAX_GAS_TOP_UP_WEI,
     sweepScanIntervalMs: env.SWEEP_SCAN_INTERVAL_MS,
     sweepBatchSize: env.SWEEP_BATCH_SIZE,
+    sweepFailureBackoffMs: env.SWEEP_FAILURE_BACKOFF_MS,
+    sweepMaxAttempts: env.SWEEP_MAX_ATTEMPTS,
     failoverMarkerPath: env.FAILOVER_MARKER_PATH,
     mediaStorageDir: env.MEDIA_STORAGE_DIR,
   });

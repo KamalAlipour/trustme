@@ -46,6 +46,13 @@ against the production servers.
    `SWEEP_MAX_GAS_TOP_UP_WEI` caps native-gas funding,
    `SWEEP_SCAN_INTERVAL_MS` controls the scan cadence, and
    `SWEEP_BATCH_SIZE` limits addresses considered per scan.
+   `SWEEP_FAILURE_BACKOFF_MS` delays replacement sweeps after a permanent
+   failure, while `SWEEP_MAX_ATTEMPTS` disarms an address after that many
+   consecutive failed sweep records. Failed records remain available for
+   admin attention. To re-arm an address, an authorized operator must set its
+   `DepositAddress.sweepPendingAt` marker again (for example, with an
+   `UPDATE "DepositAddress" SET "sweepPendingAt" = NOW() WHERE "id" = ...`
+   maintenance statement).
 4. Deploy a reviewed ref with `ops/deploy.sh --ref <git-ref>`.
 5. Run `ops/s2-standby.sh` on Server 2.
 

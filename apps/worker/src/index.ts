@@ -90,15 +90,9 @@ export async function startWorker(config: WorkerConfig = loadWorkerConfig()): Pr
         if (depositAccountNode === null) return { status: 'disabled' };
         const result = await fundSweepGas(prisma, provider, depositAccountNode, signer, sweepConfig, String(job.data.sweepId));
         if (result.status === 'broadcast') {
-          await queues.sweep.add('sweep', { depositAddressId: (await prisma.depositSweep.findUniqueOrThrow({
-            where: { id: result.sweepId },
-            select: { depositAddressId: true },
-          })).depositAddressId }, { delay: 15_000, jobId: `sweep:${result.sweepId}`, removeOnComplete: true });
+          await queues.sweep.add('sweep', { depositAddressId: result.depositAddressId }, { delay: 15_000, jobId: `sweep:${result.depositAddressId}`, removeOnComplete: true });
         } else if (result.status === 'ready') {
-          await queues.sweep.add('sweep', { depositAddressId: (await prisma.depositSweep.findUniqueOrThrow({
-            where: { id: result.sweepId },
-            select: { depositAddressId: true },
-          })).depositAddressId }, { jobId: `sweep:${result.sweepId}`, removeOnComplete: true });
+          await queues.sweep.add('sweep', { depositAddressId: result.depositAddressId }, { jobId: `sweep:${result.depositAddressId}`, removeOnComplete: true });
         }
         return result;
       }

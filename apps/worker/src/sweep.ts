@@ -12,6 +12,8 @@ export type SweepConfig = DispatchConfig & {
   hotWalletAddress: string;
   sweepMinMicroUsdt: number;
   sweepMaxGasTopUpWei: bigint;
+  sweepFailureBackoffMs: number;
+  sweepMaxAttempts: number;
 };
 
 export type SweepResult =
@@ -29,6 +31,7 @@ type ClaimedSweep = {
     gasTxHash: string | null;
     sweepTxHash: string | null;
     amountMicroUsdt: bigint;
+    attempts: number;
   };
   depositAddress: {
     id: string;
@@ -37,29 +40,70 @@ type ClaimedSweep = {
   };
 };
 
-async function claimSweep(prisma: PrismaClient, depositAddressId: string): Promise<ClaimedSweep | null> {
+async function claimSweep(prisma: PrismaClient, depositAddressId: string, config: SweepConfig): Promise<ClaimedSweep | null> {
   return withSerializableRetry(prisma, async (tx: Prisma.TransactionClient) => {
     await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "DepositAddress" WHERE "id" = ${depositAddressId}::uuid FOR UPDATE`);
     const depositAddress = await tx.depositAddress.findUniqueOrThrow({ where: { id: depositAddressId } });
     const existing = await tx.depositSweep.findFirst({
       where: { depositAddressId, status: transferStatuses },
       orderBy: { createdAt: 'desc' },
-      select: { id: true, status: true, gasTxHash: true, sweepTxHash: true, amountMicroUsdt: true },
+      select: { id: true, status: true, gasTxHash: true, sweepTxHash: true, amountMicroUsdt: true, attempts: true },
     });
     if (existing) return { sweep: existing, depositAddress };
+    const previousSweeps = await tx.depositSweep.findMany({
+      where: { depositAddressId },
+      orderBy: { createdAt: 'desc' },
+      select: { status: true, createdAt: true },
+    });
+    let consecutiveFailures = 0;
+    for (const previous of previousSweeps) {
+      if (previous.status !== DepositSweepStatus.FAILED) break;
+      consecutiveFailures += 1;
+    }
+    if (consecutiveFailures >= config.sweepMaxAttempts) {
+      await tx.depositAddress.updateMany({ where: { id: depositAddressId }, data: { sweepPendingAt: null } });
+      return null;
+    }
+    const latest = previousSweeps[0];
+    if (latest?.status === DepositSweepStatus.FAILED && Date.now() - latest.createdAt.getTime() < config.sweepFailureBackoffMs) {
+      return null;
+    }
     if (depositAddress.sweepPendingAt === null) return null;
     const sweep = await tx.depositSweep.create({
       data: { depositAddressId, amountMicroUsdt: 0n, attempts: 1 },
-      select: { id: true, status: true, gasTxHash: true, sweepTxHash: true, amountMicroUsdt: true },
+      select: { id: true, status: true, gasTxHash: true, sweepTxHash: true, amountMicroUsdt: true, attempts: true },
     });
     return { sweep, depositAddress };
   });
 }
 
-async function markFailed(prisma: PrismaClient, sweepId: string, lastError: string): Promise<void> {
-  await prisma.depositSweep.update({
-    where: { id: sweepId },
-    data: { status: DepositSweepStatus.FAILED, lastError, attempts: { increment: 1 } },
+async function markFailed(prisma: PrismaClient, sweepId: string, lastError: string, config: SweepConfig): Promise<void> {
+  await withSerializableRetry(prisma, async (tx: Prisma.TransactionClient) => {
+    const sweep = await tx.depositSweep.findUniqueOrThrow({
+      where: { id: sweepId },
+      select: { depositAddressId: true },
+    });
+    await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "DepositAddress" WHERE "id" = ${sweep.depositAddressId}::uuid FOR UPDATE`);
+    await tx.depositSweep.update({
+      where: { id: sweepId },
+      data: { status: DepositSweepStatus.FAILED, lastError, attempts: { increment: 1 } },
+    });
+    const rows = await tx.depositSweep.findMany({
+      where: { depositAddressId: sweep.depositAddressId },
+      orderBy: { createdAt: 'desc' },
+      select: { status: true },
+    });
+    let consecutiveFailures = 0;
+    for (const row of rows) {
+      if (row.status !== DepositSweepStatus.FAILED) break;
+      consecutiveFailures += 1;
+    }
+    if (consecutiveFailures >= config.sweepMaxAttempts) {
+      await tx.depositAddress.updateMany({
+        where: { id: sweep.depositAddressId },
+        data: { sweepPendingAt: null },
+      });
+    }
   });
 }
 
@@ -69,10 +113,6 @@ async function clearDustSweep(prisma: PrismaClient, sweepId: string, depositAddr
     await tx.depositAddress.updateMany({ where: { id: depositAddressId }, data: { sweepPendingAt: null } });
     await tx.depositSweep.deleteMany({
       where: { id: sweepId, status: { in: [DepositSweepStatus.PENDING, DepositSweepStatus.GAS_FUNDING] }, gasTxHash: null, sweepTxHash: null },
-    });
-    await tx.depositSweep.updateMany({
-      where: { id: sweepId, status: DepositSweepStatus.GAS_FUNDING, gasTxHash: { not: null }, sweepTxHash: null },
-      data: { status: DepositSweepStatus.FAILED, lastError: 'balance below sweep threshold after gas funding' },
     });
   });
 }
@@ -146,7 +186,7 @@ async function confirmSweep(
   const receipt = await provider.getTransactionReceipt(sweep.sweepTxHash);
   if (receipt === null) return { status: 'waiting', sweepId: sweep.id };
   if (receipt.status !== 1) {
-    await markFailed(prisma, sweep.id, 'sweep transaction reverted on-chain');
+    await markFailed(prisma, sweep.id, 'sweep transaction reverted on-chain', config);
     return { status: 'failed', sweepId: sweep.id };
   }
   const head = await assertChainHealthy(prisma, provider, config);
@@ -177,7 +217,7 @@ async function resumeGasFunding(
   const receipt = await provider.getTransactionReceipt(claimed.sweep.gasTxHash);
   if (receipt === null) return { status: 'waiting', sweepId: claimed.sweep.id };
   if (receipt.status !== 1) {
-    await markFailed(prisma, claimed.sweep.id, 'gas funding transaction reverted on-chain');
+    await markFailed(prisma, claimed.sweep.id, 'gas funding transaction reverted on-chain', config);
     return { status: 'failed', sweepId: claimed.sweep.id };
   }
   return sweepCurrentBalance(prisma, provider, accountNode, config, claimed);
@@ -194,7 +234,7 @@ async function sweepCurrentBalance(
   try {
     signer = deriveDepositSigner(accountNode, claimed.depositAddress.derivationIndex, claimed.depositAddress.address);
   } catch {
-    await markFailed(prisma, claimed.sweep.id, 'deposit address derivation mismatch');
+    await markFailed(prisma, claimed.sweep.id, 'deposit address derivation mismatch', config);
     return { status: 'failed', sweepId: claimed.sweep.id };
   }
   const balance = await provider.getTokenBalance(config.usdtContractAddress, signer.address);
@@ -212,12 +252,16 @@ async function sweepCurrentBalance(
   if (nativeBalance < required) {
     const shortfall = required - nativeBalance;
     if (shortfall > config.sweepMaxGasTopUpWei) {
-      await markFailed(prisma, claimed.sweep.id, 'required gas top-up exceeds configured maximum');
+      await markFailed(prisma, claimed.sweep.id, 'required gas top-up exceeds configured maximum', config);
+      return { status: 'failed', sweepId: claimed.sweep.id };
+    }
+    if (claimed.sweep.attempts >= config.sweepMaxAttempts) {
+      await markFailed(prisma, claimed.sweep.id, 'maximum gas top-up attempts reached', config);
       return { status: 'failed', sweepId: claimed.sweep.id };
     }
     await prisma.depositSweep.update({
       where: { id: claimed.sweep.id },
-      data: { status: DepositSweepStatus.GAS_FUNDING, amountMicroUsdt: balance, attempts: { increment: 1 } },
+      data: { status: DepositSweepStatus.GAS_FUNDING, gasTxHash: null, amountMicroUsdt: balance, attempts: { increment: 1 } },
     });
     return { status: 'gas-funding', sweepId: claimed.sweep.id };
   }
@@ -232,28 +276,20 @@ export async function sweepDepositAddress(
   depositAddressId: string,
 ): Promise<SweepResult> {
   await assertChainHealthy(prisma, provider, config);
-  const claimed = await claimSweep(prisma, depositAddressId);
+  const claimed = await claimSweep(prisma, depositAddressId, config);
   if (claimed === null) return { status: 'skipped' };
-  try {
-    if (claimed.sweep.status === DepositSweepStatus.BROADCAST) return await confirmSweep(prisma, provider, config, claimed.sweep);
-    if (claimed.sweep.status === DepositSweepStatus.GAS_FUNDING) {
-      return await resumeGasFunding(prisma, provider, accountNode, config, claimed);
-    }
-    return await sweepCurrentBalance(prisma, provider, accountNode, config, claimed);
-  } catch (error) {
-    const current = await prisma.depositSweep.findUnique({ where: { id: claimed.sweep.id }, select: { status: true, sweepTxHash: true } });
-    if (current?.sweepTxHash === null && (current.status === DepositSweepStatus.PENDING || current.status === DepositSweepStatus.GAS_FUNDING)) {
-      await markFailed(prisma, claimed.sweep.id, error instanceof Error ? error.message : 'deposit sweep failed');
-    }
-    throw error;
+  if (claimed.sweep.status === DepositSweepStatus.BROADCAST) return confirmSweep(prisma, provider, config, claimed.sweep);
+  if (claimed.sweep.status === DepositSweepStatus.GAS_FUNDING) {
+    return resumeGasFunding(prisma, provider, accountNode, config, claimed);
   }
+  return sweepCurrentBalance(prisma, provider, accountNode, config, claimed);
 }
 
 export type GasFundingResult =
   | { status: 'skipped' }
-  | { status: 'broadcast'; sweepId: string; txHash: string }
-  | { status: 'ready'; sweepId: string }
-  | { status: 'failed'; sweepId: string };
+  | { status: 'broadcast'; sweepId: string; depositAddressId: string; txHash: string }
+  | { status: 'ready'; sweepId: string; depositAddressId: string }
+  | { status: 'failed'; sweepId: string; depositAddressId: string };
 
 export async function fundSweepGas(
   prisma: PrismaClient,
@@ -273,8 +309,8 @@ export async function fundSweepGas(
   try {
     depositSigner = deriveDepositSigner(accountNode, sweep.depositAddress.derivationIndex, sweep.depositAddress.address);
   } catch {
-    await markFailed(prisma, sweep.id, 'deposit address derivation mismatch');
-    return { status: 'failed', sweepId };
+    await markFailed(prisma, sweep.id, 'deposit address derivation mismatch', config);
+    return { status: 'failed', sweepId, depositAddressId: sweep.depositAddressId };
   }
   const balance = await provider.getTokenBalance(config.usdtContractAddress, depositSigner.address);
   if (balance < BigInt(config.sweepMinMicroUsdt)) {
@@ -290,12 +326,12 @@ export async function fundSweepGas(
   const nativeBalance = await provider.getNativeBalance(depositSigner.address);
   if (nativeBalance >= required) {
     await prisma.depositSweep.update({ where: { id: sweep.id }, data: { status: DepositSweepStatus.PENDING, amountMicroUsdt: balance } });
-    return { status: 'ready', sweepId: sweep.id };
+    return { status: 'ready', sweepId: sweep.id, depositAddressId: sweep.depositAddressId };
   }
   const shortfall = required - nativeBalance;
   if (shortfall > config.sweepMaxGasTopUpWei) {
-    await markFailed(prisma, sweep.id, 'required gas top-up exceeds configured maximum');
-    return { status: 'failed', sweepId: sweep.id };
+    await markFailed(prisma, sweep.id, 'required gas top-up exceeds configured maximum', config);
+    return { status: 'failed', sweepId, depositAddressId: sweep.depositAddressId };
   }
   const topUpWithoutGas: TransactionRequest = {
     to: getAddress(depositSigner.address),
@@ -306,8 +342,8 @@ export async function fundSweepGas(
   const topUpGasLimit = calculateGasLimit(await provider.estimateGas({ ...topUpWithoutGas, from: hotWalletSigner.address }), config);
   const requiredHotWalletBalance = shortfall + topUpGasLimit * maxFeePerGas;
   if (await provider.getNativeBalance(hotWalletSigner.address) < requiredHotWalletBalance) {
-    await markFailed(prisma, sweep.id, 'hot wallet cannot cover gas top-up and transaction fee');
-    return { status: 'failed', sweepId: sweep.id };
+    await markFailed(prisma, sweep.id, 'hot wallet cannot cover gas top-up and transaction fee', config);
+    return { status: 'failed', sweepId, depositAddressId: sweep.depositAddressId };
   }
   const topUp: TransactionRequest = {
     ...topUpWithoutGas,
@@ -322,5 +358,5 @@ export async function fundSweepGas(
   } catch (error) {
     if (!isKnownBroadcastError(error, txHash)) throw error;
   }
-  return { status: 'broadcast', sweepId: sweep.id, txHash };
+  return { status: 'broadcast', sweepId: sweep.id, depositAddressId: sweep.depositAddressId, txHash };
 }
