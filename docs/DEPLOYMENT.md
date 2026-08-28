@@ -218,8 +218,16 @@ PIN reset and defaults to 72 hours.
 
 Biometric enrolment records local device biometrics used to unlock a
 device-held key; it is not server-side biometric attestation. Browser clients
-can complete the PIN-and-email fallback and are shown a notice that native
-biometrics require the mobile app.
+and native devices without usable enrolled biometrics can complete setup with
+the PIN acknowledgement path and are shown a notice that native biometrics
+require the mobile app or can be enabled later. The API reports this state as
+`biometricPending` without claiming that biometrics were enrolled.
+
+The security-setup migration backfills existing PIN-protected accounts with
+biometric and setup-completed timestamps so the feature does not lock out
+members who were created before its release. This is a deliberate
+grandfathering carve-out; a PIN reset clears the setup state and requires the
+member to establish it again.
 
 After a PIN reset, the old devices are revoked, biometric enrolment is cleared,
 and withdrawals, transfers, escrow, and other outgoing-value operations are

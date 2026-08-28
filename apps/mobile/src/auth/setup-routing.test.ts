@@ -4,6 +4,7 @@ import { getSetupRoute } from './setup-routing';
 const setup = (remaining: Array<'email_verification' | 'biometric_enrolment'>) => ({
   emailVerified: !remaining.includes('email_verification'),
   biometricEnrolled: !remaining.includes('biometric_enrolment'),
+  biometricPending: false,
   requiresEmailVerification: remaining.includes('email_verification'),
   remaining,
   completedAt: remaining.length === 0 ? new Date().toISOString() : null,

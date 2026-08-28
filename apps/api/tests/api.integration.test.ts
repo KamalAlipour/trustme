@@ -154,7 +154,7 @@ describe('member API', () => {
     expect(profile.status).toBe(403);
     expect(profile.body).toEqual({ error: 'setup_incomplete', remaining: ['biometric_enrolment'] });
     expect((await request(app).get('/v1/me/security-setup').set('Authorization', `Bearer ${registered.body.tokens.accessToken}`)).status).toBe(200);
-    expect((await request(app).post('/v1/member/security/biometric').set('Authorization', `Bearer ${registered.body.tokens.accessToken}`).send({ pin: '2468' })).status).toBe(200);
+    expect((await request(app).post('/v1/member/security/biometric').set('Authorization', `Bearer ${registered.body.tokens.accessToken}`).send({ pin: '2468', biometricEnrolled: true })).status).toBe(200);
     expect((await request(app).get('/v1/me').set('Authorization', `Bearer ${registered.body.tokens.accessToken}`)).status).toBe(200);
     expect(await prisma.ledgerAccount.count({ where: { user: { phoneNumber: '+1555000120' } } })).toBe(2);
     expect(await prisma.depositAddress.count({ where: { user: { phoneNumber: '+1555000120' } } })).toBe(1);
@@ -178,7 +178,7 @@ describe('member API', () => {
     const response = await request(app)
       .post('/v1/member/security/biometric')
       .set('Authorization', `Bearer ${registered.body.tokens.accessToken}`)
-      .send({ pin: '1357' });
+      .send({ pin: '1357', biometricEnrolled: true });
     expect(response.status).toBe(401);
     expect((await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000117' } })).biometricEnrolledAt).toBeNull();
   });
@@ -189,6 +189,26 @@ describe('member API', () => {
     expect(response.status).toBe(201);
     const setup = await request(app).get('/v1/me/security-setup').set('Authorization', `Bearer ${response.body.tokens.accessToken}`);
     expect(setup.body.remaining).toEqual(['email_verification', 'biometric_enrolment']);
+  });
+
+  it('acknowledges setup without claiming biometric enrollment', async () => {
+    const { app } = appFixture();
+    const registered = await request(app).post('/v1/auth/register').send({ phone: '+1555000116', pin: '2468' });
+    const response = await request(app)
+      .post('/v1/member/security/biometric')
+      .set('Authorization', `Bearer ${registered.body.tokens.accessToken}`)
+      .send({ pin: '2468', biometricEnrolled: false });
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      biometricEnrolled: false,
+      biometricPending: true,
+      remaining: [],
+    });
+    const user = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000116' } });
+    expect(user.biometricEnrolledAt).toBeNull();
+    expect(user.setupAcknowledgedAt).not.toBeNull();
+    expect(user.securitySetupCompletedAt).not.toBeNull();
+    expect((await request(app).get('/v1/me').set('Authorization', `Bearer ${registered.body.tokens.accessToken}`)).status).toBe(200);
   });
 
   it('rejects weak PINs and keeps unknown login indistinguishable', async () => {

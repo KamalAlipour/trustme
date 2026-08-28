@@ -61,6 +61,7 @@ export type MemberRequest = Request & { member?: MemberClaims };
 export type SecuritySetupStatus = {
   emailVerified: boolean;
   biometricEnrolled: boolean;
+  biometricPending: boolean;
   requiresEmailVerification: boolean;
   remaining: Array<'email_verification' | 'biometric_enrolment'>;
   completedAt: Date | null;
@@ -69,14 +70,16 @@ export type SecuritySetupStatus = {
 export function securitySetupStatus(user: {
   emailVerifiedAt: Date | null;
   biometricEnrolledAt: Date | null;
+  setupAcknowledgedAt: Date | null;
   securitySetupCompletedAt: Date | null;
 }, requireEmailVerification: boolean): SecuritySetupStatus {
   const remaining: Array<'email_verification' | 'biometric_enrolment'> = [];
   if (requireEmailVerification && user.emailVerifiedAt === null) remaining.push('email_verification');
-  if (user.biometricEnrolledAt === null) remaining.push('biometric_enrolment');
+  if (user.biometricEnrolledAt === null && user.setupAcknowledgedAt === null) remaining.push('biometric_enrolment');
   return {
     emailVerified: user.emailVerifiedAt !== null,
     biometricEnrolled: user.biometricEnrolledAt !== null,
+    biometricPending: user.biometricEnrolledAt === null && user.setupAcknowledgedAt !== null,
     requiresEmailVerification: requireEmailVerification,
     remaining,
     completedAt: user.securitySetupCompletedAt,
@@ -90,10 +93,10 @@ export async function recomputeSecuritySetupCompletion(
 ) {
   const user = await tx.user.findUniqueOrThrow({
     where: { id: userId },
-    select: { pinHash: true, emailVerifiedAt: true, biometricEnrolledAt: true, securitySetupCompletedAt: true },
+    select: { pinHash: true, emailVerifiedAt: true, biometricEnrolledAt: true, setupAcknowledgedAt: true, securitySetupCompletedAt: true },
   });
   const complete = user.pinHash !== null &&
-    user.biometricEnrolledAt !== null &&
+    (user.biometricEnrolledAt !== null || user.setupAcknowledgedAt !== null) &&
     (!requireEmailVerification || user.emailVerifiedAt !== null);
   return tx.user.update({
     where: { id: userId },
@@ -130,7 +133,7 @@ export function requireCompletedSetup(config: ApiConfig, prisma: PrismaClient): 
       const claims = memberClaims(request);
       const user = await prisma.user.findUnique({
         where: { id: claims.sub },
-        select: { emailVerifiedAt: true, biometricEnrolledAt: true, securitySetupCompletedAt: true },
+        select: { emailVerifiedAt: true, biometricEnrolledAt: true, setupAcknowledgedAt: true, securitySetupCompletedAt: true },
       });
       if (user === null) {
         response.status(401).json({ error: 'unauthorized' });
@@ -364,7 +367,7 @@ export function createMemberAuthRouter(dependencies: MemberAuthDependencies): ex
       if (!user || user.emailVerifiedAt === null) throw new HttpError(401, 'invalid email verification code');
       await verifyEmailCode(prisma, user.id, email, EmailVerificationPurpose.PIN_RESET, code);
       await prisma.$transaction([
-        prisma.user.update({ where: { id: user.id }, data: { pinHash: await bcrypt.hash(pin, 12), pinUpdatedAt: new Date(), pinAttempts: 0, pinLockCount: 0, pinLockedUntil: null, pinResetQuarantineUntil: new Date(Date.now() + config.pinResetQuarantineHours * 60 * 60 * 1000), biometricEnrolledAt: null, securitySetupCompletedAt: null } }),
+        prisma.user.update({ where: { id: user.id }, data: { pinHash: await bcrypt.hash(pin, 12), pinUpdatedAt: new Date(), pinAttempts: 0, pinLockCount: 0, pinLockedUntil: null, pinResetQuarantineUntil: new Date(Date.now() + config.pinResetQuarantineHours * 60 * 60 * 1000), biometricEnrolledAt: null, setupAcknowledgedAt: null, securitySetupCompletedAt: null } }),
         prisma.memberDevice.updateMany({ where: { userId: user.id, revokedAt: null }, data: { revokedAt: new Date() } }),
       ]);
       response.json(await tokenResponse(prisma, config, user.id, request.header('x-device-label') ?? 'Unknown device'));
@@ -377,12 +380,17 @@ export function createMemberSecurityRouter(dependencies: MemberAuthDependencies)
   const router = express.Router();
   router.post('/security/biometric', async (request, response, next) => {
     try {
-      const body = z.object({ pin: fourDigitCodeSchema }).parse(request.body);
+      const body = z.object({ pin: fourDigitCodeSchema, biometricEnrolled: z.boolean() }).parse(request.body);
       const userId = memberClaims(request).sub;
       await verifyMemberPin(dependencies.prisma, userId, body.pin);
       const updated = await withSerializableRetry(dependencies.prisma, async (tx) => {
         await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${userId}::uuid FOR UPDATE`;
-        await tx.user.update({ where: { id: userId }, data: { biometricEnrolledAt: new Date() } });
+        await tx.user.update({
+          where: { id: userId },
+          data: body.biometricEnrolled
+            ? { biometricEnrolledAt: new Date() }
+            : { setupAcknowledgedAt: new Date() },
+        });
         return recomputeSecuritySetupCompletion(tx, userId, dependencies.config.requireEmailVerification);
       });
       response.json(securitySetupStatus(updated, dependencies.config.requireEmailVerification));

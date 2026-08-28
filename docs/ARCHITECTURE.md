@@ -184,9 +184,17 @@ Member registration may include an email address and starts with incomplete
 security setup. The API is authoritative for email verification, biometric
 enrolment, and setup completion; member routes remain unavailable until the
 required steps are complete. Native clients enrol local device biometrics and
-use that biometric check to unlock a device-held key. This is not
+use that biometric check to unlock a device-held key. Browser clients and
+native devices without usable biometrics may acknowledge setup with the PIN
+without setting the biometric-enrolled flag; the API reports this as
+`biometricPending` so a later phone can offer real enrolment. This is not
 server-verified biometric attestation: a future device-key attestation flow is
 a deliberate follow-up.
+
+The security-setup migration grandfathered existing users with a non-null PIN
+by setting their biometric and setup-completed timestamps. This preserves
+access for accounts created before the feature; a subsequent PIN reset clears
+the state and requires setup again.
 
 Resetting a member PIN revokes active devices, clears biometric enrolment and
 setup completion, and places the account in a timed quarantine. While

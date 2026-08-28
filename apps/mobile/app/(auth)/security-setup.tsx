@@ -3,7 +3,7 @@ import { Platform, Pressable, Text } from 'react-native';
 import { router } from 'expo-router';
 import { ApiError, request } from '../../src/api/client';
 import { useSession } from '../../src/auth/session';
-import { usesNativeBiometrics } from '../../src/auth/setup-capabilities';
+import { shouldEnrollBiometrics } from '../../src/auth/setup-capabilities';
 import { Page } from '../../src/components/Screen';
 import { fa } from '../../src/i18n/fa';
 import { authenticateLocally, biometricAvailable } from '../../src/lib/biometrics';
@@ -24,16 +24,22 @@ export default function SecuritySetup() {
     setError('');
     setBusy(true);
     try {
-      if (usesNativeBiometrics(Platform.OS) && !await authenticateLocally()) {
-        setError(fa.biometricCancelled);
-        return;
+      const biometricEnrolled = shouldEnrollBiometrics(Platform.OS, available);
+      if (biometricEnrolled) {
+        if (!await authenticateLocally()) {
+          setError(fa.biometricCancelled);
+          return;
+        }
       }
       const pin = await readPin();
       if (pin === null) {
         setError(fa.pinUnavailable);
         return;
       }
-      await request('/v1/member/security/biometric', { method: 'POST', body: { pin } });
+      await request('/v1/member/security/biometric', {
+        method: 'POST',
+        body: { pin, biometricEnrolled },
+      });
       await refreshSetup();
       router.replace('/');
     } catch (cause) {

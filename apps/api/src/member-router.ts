@@ -339,7 +339,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
     try {
       const user = await prisma.user.findUniqueOrThrow({
         where: { id: memberClaims(request).sub },
-        select: { emailVerifiedAt: true, biometricEnrolledAt: true, securitySetupCompletedAt: true },
+        select: { emailVerifiedAt: true, biometricEnrolledAt: true, setupAcknowledgedAt: true, securitySetupCompletedAt: true },
       });
       response.json(securitySetupStatus(user, dependencies.config.requireEmailVerification));
     } catch (error) {

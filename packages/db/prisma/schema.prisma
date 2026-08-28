@@ -157,6 +157,7 @@ model User {
   pinLockedUntil       DateTime?
   securitySetupCompletedAt DateTime?
   biometricEnrolledAt  DateTime?
+  setupAcknowledgedAt DateTime?
   pinResetQuarantineUntil DateTime?
   dustMicroUsdt        BigInt              @default(0)
   activeGuaranteeCount Int                 @default(0)
