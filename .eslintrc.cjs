@@ -5,5 +5,5 @@ module.exports = {
   parserOptions: { project: './tsconfig.json', tsconfigRootDir: __dirname },
   plugins: ['@typescript-eslint'],
   extends: ['eslint:recommended', 'plugin:@typescript-eslint/recommended', 'prettier'],
-  ignorePatterns: ['dist', 'node_modules', 'packages/db/prisma/generated'],
+  ignorePatterns: ['dist', 'node_modules', 'packages/db/prisma/generated', 'apps/mobile/babel.config.js'],
 };

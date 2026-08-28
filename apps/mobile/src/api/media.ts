@@ -1,17 +1,26 @@
 import * as FileSystem from 'expo-file-system';
 import { request } from './client';
 import type { MediaAsset, MediaKind } from './types';
+import { isWebPlatform } from '../lib/platform';
 
 const MAX_NON_VIDEO_BYTES = 10 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
 
 export type UploadedMedia = MediaAsset;
 
+export class BrowserFileSystemUnavailableError extends Error {
+  public constructor() {
+    super('File system operations are unavailable on web');
+    this.name = 'BrowserFileSystemUnavailableError';
+  }
+}
+
 export async function uploadMedia(input: {
   uri: string;
   kind: MediaKind;
   mimeType: string;
 }): Promise<UploadedMedia> {
+  if (isWebPlatform()) throw new BrowserFileSystemUnavailableError();
   const info = await FileSystem.getInfoAsync(input.uri, { size: true });
   if (info.exists && info.size !== undefined) {
     const maximum = input.kind === 'VIDEO' ? MAX_VIDEO_BYTES : MAX_NON_VIDEO_BYTES;

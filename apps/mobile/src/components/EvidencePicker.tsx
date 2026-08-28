@@ -2,7 +2,7 @@ import React from 'react';
 import { Pressable, Text, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { requestRecordingPermissionsAsync, useAudioPlayer, useAudioRecorder, useAudioRecorderState } from 'expo-audio';
-import { uploadMedia } from '../api/media';
+import { BrowserFileSystemUnavailableError, uploadMedia } from '../api/media';
 import type { MediaAsset, MediaKind } from '../api/types';
 import { fa } from '../i18n/fa';
 import { styles } from '../styles';
@@ -32,9 +32,9 @@ export function EvidencePicker({ mediaIds, onChange }: { mediaIds: string[]; onC
       const media = await uploadMedia({ uri, kind, mimeType });
       setItems((current) => current.map((item) => item.localUri === uri ? { ...item, media, state: 'ready' } : item));
       onChange(mediaIds.includes(media.id) ? mediaIds : [...mediaIds, media.id]);
-    } catch {
+    } catch (cause) {
       setItems((current) => current.map((item) => item.localUri === uri ? { ...item, state: 'failed' } : item));
-      setError(fa.uploadFailed);
+      setError(cause instanceof BrowserFileSystemUnavailableError ? fa.browserFileSystemUnavailable : fa.uploadFailed);
     }
   };
 
