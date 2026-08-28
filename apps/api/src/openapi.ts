@@ -49,6 +49,7 @@ export const openapiDocument = {
     '/v1/me/escrows/{id}/release': { post: { responses: { '200': { description: 'Escrow released' }, '403': { description: 'Forbidden' } } } },
     '/v1/me/escrows/{id}/cancel': { post: { responses: { '200': { description: 'Escrow cancelled' }, '403': { description: 'Forbidden' } } } },
     '/v1/me/withdrawals': { post: { responses: { '201': { description: 'Withdrawal requested' } } } },
+    '/v1/me/withdrawals/quote': { get: { responses: { '200': { description: 'Withdrawal fee quote' }, '400': { description: 'Withdrawal quote rejected' } } } },
     '/v1/me/contacts': {
       get: { responses: { '200': { description: 'Member contacts' } } },
       post: { responses: { '201': { description: 'Contact created' } } },

@@ -319,9 +319,10 @@ export function createApp(dependencies: ApiDependencies): express.Express {
     try {
       const body = withdrawalBodySchema.parse(request.body);
       const member = await userWithAccounts(prisma, body.barcodeId);
-      const values = await prisma.systemSetting.findMany({ where: { key: { in: ['WITHDRAWAL_BASE_FEE_BPS', 'MIN_WITHDRAWAL_USDT', 'AUTO_APPROVAL_LIMIT_USDT', 'WITHDRAWAL_COOLDOWN_HOURS'] } } });
+      const values = await prisma.systemSetting.findMany({ where: { key: { in: ['WITHDRAWAL_BASE_FEE_BPS', 'WITHDRAWAL_MIN_FEE_USDT', 'MIN_WITHDRAWAL_USDT', 'AUTO_APPROVAL_LIMIT_USDT', 'WITHDRAWAL_COOLDOWN_HOURS'] } } });
       const settings = new Map(values.map((setting) => [setting.key, setting.value]));
       const baseFeeBps = BigInt(settings.get('WITHDRAWAL_BASE_FEE_BPS') ?? (() => { throw new Error('missing fee setting'); })());
+      const minimumFee = microUsdtFromDecimal(settings.get('WITHDRAWAL_MIN_FEE_USDT') ?? (() => { throw new Error('missing minimum fee setting'); })());
       const minimum = microUsdtFromDecimal(settings.get('MIN_WITHDRAWAL_USDT') ?? (() => { throw new Error('missing minimum setting'); })());
       const autoApproval = microUsdtFromDecimal(settings.get('AUTO_APPROVAL_LIMIT_USDT') ?? (() => { throw new Error('missing approval setting'); })());
       const vault = await systemAccount(prisma, AccountType.SYSTEM_VAULT_USDT, Asset.USDT);
@@ -329,7 +330,7 @@ export function createApp(dependencies: ApiDependencies): express.Express {
       const pending = await systemAccount(prisma, AccountType.SYSTEM_WITHDRAWAL_PENDING, Asset.USDT);
       const issuance = await systemAccount(prisma, AccountType.SYSTEM_COUPON_ISSUANCE, Asset.COUPON);
       const cooldownHours = Number(settings.get('WITHDRAWAL_COOLDOWN_HOURS') ?? '168');
-      const withdrawal = await requestWithdrawal(prisma, { userId: member.user.id, userAccountId: member.account.id, destinationAddress: evmAddressSchema.parse(body.destinationAddress), couponsGross: parseCoupons(body.couponsGross), baseFeeBps, minimumWithdrawalMicroUsdt: minimum, autoApprovalLimitMicroUsdt: autoApproval, cooldownHours, vaultAccountId: vault.id, feeAccountId: fees.id, pendingAccountId: pending.id, issuanceAccountId: issuance.id });
+      const withdrawal = await requestWithdrawal(prisma, { userId: member.user.id, userAccountId: member.account.id, destinationAddress: evmAddressSchema.parse(body.destinationAddress), couponsGross: parseCoupons(body.couponsGross), baseFeeBps, minimumFeeMicroUsdt: minimumFee, minimumWithdrawalMicroUsdt: minimum, autoApprovalLimitMicroUsdt: autoApproval, cooldownHours, vaultAccountId: vault.id, feeAccountId: fees.id, pendingAccountId: pending.id, issuanceAccountId: issuance.id });
       if (withdrawal.status === WithdrawalStatus.APPROVED) await queue.add('dispatch', { withdrawalId: withdrawal.id }, { jobId: withdrawal.id });
       response.status(201).json(serializeWithdrawal(withdrawal));
     } catch (error) {

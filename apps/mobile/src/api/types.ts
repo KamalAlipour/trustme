@@ -86,3 +86,10 @@ export type WithdrawalAvailability = {
   blockers: string[];
 };
 export type Withdrawal = { id: string; status: string; couponsGross: string; grossUsdt: string; feeUsdt: string; netUsdt: string; chainTxHash: string | null; eligibleAt: string };
+export type WithdrawalQuote = {
+  grossMicroUsdt: string;
+  feeMicroUsdt: string;
+  netMicroUsdt: string;
+  baseFeeBps: string;
+  minimumFeeMicroUsdt: string;
+};

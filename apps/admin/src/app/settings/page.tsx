@@ -5,7 +5,7 @@ import { ApiForbiddenError, adminApiFetch } from '../../lib/api';
 import { canEditSettings, requireAdminSession } from '../../lib/session';
 import { Flash } from '../../components/flash';
 
-type Settings = { withdrawalBaseFeeBps: string; minimumWithdrawalMicroUsdt: string; autoApprovalLimitMicroUsdt: string };
+type Settings = { withdrawalBaseFeeBps: string; minimumFeeMicroUsdt: string; minimumWithdrawalMicroUsdt: string; autoApprovalLimitMicroUsdt: string };
 
 export default async function SettingsPage({ searchParams }: { searchParams: Promise<{ errorField?: string; error?: string; flash?: string; flashType?: string }> }) {
   const params = await searchParams;

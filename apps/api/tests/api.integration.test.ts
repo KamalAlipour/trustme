@@ -135,6 +135,7 @@ beforeEach(async () => {
   await prisma.$executeRawUnsafe('TRUNCATE TABLE "MediaAsset", "RefundRequest", "AidRequest", "CharityAgent", "Charity", "AdminAuditLog", "AdminUser", "Withdrawal", "EscrowHold", "EmailVerification", "MemberDevice", "Contact", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User", "ChainCursor", "SystemSetting" CASCADE');
   await prisma.systemSetting.createMany({ data: [
     { key: 'WITHDRAWAL_BASE_FEE_BPS', value: '100' },
+    { key: 'WITHDRAWAL_MIN_FEE_USDT', value: '0.20' },
     { key: 'MIN_WITHDRAWAL_USDT', value: '1' },
     { key: 'AUTO_APPROVAL_LIMIT_USDT', value: '1000' },
   ] });
@@ -144,6 +145,28 @@ afterAll(async () => {
 });
 
 describe('member API', () => {
+  it('returns the configured withdrawal fee quote and rejects invalid quotes', async () => {
+    const { app } = appFixture();
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000129', barcodeId: 'api-quote' });
+    const accessToken = await memberToken(app, '+1555000129');
+    const quote = await request(app).get('/v1/me/withdrawals/quote').query({ couponsGross: '200' }).set('Authorization', `Bearer ${accessToken}`);
+    expect(quote.status).toBe(200);
+    expect(quote.body).toEqual({
+      grossMicroUsdt: '2000000',
+      feeMicroUsdt: '200000',
+      netMicroUsdt: '1800000',
+      baseFeeBps: '100',
+      minimumFeeMicroUsdt: '200000',
+    });
+    const belowMinimum = await request(app).get('/v1/me/withdrawals/quote').query({ couponsGross: '100' }).set('Authorization', `Bearer ${accessToken}`);
+    expect(belowMinimum.status).toBe(400);
+    expect(belowMinimum.body).toEqual({ error: 'withdrawal is below minimum' });
+    await prisma.systemSetting.update({ where: { key: 'WITHDRAWAL_MIN_FEE_USDT' }, data: { value: '2.1' } });
+    const excessiveFee = await request(app).get('/v1/me/withdrawals/quote').query({ couponsGross: '200' }).set('Authorization', `Bearer ${accessToken}`);
+    expect(excessiveFee.status).toBe(400);
+    expect(excessiveFee.body).toEqual({ error: 'withdrawal fee must be less than gross amount' });
+  });
+
   it('supports PIN signup and token-scoped profile reads', async () => {
     const { app } = appFixture();
     const registered = await request(app).post('/v1/auth/register').send({ phone: '+1555000120', pin: '2468', displayName: 'Coupon User' });
@@ -946,12 +969,14 @@ describe('admin API', () => {
     const settings = await request(app).get('/admin/settings').set('Authorization', `Bearer ${jwt}`);
     expect(settings.status).toBe(200);
     expect(settings.body.minimumWithdrawalMicroUsdt).toBe('1000000');
+    expect(settings.body.minimumFeeMicroUsdt).toBe('200000');
     const updated = await request(app).patch('/admin/settings').set('Authorization', `Bearer ${jwt}`).send({
       withdrawalBaseFeeBps: '250',
+      minimumFeeMicroUsdt: '300000',
       minimumWithdrawalMicroUsdt: '2000000',
     });
     expect(updated.status).toBe(200);
-    expect(updated.body).toMatchObject({ withdrawalBaseFeeBps: '250', minimumWithdrawalMicroUsdt: '2000000' });
+    expect(updated.body).toMatchObject({ withdrawalBaseFeeBps: '250', minimumFeeMicroUsdt: '300000', minimumWithdrawalMicroUsdt: '2000000' });
     expect(await prisma.adminAuditLog.count({ where: { action: 'settings.update' } })).toBe(1);
     const unknown = await request(app).patch('/admin/settings').set('Authorization', `Bearer ${jwt}`).send({ unexpected: '1' });
     expect(unknown.status).toBe(400);
@@ -962,6 +987,9 @@ describe('admin API', () => {
       fields: [{ path: 'withdrawalBaseFeeBps', message: 'fee bps must be between 0 and 10000' }],
     });
     expect(await prisma.adminAuditLog.count({ where: { action: 'settings.update' } })).toBe(1);
+    const invalidMinimumFee = await request(app).patch('/admin/settings').set('Authorization', `Bearer ${jwt}`).send({ minimumFeeMicroUsdt: '100000001' });
+    expect(invalidMinimumFee.status).toBe(400);
+    expect(invalidMinimumFee.body.fields[0]).toEqual({ path: 'minimumFeeMicroUsdt', message: 'minimum fee must be at most 100 USDT' });
     const ledger = await request(app).get('/admin/ledger').query({ search: `withdrawal:${withdrawal.id}:burn` }).set('Authorization', `Bearer ${jwt}`);
     expect(ledger.status).toBe(200);
     expect(ledger.body.items[0].externalRef).toBe(`withdrawal:${withdrawal.id}:burn`);

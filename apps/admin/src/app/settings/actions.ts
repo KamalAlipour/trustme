@@ -5,7 +5,7 @@ import { labels } from '../../labels';
 import { adminApiFetch, ApiResponseError } from '../../lib/api';
 import { decimalUsdtToMicro } from '../../lib/format';
 
-const fields = ['withdrawalBaseFeeBps', 'minimumWithdrawalUsdt', 'autoApprovalLimitUsdt'] as const;
+const fields = ['withdrawalBaseFeeBps', 'minimumFeeUsdt', 'minimumWithdrawalUsdt', 'autoApprovalLimitUsdt'] as const;
 
 export async function updateSettingsAction(formData: FormData): Promise<void> {
   const values = Object.fromEntries(fields.map((field) => [field, formData.get(field)])) as Record<typeof fields[number], FormDataEntryValue | null>;
@@ -17,16 +17,20 @@ export async function updateSettingsAction(formData: FormData): Promise<void> {
   let body: Record<string, string>;
   try {
     const minimumWithdrawalMicroUsdt = decimalUsdtToMicro(values.minimumWithdrawalUsdt as string);
+    const minimumFeeMicroUsdt = decimalUsdtToMicro(values.minimumFeeUsdt as string);
     const autoApprovalLimitMicroUsdt = decimalUsdtToMicro(values.autoApprovalLimitUsdt as string);
     body = {
       withdrawalBaseFeeBps: values.withdrawalBaseFeeBps as string,
+      minimumFeeMicroUsdt,
       minimumWithdrawalMicroUsdt,
       autoApprovalLimitMicroUsdt,
     };
   } catch {
-    const invalidField = !/^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/.test(values.minimumWithdrawalUsdt as string)
-      ? 'minimumWithdrawalUsdt'
-      : 'autoApprovalLimitUsdt';
+    const invalidField = !/^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/.test(values.minimumFeeUsdt as string)
+      ? 'minimumFeeUsdt'
+      : !/^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/.test(values.minimumWithdrawalUsdt as string)
+        ? 'minimumWithdrawalUsdt'
+        : 'autoApprovalLimitUsdt';
     redirect(`/settings?errorField=${invalidField}&error=${encodeURIComponent(labels.invalidAmount)}`);
   }
   try {

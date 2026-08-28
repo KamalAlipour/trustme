@@ -24,15 +24,21 @@ export function feeMicroUsdt(grossMicroUsdt: bigint, baseFeeBps: bigint): bigint
 
 export function withdrawalQuote(
   couponsGross: bigint,
-  baseFeeBps: bigint,
-  minimumWithdrawalMicroUsdt: bigint,
+  options: {
+    baseFeeBps: bigint;
+    minimumFeeMicroUsdt: bigint;
+    minimumWithdrawalMicroUsdt: bigint;
+  },
 ): { grossMicroUsdt: bigint; feeMicroUsdt: bigint; netMicroUsdt: bigint } {
   if (couponsGross <= 0n) throw new DomainError('withdrawal must contain coupons');
+  if (options.minimumFeeMicroUsdt < 0n) throw new DomainError('minimum fee cannot be negative');
   const grossMicroUsdt = microUsdtFromCoupons(couponsGross);
-  const fee = feeMicroUsdt(grossMicroUsdt, baseFeeBps);
-  const netMicroUsdt = grossMicroUsdt - fee;
-  if (netMicroUsdt < minimumWithdrawalMicroUsdt) throw new DomainError('withdrawal is below minimum');
-  return { grossMicroUsdt, feeMicroUsdt: fee, netMicroUsdt };
+  const fee = feeMicroUsdt(grossMicroUsdt, options.baseFeeBps);
+  const appliedFee = fee > options.minimumFeeMicroUsdt ? fee : options.minimumFeeMicroUsdt;
+  if (appliedFee >= grossMicroUsdt) throw new DomainError('withdrawal fee must be less than gross amount');
+  const netMicroUsdt = grossMicroUsdt - appliedFee;
+  if (netMicroUsdt < options.minimumWithdrawalMicroUsdt) throw new DomainError('withdrawal is below minimum');
+  return { grossMicroUsdt, feeMicroUsdt: appliedFee, netMicroUsdt };
 }
 
 export function microUsdtFromDecimal(value: string): bigint {

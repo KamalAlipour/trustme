@@ -212,10 +212,13 @@ export async function cancelEscrow(
 
 export function quoteWithdrawalForUsdt(
   couponsGross: bigint,
-  baseFeeBps: bigint,
-  minimumWithdrawalMicroUsdt: bigint,
+  options: {
+    baseFeeBps: bigint;
+    minimumFeeMicroUsdt: bigint;
+    minimumWithdrawalMicroUsdt: bigint;
+  },
 ) {
-  return withdrawalQuote(couponsGross, baseFeeBps, minimumWithdrawalMicroUsdt);
+  return withdrawalQuote(couponsGross, options);
 }
 
 export async function requestWithdrawal(
@@ -226,6 +229,7 @@ export async function requestWithdrawal(
     destinationAddress: string;
     couponsGross: bigint;
     baseFeeBps: bigint;
+    minimumFeeMicroUsdt: bigint;
     minimumWithdrawalMicroUsdt: bigint;
     autoApprovalLimitMicroUsdt: bigint;
     vaultAccountId: string;
@@ -236,7 +240,11 @@ export async function requestWithdrawal(
   },
 ) {
   evmAddressSchema.parse(input.destinationAddress);
-  const quote = withdrawalQuote(input.couponsGross, input.baseFeeBps, input.minimumWithdrawalMicroUsdt);
+  const quote = withdrawalQuote(input.couponsGross, {
+    baseFeeBps: input.baseFeeBps,
+    minimumFeeMicroUsdt: input.minimumFeeMicroUsdt,
+    minimumWithdrawalMicroUsdt: input.minimumWithdrawalMicroUsdt,
+  });
   const withdrawalId = randomUUID();
   const status = quote.netMicroUsdt <= input.autoApprovalLimitMicroUsdt
     ? WithdrawalStatus.APPROVED

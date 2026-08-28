@@ -3,10 +3,11 @@ import { Pressable, Text, TextInput, View } from 'react-native';
 import { router } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 import { request, ApiError, LockedError } from '../../src/api/client';
+import type { WithdrawalQuote } from '../../src/api/types';
 import { useSession } from '../../src/auth/session';
 import { useAvailability, useBalance, useInvalidateMoney, useMember } from '../../src/hooks';
 import { Page, LoadingScreen } from '../../src/components/Screen';
-import { formatCoupons, formatDate } from '../../src/lib/format';
+import { formatCoupons, formatDate, formatMicroUsdt } from '../../src/lib/format';
 import { useTranslation } from '../../src/i18n';
 import { styles } from '../../src/styles';
 
@@ -26,9 +27,19 @@ export default function Profile() {
   const [currentPin, setCurrentPin] = useState('');
   const [newPin, setNewPin] = useState('');
   const [eligibleAt, setEligibleAt] = useState<string | null>(null);
+  const [withdrawalQuote, setWithdrawalQuote] = useState<WithdrawalQuote | null>(null);
+  const [withdrawalQuoteError, setWithdrawalQuoteError] = useState('');
+  const [withdrawalQuoteLoading, setWithdrawalQuoteLoading] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const previousLanguage = useRef(language);
+  const updateWithdrawAmount = (value: string) => {
+    const amount = value.replace(/\D/g, '');
+    setWithdrawAmount(amount);
+    setWithdrawalQuote(null);
+    setWithdrawalQuoteError('');
+    setWithdrawalQuoteLoading(amount.length > 0);
+  };
   const devices = useQuery({
     queryKey: ['devices'],
     queryFn: () => request<{ items: Array<{ id: string; label: string; current: boolean; lastSeenAt: string }> }>('/v1/me/devices'),
@@ -39,6 +50,35 @@ export default function Profile() {
       previousLanguage.current = language;
     }
   }, [language, t]);
+  useEffect(() => {
+    const amount = withdrawAmount.trim();
+    if (amount.length === 0) {
+      setWithdrawalQuote(null);
+      setWithdrawalQuoteError('');
+      setWithdrawalQuoteLoading(false);
+      return;
+    }
+    setWithdrawalQuote(null);
+    setWithdrawalQuoteError('');
+    setWithdrawalQuoteLoading(true);
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void request<WithdrawalQuote>(`/v1/me/withdrawals/quote?couponsGross=${encodeURIComponent(amount)}`)
+        .then((quote) => {
+          if (!cancelled) setWithdrawalQuote(quote);
+        })
+        .catch((cause: unknown) => {
+          if (!cancelled) setWithdrawalQuoteError(cause instanceof ApiError ? cause.message : t.quoteUnavailable);
+        })
+        .finally(() => {
+          if (!cancelled) setWithdrawalQuoteLoading(false);
+        });
+    }, 350);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [withdrawAmount, t]);
   if (member.isLoading || balance.isLoading) return <LoadingScreen />;
   const saveName = async () => {
     setError(''); setNotice('');
@@ -122,10 +162,16 @@ export default function Profile() {
           <Text style={styles.heading}>{t.availableToWithdraw}: {formatCoupons(availability.data.availableToWithdrawCoupons, language)}</Text>
           {availability.data.blockers.map((blocker) => <Text key={blocker} style={styles.danger}>{blocker}</Text>)}
         </> : null}
-        <TextInput value={withdrawAmount} onChangeText={(value) => setWithdrawAmount(value.replace(/\D/g, ''))} placeholder={t.amount} style={styles.input} keyboardType="number-pad" />
+        <TextInput value={withdrawAmount} onChangeText={updateWithdrawAmount} placeholder={t.amount} style={styles.input} keyboardType="number-pad" />
+        {withdrawalQuoteLoading ? <Text style={styles.muted}>{t.quoteLoading}</Text> : null}
+        {withdrawalQuoteError ? <Text style={styles.danger}>{withdrawalQuoteError}</Text> : null}
+        {withdrawalQuote ? <>
+          <Text style={styles.text}>{t.platformFee}: {formatMicroUsdt(withdrawalQuote.feeMicroUsdt, language)} USDT</Text>
+          <Text style={styles.heading}>{t.amountReceived}: {formatMicroUsdt(withdrawalQuote.netMicroUsdt, language)} USDT</Text>
+        </> : null}
         <TextInput value={destination} onChangeText={setDestination} placeholder={t.destinationAddress} style={styles.input} />
         <TextInput value={pin} onChangeText={(value) => setPin(value.replace(/\D/g, '').slice(0, 4))} placeholder={t.pin} style={styles.input} keyboardType="number-pad" secureTextEntry />
-        <Pressable onPress={() => void withdraw()} style={styles.button}><Text style={styles.buttonText}>{t.submitWithdrawal}</Text></Pressable>
+        <Pressable disabled={withdrawalQuote === null || withdrawalQuoteLoading} onPress={() => void withdraw()} style={styles.button}><Text style={styles.buttonText}>{t.submitWithdrawal}</Text></Pressable>
         {eligibleAt ? <Text style={styles.muted}>{t.eligibleAt}: {formatDate(eligibleAt, language)}</Text> : null}
       </View>
       <View style={styles.card}><Text style={styles.muted}>{t.kycLater}</Text></View>
