@@ -104,7 +104,7 @@ export default function Profile() {
         <Text style={styles.heading}>{t.devices}</Text>
         {(devices.data?.items ?? []).map((device) => (
           <View key={device.id} style={styles.row}>
-            <Text style={styles.muted}>{device.label} · {device.current ? t.currentDevice : formatDate(device.lastSeenAt)}</Text>
+            <Text style={styles.muted}>{device.label} · {device.current ? t.currentDevice : formatDate(device.lastSeenAt, language)}</Text>
             {!device.current ? <Pressable onPress={() => void request(`/v1/me/devices/${device.id}`, { method: 'DELETE' }).then(() => void devices.refetch())}><Text style={styles.danger}>{t.deviceCancel}</Text></Pressable> : null}
           </View>
         ))}
@@ -116,17 +116,17 @@ export default function Profile() {
       <View style={styles.card}>
         <Text style={styles.heading}>{t.withdrawal}</Text>
         {availability.data ? <>
-          <Text style={styles.text}>{t.totalCollateral}: {formatCoupons(availability.data.totalCollateralCoupons)}</Text>
-          <Text style={styles.text}>{t.lockedGuarantee}: {formatCoupons(availability.data.lockedGuaranteeCoupons)}</Text>
-          <Text style={styles.text}>{t.debt}: {formatCoupons(availability.data.outstandingDebtCoupons)}</Text>
-          <Text style={styles.heading}>{t.availableToWithdraw}: {formatCoupons(availability.data.availableToWithdrawCoupons)}</Text>
+          <Text style={styles.text}>{t.totalCollateral}: {formatCoupons(availability.data.totalCollateralCoupons, language)}</Text>
+          <Text style={styles.text}>{t.lockedGuarantee}: {formatCoupons(availability.data.lockedGuaranteeCoupons, language)}</Text>
+          <Text style={styles.text}>{t.debt}: {formatCoupons(availability.data.outstandingDebtCoupons, language)}</Text>
+          <Text style={styles.heading}>{t.availableToWithdraw}: {formatCoupons(availability.data.availableToWithdrawCoupons, language)}</Text>
           {availability.data.blockers.map((blocker) => <Text key={blocker} style={styles.danger}>{blocker}</Text>)}
         </> : null}
         <TextInput value={withdrawAmount} onChangeText={(value) => setWithdrawAmount(value.replace(/\D/g, ''))} placeholder={t.amount} style={styles.input} keyboardType="number-pad" />
         <TextInput value={destination} onChangeText={setDestination} placeholder={t.destinationAddress} style={styles.input} />
         <TextInput value={pin} onChangeText={(value) => setPin(value.replace(/\D/g, '').slice(0, 4))} placeholder={t.pin} style={styles.input} keyboardType="number-pad" secureTextEntry />
         <Pressable onPress={() => void withdraw()} style={styles.button}><Text style={styles.buttonText}>{t.submitWithdrawal}</Text></Pressable>
-        {eligibleAt ? <Text style={styles.muted}>{t.eligibleAt}: {formatDate(eligibleAt)}</Text> : null}
+        {eligibleAt ? <Text style={styles.muted}>{t.eligibleAt}: {formatDate(eligibleAt, language)}</Text> : null}
       </View>
       <View style={styles.card}><Text style={styles.muted}>{t.kycLater}</Text></View>
       {notice ? <Text style={styles.notice}>{notice}</Text> : null}

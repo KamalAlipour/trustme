@@ -12,7 +12,7 @@ import { styles } from '../../src/styles';
 import { CharitySection } from '../../src/components/CharitySection';
 
 export default function Lending() {
-  const { t, direction } = useTranslation();
+  const { t, direction, language } = useTranslation();
   const loans = useLoans();
   const contacts = useContacts();
   const invalidate = useInvalidateMoney();
@@ -80,11 +80,11 @@ export default function Lending() {
       </View>
       {(loans.data?.items ?? []).map((loan) => (
         <View key={loan.id} style={styles.card}>
-          <Text style={styles.heading}>{t.loanTitle(formatCoupons(loan.principalCoupons))}</Text>
-          <Text style={styles.text}>{t.loanStatus(loan.status, formatCoupons(loan.outstandingCoupons))}</Text>
+          <Text style={styles.heading}>{t.loanTitle(formatCoupons(loan.principalCoupons, language))}</Text>
+          <Text style={styles.text}>{t.loanStatus(loan.status, formatCoupons(loan.outstandingCoupons, language))}</Text>
           {loan.guarantees.map((guarantee) => (
             <View key={guarantee.id} style={{ gap: 8 }}>
-              <Text style={styles.muted}>{t.guaranteeStatus(formatCoupons(guarantee.amountCoupons), guarantee.status)}</Text>
+              <Text style={styles.muted}>{t.guaranteeStatus(formatCoupons(guarantee.amountCoupons, language), guarantee.status)}</Text>
               {guarantee.guarantorId === member?.id ? <>
                 <TextInput value={pins[guarantee.id] ?? ''} onChangeText={(value) => setPins((current) => ({ ...current, [guarantee.id]: value.replace(/\D/g, '').slice(0, 4) }))} placeholder={t.pin} style={styles.input} keyboardType="number-pad" secureTextEntry />
                 <Pressable onPress={() => void approve(guarantee.id)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.approveGuarantee}</Text></Pressable>
@@ -105,7 +105,7 @@ export default function Lending() {
             />
             <Pressable onPress={() => void repay(loan.id, repaymentAmounts[loan.id] ?? nextInstallmentAmount(loan))} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.payInstallment}</Text></Pressable>
           </> : null}
-          <Text style={styles.muted}>{formatDate(loan.createdAt)}</Text>
+          <Text style={styles.muted}>{formatDate(loan.createdAt, language)}</Text>
         </View>
       ))}
       <CharitySection />

@@ -13,7 +13,7 @@ describe('PIN and coupon helpers', () => {
 
   it('formats coupons without converting through Number', () => {
     const value = '900719925474099312345678901';
-    const formatted = formatCoupons(value);
+    const formatted = formatCoupons(value, 'fa');
     expect(formatted).toBe('۹۰۰,۷۱۹,۹۲۵,۴۷۴,۰۹۹,۳۱۲,۳۴۵,۶۷۸,۹۰۱');
     expect(formatted).not.toContain('9007199254740992');
   });

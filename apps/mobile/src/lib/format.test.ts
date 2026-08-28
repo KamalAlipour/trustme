@@ -1,0 +1,26 @@
+import { describe, expect, it } from 'vitest';
+import { formatCoupons, formatDate, formatMicroUsdt } from './format';
+
+describe('localized formatting', () => {
+  it('formats coupon amounts with Latin digits in English and Persian digits in Persian', () => {
+    const value = '1234567';
+
+    expect(formatCoupons(value, 'en')).toBe('1,234,567');
+    expect(formatCoupons(value, 'fa')).toBe('۱,۲۳۴,۵۶۷');
+  });
+
+  it('formats dates with the Gregorian English locale and Jalali Persian locale', () => {
+    const value = '2024-01-15T12:00:00.000Z';
+
+    expect(formatDate(value, 'en')).toBe('Jan 15, 2024');
+    expect(formatDate(value, 'fa')).toContain('۱۴۰۲');
+    expect(formatDate(value, 'fa')).not.toBe(formatDate(value, 'en'));
+  });
+
+  it('formats micro-USDT amounts with Latin or Persian digits', () => {
+    const value = '1234567';
+
+    expect(formatMicroUsdt(value, 'en')).toBe('1.234567');
+    expect(formatMicroUsdt(value, 'fa')).toBe('۱.۲۳۴۵۶۷');
+  });
+});

@@ -12,7 +12,7 @@ import { SellerRefundPanel } from '../../src/components/SellerRefundPanel';
 import { canRequestRefund, refundableRemainder } from '../../src/lib/refunds';
 
 export default function Purchases() {
-  const { t } = useTranslation();
+  const { t, language } = useTranslation();
   const [search, setSearch] = React.useState('');
   const [sort, setSort] = React.useState<'direction' | 'date-desc' | 'date-asc' | 'amount-desc' | 'amount-asc'>('date-desc');
   const [refundItem, setRefundItem] = React.useState<{ id: string; amount: string } | null>(null);
@@ -49,10 +49,10 @@ export default function Purchases() {
       {items.length === 0 ? <Text style={styles.muted}>{t.noTransactions}</Text> : items.map((item) => (
         <View key={item.id} style={styles.card}>
           <View style={styles.row}>
-            <Text style={{ ...styles.heading, color: item.direction === 'in' ? '#216E4E' : '#B3261E' }}>{item.direction === 'in' ? '+' : '-'}{formatCoupons(item.amountCoupons)}</Text>
+            <Text style={{ ...styles.heading, color: item.direction === 'in' ? '#216E4E' : '#B3261E' }}>{item.direction === 'in' ? '+' : '-'}{formatCoupons(item.amountCoupons, language)}</Text>
             <Text style={styles.text}>{item.counterparty.displayName ?? item.counterparty.barcodeId ?? item.counterparty.systemAccountType ?? t.system}</Text>
           </View>
-          <Text style={styles.muted}>{formatDate(item.transaction.createdAt)} · {item.transaction.status}</Text>
+          <Text style={styles.muted}>{formatDate(item.transaction.createdAt, language)} · {item.transaction.status}</Text>
           {item.refund?.status === 'PENDING' ? <Text style={styles.muted}>🟡 {t.refundPending}</Text> : null}
           {item.refund?.status === 'APPROVED' ? <Text style={styles.notice}>🟢 {t.refundApproved}</Text> : null}
           {item.refund?.status === 'REJECTED' ? <Text style={styles.danger}>🔴 {t.refundRejected}</Text> : null}

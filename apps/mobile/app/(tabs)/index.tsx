@@ -11,7 +11,7 @@ import { formatCoupons } from '../../src/lib/format';
 import { styles } from '../../src/styles';
 
 export default function Home() {
-  const { t } = useTranslation();
+  const { t, language } = useTranslation();
   const { member, getStepUpPin } = useSession();
   const profile = useMember();
   const balance = useBalance();
@@ -61,7 +61,7 @@ export default function Home() {
       <Pressable onPress={() => router.push('/barcodes')} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.barcodeSearch}</Text></Pressable>
       <View style={styles.card}>
         <Text style={styles.muted}>{t.balance}</Text>
-        <Text style={{ ...styles.title, fontSize: 34 }}>{formatCoupons(balance.data?.coupons ?? '0')}</Text>
+        <Text style={{ ...styles.title, fontSize: 34 }}>{formatCoupons(balance.data?.coupons ?? '0', language)}</Text>
         <Text style={styles.muted}>{member?.displayName ?? profile.data?.displayName ?? ''}</Text>
       </View>
       {member?.isRestricted ? <View style={styles.card}><Text style={styles.danger}>{t.restricted}</Text><Text style={styles.text}>{t.restrictedExplanation}</Text></View> : null}

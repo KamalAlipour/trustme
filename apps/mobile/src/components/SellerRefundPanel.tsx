@@ -10,7 +10,7 @@ import { styles } from '../styles';
 import { EvidenceViewer } from './EvidenceViewer';
 
 export function SellerRefundPanel() {
-  const { t } = useTranslation();
+  const { t, language } = useTranslation();
   const refunds = useRefunds('seller');
   const invalidate = useInvalidateMoney();
   const { getStepUpPin } = useSession();
@@ -37,9 +37,9 @@ export function SellerRefundPanel() {
     <Text style={styles.heading}>{t.refunds}</Text>
     {refunds.isLoading ? <Text style={styles.muted}>{t.loading}</Text> : null}
     {rows.filter((row) => row.status === 'PENDING' && !collapsed.includes(row.id)).map((row) => <View key={row.id} style={styles.card}>
-      <Text style={styles.text}>{row.counterparty.displayName ?? row.counterparty.barcodeId} · {formatCoupons(row.amountCoupons)} {t.balance}</Text>
+      <Text style={styles.text}>{row.counterparty.displayName ?? row.counterparty.barcodeId} · {t.couponBalance(formatCoupons(row.amountCoupons, language))}</Text>
       <Text style={styles.muted}>{row.reason}</Text>
-      <Text style={styles.muted}>{t.purchases}: {formatDate(row.originalTransactionDate)}</Text>
+      <Text style={styles.muted}>{t.purchases}: {formatDate(row.originalTransactionDate, language)}</Text>
       <EvidenceViewer ids={row.mediaIds} />
       <Text style={styles.muted}>🟡 {t.refundPending}</Text>
       <TextInput value={notes[row.id] ?? ''} onChangeText={(value) => setNotes((current) => ({ ...current, [row.id]: value }))} placeholder={t.rejectionNote} style={styles.input} />
