@@ -46,6 +46,27 @@ export async function readDemoCirculation(prisma: PrismaClient): Promise<bigint>
   return account === null ? 0n : -account.balance;
 }
 
+export async function reconcileDemoIssuance(tx: Prisma.TransactionClient, purgedCouponBalance: bigint): Promise<bigint> {
+  const issuance = await tx.ledgerAccount.findFirstOrThrow({
+    where: { type: AccountType.SYSTEM_DEMO_ISSUANCE, asset: Asset.COUPON, userId: null },
+    select: { id: true, balance: true },
+  });
+  await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "LedgerAccount" WHERE "id" = ${issuance.id}::uuid FOR UPDATE`);
+  const remaining = await tx.ledgerAccount.aggregate({
+    where: { type: AccountType.USER_COUPON, asset: Asset.COUPON, user: { isDemo: true } },
+    _sum: { balance: true },
+  });
+  const expected = -(remaining._sum.balance ?? 0n);
+  const expectedFromPrevious = issuance.balance + purgedCouponBalance;
+  if (expected !== expectedFromPrevious) {
+    throw new DomainError(
+      `demo issuance reconciliation mismatch: remaining balance ${expected}, previous issuance ${issuance.balance} plus purged balance ${purgedCouponBalance} gives ${expectedFromPrevious}`,
+    );
+  }
+  await tx.ledgerAccount.update({ where: { id: issuance.id }, data: { balance: expected } });
+  return expected;
+}
+
 export async function assertSameDemoSide(tx: Prisma.TransactionClient, userIdA: string, userIdB: string): Promise<void> {
   const users = await tx.user.findMany({ where: { id: { in: [userIdA, userIdB] } }, select: { id: true, isDemo: true } });
   const a = users.find((user) => user.id === userIdA);
@@ -58,7 +79,6 @@ export async function assertNotDemoAccount(tx: Prisma.TransactionClient, userId:
   const user = await tx.user.findUniqueOrThrow({ where: { id: userId }, select: { isDemo: true } });
   if (user.isDemo) throw new DomainError('demo accounts cannot withdraw');
 }
-
 
 export async function assertNotDemoCharityDonation(
   tx: Prisma.TransactionClient,

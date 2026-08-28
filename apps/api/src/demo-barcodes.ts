@@ -1,5 +1,5 @@
 import { AccountType, Asset, Prisma, prisma } from '@trustme/db';
-import { issueDemoCoupons, readDemoCirculation } from '@trustme/core';
+import { issueDemoCoupons, readDemoCirculation, reconcileDemoIssuance } from '@trustme/core';
 import { provisionUser } from './user-provisioning.js';
 
 const RESERVED_PHONE_PREFIX = '+99000';
@@ -107,6 +107,11 @@ async function purge(args: string[]): Promise<void> {
         select: { id: true },
       });
       await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "LedgerAccount" WHERE "id" = ${demoIssuance.id}::uuid FOR UPDATE`);
+      const couponAccount = await tx.ledgerAccount.findFirstOrThrow({
+        where: { userId: selected.id, type: AccountType.USER_COUPON, asset: Asset.COUPON },
+        select: { id: true, balance: true },
+      });
+      const purgedCouponBalance = couponAccount.balance;
       const accounts = await tx.ledgerAccount.findMany({ where: { userId: selected.id }, select: { id: true } });
       const accountIds = accounts.map((account) => account.id);
       await assertPurgeSafe(tx, selected.id, accountIds);
@@ -148,16 +153,7 @@ async function purge(args: string[]): Promise<void> {
       }
       await tx.depositAddress.deleteMany({ where: { userId: selected.id } });
       await tx.user.delete({ where: { id: selected.id } });
-      const remaining = await tx.ledgerAccount.aggregate({
-        where: { type: AccountType.USER_COUPON, asset: Asset.COUPON, user: { isDemo: true } },
-        _sum: { balance: true },
-      });
-      const expectedBalance = -(remaining._sum.balance ?? 0n);
-      await tx.ledgerAccount.update({ where: { id: demoIssuance.id }, data: { balance: expectedBalance } });
-      const reconciled = await tx.ledgerAccount.findUniqueOrThrow({ where: { id: demoIssuance.id }, select: { balance: true } });
-      if (reconciled.balance !== expectedBalance) {
-        throw new Error(`demo issuance balance reconciliation failed for ${selected.id}`);
-      }
+      await reconcileDemoIssuance(tx, purgedCouponBalance);
     });
     deleted += 1;
   }
