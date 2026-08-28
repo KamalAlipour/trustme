@@ -4,6 +4,7 @@ import { bpsToPercent, microUsdtToDecimal } from '../lib/format';
 
 type Settings = {
   withdrawalBaseFeeBps: string;
+  minimumFeeMicroUsdt: string;
   minimumWithdrawalMicroUsdt: string;
   autoApprovalLimitMicroUsdt: string;
 };
@@ -16,6 +17,11 @@ export function SettingsForm({ settings, errorField, errorMessage }: Readonly<{ 
         <span className="mb-1 block text-sm font-medium">{labels.withdrawalBaseFeeBps}</span>
         <div className="flex items-center gap-3"><input className="w-full" name="withdrawalBaseFeeBps" defaultValue={settings.withdrawalBaseFeeBps} inputMode="numeric" /><span className="whitespace-nowrap text-sm text-slate-500">{settings.withdrawalBaseFeeBps} {labels.feeEquivalent} {bpsToPercent(settings.withdrawalBaseFeeBps)}</span></div>
         {fieldError('withdrawalBaseFeeBps') ? <span className="mt-1 block text-sm text-red-700">{fieldError('withdrawalBaseFeeBps')}</span> : null}
+      </label>
+      <label className="block">
+        <span className="mb-1 block text-sm font-medium">{labels.minimumFeeMicroUsdt}</span>
+        <input className="w-full" name="minimumFeeUsdt" defaultValue={microUsdtToDecimal(settings.minimumFeeMicroUsdt)} inputMode="decimal" />
+        {fieldError('minimumFeeUsdt') ? <span className="mt-1 block text-sm text-red-700">{fieldError('minimumFeeUsdt')}</span> : null}
       </label>
       <label className="block">
         <span className="mb-1 block text-sm font-medium">{labels.minimumWithdrawalMicroUsdt}</span>

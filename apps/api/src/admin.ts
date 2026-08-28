@@ -68,6 +68,7 @@ const loginSchema = z.object({ username: z.string().min(1), password: z.string()
 const nonNegativeIntegerString = z.string().regex(/^(?:0|[1-9]\d*)$/);
 const settingSchema = z.object({
   withdrawalBaseFeeBps: nonNegativeIntegerString.refine((value) => BigInt(value) <= 10_000n, 'fee bps must be between 0 and 10000'),
+  minimumFeeMicroUsdt: nonNegativeIntegerString.refine((value) => BigInt(value) <= 100_000_000n, 'minimum fee must be at most 100 USDT'),
   minimumWithdrawalMicroUsdt: nonNegativeIntegerString,
   autoApprovalLimitMicroUsdt: nonNegativeIntegerString,
 }).strict();
@@ -142,10 +143,11 @@ function nextCursor(createdAt: Date, id: string): string {
 }
 
 async function readAdminSettings(prisma: PrismaClient) {
-  const rows = await prisma.systemSetting.findMany({ where: { key: { in: ['WITHDRAWAL_BASE_FEE_BPS', 'MIN_WITHDRAWAL_USDT', 'AUTO_APPROVAL_LIMIT_USDT'] } } });
+  const rows = await prisma.systemSetting.findMany({ where: { key: { in: ['WITHDRAWAL_BASE_FEE_BPS', 'WITHDRAWAL_MIN_FEE_USDT', 'MIN_WITHDRAWAL_USDT', 'AUTO_APPROVAL_LIMIT_USDT'] } } });
   const values = new Map(rows.map((row) => [row.key, row.value]));
   return {
     withdrawalBaseFeeBps: values.get('WITHDRAWAL_BASE_FEE_BPS') ?? '0',
+    minimumFeeMicroUsdt: microUsdtFromDecimal(values.get('WITHDRAWAL_MIN_FEE_USDT') ?? '0').toString(),
     minimumWithdrawalMicroUsdt: microUsdtFromDecimal(values.get('MIN_WITHDRAWAL_USDT') ?? '0').toString(),
     autoApprovalLimitMicroUsdt: microUsdtFromDecimal(values.get('AUTO_APPROVAL_LIMIT_USDT') ?? '0').toString(),
   };
@@ -263,6 +265,7 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
         const keys = Object.keys(body);
         const keyMap: Record<string, string> = {
           withdrawalBaseFeeBps: 'WITHDRAWAL_BASE_FEE_BPS',
+          minimumFeeMicroUsdt: 'WITHDRAWAL_MIN_FEE_USDT',
           minimumWithdrawalMicroUsdt: 'MIN_WITHDRAWAL_USDT',
           autoApprovalLimitMicroUsdt: 'AUTO_APPROVAL_LIMIT_USDT',
         };

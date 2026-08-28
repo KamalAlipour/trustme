@@ -70,6 +70,7 @@ function withdrawalInput(fixture: Awaited<ReturnType<typeof setup>>, member: Awa
     destinationAddress: '0x52908400098527886E0F7030069857D2E4169EE7',
     couponsGross: 1n,
     baseFeeBps: 100n,
+    minimumFeeMicroUsdt: 0n,
     minimumWithdrawalMicroUsdt: 1n,
     autoApprovalLimitMicroUsdt: 1_000_000_000n,
     vaultAccountId: fixture.vault.id,

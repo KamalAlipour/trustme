@@ -1,0 +1,3 @@
+INSERT INTO "SystemSetting" ("key", "value", "updatedAt")
+VALUES ('WITHDRAWAL_MIN_FEE_USDT', '0.20', CURRENT_TIMESTAMP)
+ON CONFLICT ("key") DO NOTHING;
