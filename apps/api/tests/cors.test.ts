@@ -43,6 +43,7 @@ describe('API CORS', () => {
     expect(response.status).toBe(204);
     expect(response.headers['access-control-allow-origin']).toBe('https://app-trustcoupon.komasi.as');
     expect(response.headers['access-control-allow-methods']).toContain('POST');
+    expect(response.headers['content-security-policy']).toContain("default-src 'self'");
   });
 
   it('does not allow unconfigured origins', async () => {

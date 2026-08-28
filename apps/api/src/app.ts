@@ -174,11 +174,11 @@ export function createApp(dependencies: ApiDependencies): express.Express {
     ],
   });
   const app = express();
-  useConfiguredCors(app, config.allowedOrigins);
   app.use(helmet());
   app.use(express.json({ limit: config.bodyLimit }));
   app.use(pinoHttp({ logger }));
   app.use('/v1', rateLimit({ windowMs: config.rateLimitWindowMs, limit: config.rateLimitMax, standardHeaders: true, legacyHeaders: false }));
+  useConfiguredCors(app, config.allowedOrigins);
   const logEmailCode = dependencies.logEmailCode ?? ((email: string, code: string) => logger.info({ email }, `member email code ${code}`));
   app.use('/v1/auth', createMemberAuthRouter({
     config,
