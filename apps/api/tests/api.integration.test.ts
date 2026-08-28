@@ -40,6 +40,7 @@ const config = {
   bindHost: '127.0.0.1',
   failoverMarkerPath: '/tmp/trustme-marker',
   mediaStorageDir: '/tmp/trustme-media',
+  allowedOrigins: [],
 };
 
 async function account(type: AccountType, asset: Asset, userId?: string) {
