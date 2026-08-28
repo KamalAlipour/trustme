@@ -22,5 +22,7 @@ describe('localized formatting', () => {
 
     expect(formatMicroUsdt(value, 'en')).toBe('1.234567');
     expect(formatMicroUsdt(value, 'fa')).toBe('۱.۲۳۴۵۶۷');
+    expect(formatMicroUsdt('200000', 'en')).toBe('0.2');
+    expect(formatMicroUsdt('1800000', 'en')).toBe('1.8');
   });
 });
