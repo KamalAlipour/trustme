@@ -80,7 +80,7 @@ const contactSchema = z.object({ barcodeId: barcodeIdSchema, alias: z.string().t
 const contactPatchSchema = z.object({ alias: z.string().trim().min(1).max(128) });
 const transactionQuerySchema = z.object({ cursor: z.string().min(1).optional(), limit: z.coerce.number().int().min(1).max(100).default(25) });
 const contactsQuerySchema = z.object({ query: z.string().optional(), sort: z.enum(['alias', 'recent']).default('alias') });
-const barcodeQuerySchema = z.object({ query: z.string().default(''), limit: z.coerce.number().int().min(1).max(25).default(20) });
+const barcodeQuerySchema = z.object({ query: z.string().trim().min(3), limit: z.coerce.number().int().min(1).max(25).default(20) });
 const refundSchema = z.object({ transactionId: z.string().uuid(), amountCoupons: couponsSchema, reason: z.string().trim().min(1), mediaIds: z.array(z.string().uuid()).max(10).optional() });
 const refundQuerySchema = z.object({ role: z.enum(['buyer', 'seller']).default('buyer'), status: z.enum(['PENDING', 'APPROVED', 'REJECTED']).optional(), cursor: z.string().min(1).optional(), limit: z.coerce.number().int().min(1).max(100).default(25) });
 const charityDonationSchema = z.object({ amountCoupons: couponsSchema, pin: fourDigitCodeSchema, idempotencyKey: z.string().min(1).optional() });
@@ -354,7 +354,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       const items = await prisma.user.findMany({
         where: {
           OR: [
-            { barcodeId: { contains: query.query, mode: 'insensitive' } },
+            { barcodeId: { startsWith: query.query, mode: 'insensitive' } },
             { displayName: { contains: query.query, mode: 'insensitive' } },
           ],
         },

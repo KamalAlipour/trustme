@@ -4,7 +4,6 @@ import { request } from '../src/api/client';
 import type { BarcodeDetail, BarcodeResult } from '../src/api/types';
 import { Page } from '../src/components/Screen';
 import { fa } from '../src/i18n/fa';
-import { shouldShowDemoLabel } from '../src/lib/demo-label';
 import { styles } from '../src/styles';
 
 export default function Barcodes() {
@@ -14,6 +13,11 @@ export default function Barcodes() {
   const [error, setError] = useState('');
 
   useEffect(() => {
+    if (query.trim().length < 3) {
+      setItems([]);
+      setError('');
+      return;
+    }
     let active = true;
     void request<{ items: BarcodeResult[] }>(`/v1/me/barcodes?query=${encodeURIComponent(query)}&limit=20`)
       .then((result) => { if (active) setItems(result.items); })
@@ -46,7 +50,7 @@ export default function Barcodes() {
           <Text style={styles.text}>{selected.displayName ?? selected.barcodeId}</Text>
           <Text style={styles.muted}>{selected.barcodeId}</Text>
           <Text style={styles.muted}>{selected.kycStatus}</Text>
-          {shouldShowDemoLabel(selected.isDemo) ? <Text style={styles.demoLabel}>{fa.demoTestdata}</Text> : null}
+          {selected.isDemo ? <Text style={styles.demoLabel}>{fa.demoTestdata}</Text> : null}
         </View>
       ) : null}
       {error ? <Text style={styles.danger}>{error}</Text> : null}

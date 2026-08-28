@@ -134,7 +134,7 @@ export async function createAidRequest(
   return withSerializableRetry(prisma, async (tx) => {
     await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "User" WHERE "id" = ${input.applicantId}::uuid FOR UPDATE`);
     const applicant = await tx.user.findUniqueOrThrow({ where: { id: input.applicantId }, select: { isDemo: true } });
-    if (applicant.isDemo) throw new DomainError('demo and real accounts cannot exchange coupons');
+    if (applicant.isDemo) throw new DomainError('demo accounts cannot request aid');
     const charity = await tx.charity.findUnique({ where: { id: input.charityId } });
     if (charity === null || !charity.isActive) throw new DomainError('charity not found', 404);
     if (input.loanId !== undefined) {
@@ -163,9 +163,9 @@ export async function attachAidDocuments(prisma: PrismaClient, input: { aidReque
   return withSerializableRetry(prisma, async (tx) => {
     await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "AidRequest" WHERE "id" = ${input.aidRequestId}::uuid FOR UPDATE`);
     const request = await tx.aidRequest.findUniqueOrThrow({ where: { id: input.aidRequestId } });
-    const applicant = await tx.user.findUniqueOrThrow({ where: { id: request.applicantId }, select: { isDemo: true } });
-    if (applicant.isDemo) throw new DomainError('demo and real accounts cannot exchange coupons');
     if (request.applicantId !== input.applicantId) throw new DomainError('forbidden', 403);
+    const applicant = await tx.user.findUniqueOrThrow({ where: { id: request.applicantId }, select: { isDemo: true } });
+    if (applicant.isDemo) throw new DomainError('demo accounts cannot request aid');
     if (request.status !== AidRequestStatus.DOCUMENTS_REQUESTED) throw new DomainError('documents are not requested', 409);
     await attachMedia(tx, input.applicantId, input.mediaIds, request.id);
     return tx.aidRequest.update({ where: { id: request.id }, data: { status: AidRequestStatus.PENDING } });
@@ -185,6 +185,8 @@ export async function approveAidRequest(
     await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "AidRequest" WHERE "id" = ${input.aidRequestId}::uuid FOR UPDATE`);
     const request = await tx.aidRequest.findUniqueOrThrow({ where: { id: input.aidRequestId } });
     await assertAgent(tx, request.charityId, input.agentId);
+    const applicant = await tx.user.findUniqueOrThrow({ where: { id: request.applicantId }, select: { isDemo: true } });
+    if (applicant.isDemo) throw new DomainError('demo accounts cannot request aid');
     if (request.status !== AidRequestStatus.PENDING) throw new DomainError('aid request is not pending', 409);
     const amount = input.approvedCoupons ?? request.amountCoupons;
     if (amount <= 0n || amount > request.amountCoupons) throw new DomainError('approved amount cannot exceed requested amount');

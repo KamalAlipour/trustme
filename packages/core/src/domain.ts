@@ -16,7 +16,7 @@ import { evmAddressSchema, fourDigitCodeSchema } from './schemas.js';
 import { withSerializableRetry } from './retry.js';
 import { DomainError } from './domain-error.js';
 import { assertNoPinResetQuarantine, assertNotRestricted, readWithdrawalAvailabilityInTransaction } from './lending.js';
-import { assertNotDemoAccount, assertSameDemoSide } from './demo.js';
+import { assertNotDemoAccount, assertNotDemoCharityDonation, assertSameDemoSide } from './demo.js';
 
 export async function postDeposit(
   prisma: PrismaClient,
@@ -72,15 +72,7 @@ export async function transferCoupons(
     if (input.userId !== undefined && input.counterpartyUserId !== undefined) {
       await assertSameDemoSide(tx, input.userId, input.counterpartyUserId);
     }
-    if (input.userId !== undefined) {
-      const [sender, destination] = await Promise.all([
-        tx.user.findUnique({ where: { id: input.userId }, select: { isDemo: true } }),
-        tx.ledgerAccount.findUnique({ where: { id: input.toAccountId }, select: { type: true } }),
-      ]);
-      if (sender?.isDemo === true && destination?.type === AccountType.CHARITY_COUPON) {
-        throw new DomainError('demo and real accounts cannot exchange coupons');
-      }
-    }
+    if (input.userId !== undefined) await assertNotDemoCharityDonation(tx, input.userId, input.toAccountId);
     return postWithClient(tx, {
       type: TransactionType.TRANSFER,
       externalRef: input.externalRef,

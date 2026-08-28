@@ -185,6 +185,8 @@ describe('member API', () => {
     const search = await request(app).get('/v1/me/barcodes?query=demo&limit=25').set('Authorization', `Bearer ${token}`);
     expect(search.status).toBe(200);
     expect(search.body.items).toEqual([{ barcodeId: expect.any(String), displayName: 'Demo 000001', isDemo: true }]);
+    const shortQuery = await request(app).get('/v1/me/barcodes?query=ab').set('Authorization', `Bearer ${token}`);
+    expect(shortQuery.status).toBe(400);
     const caseInsensitive = await request(app).get(`/v1/me/barcodes?query=${real.barcodeId.toLowerCase()}`).set('Authorization', `Bearer ${token}`);
     expect(caseInsensitive.body.items).toEqual([{ barcodeId: real.barcodeId, displayName: 'Real 000001', isDemo: false }]);
     const detail = await request(app).get(`/v1/me/barcodes/${real.barcodeId}`).set('Authorization', `Bearer ${token}`);

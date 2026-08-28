@@ -366,4 +366,30 @@ describe('money and ledger domain', () => {
       externalRef: 'demo:test:mixed-transfer',
     })).rejects.toThrow('demo and real accounts cannot exchange coupons');
   });
+
+  it('reconciles demo issuance after a partial purge', async () => {
+    const first = await prisma.user.create({ data: { phoneNumber: '+9900000000001', barcodeId: 'demo-1', isDemo: true } });
+    const second = await prisma.user.create({ data: { phoneNumber: '+9900000000002', barcodeId: 'demo-2', isDemo: true } });
+    const firstAccount = await account(AccountType.USER_COUPON, Asset.COUPON, first.id);
+    const secondAccount = await account(AccountType.USER_COUPON, Asset.COUPON, second.id);
+    const demoIssuance = await account(AccountType.SYSTEM_DEMO_ISSUANCE, Asset.COUPON);
+    await issueDemoCoupons(prisma, { userId: first.id, userCouponAccountId: firstAccount.id, demoIssuanceAccountId: demoIssuance.id, amountCoupons: 3n, externalRef: 'demo:purge:first' });
+    await issueDemoCoupons(prisma, { userId: second.id, userCouponAccountId: secondAccount.id, demoIssuanceAccountId: demoIssuance.id, amountCoupons: 5n, externalRef: 'demo:purge:second' });
+    await prisma.$transaction(async (tx) => {
+      await tx.ledgerEntry.deleteMany({ where: { OR: [{ fromAccountId: firstAccount.id }, { toAccountId: firstAccount.id }] } });
+      await tx.transaction.deleteMany({ where: { userId: first.id } });
+      await tx.ledgerAccount.delete({ where: { id: firstAccount.id } });
+      await tx.user.delete({ where: { id: first.id } });
+      const remaining = await tx.ledgerAccount.aggregate({
+        where: { type: AccountType.USER_COUPON, asset: Asset.COUPON, user: { isDemo: true } },
+        _sum: { balance: true },
+      });
+      const expectedBalance = -(remaining._sum.balance ?? 0n);
+      await tx.ledgerAccount.update({ where: { id: demoIssuance.id }, data: { balance: expectedBalance } });
+      const reconciled = await tx.ledgerAccount.findUniqueOrThrow({ where: { id: demoIssuance.id }, select: { balance: true } });
+      expect(reconciled.balance).toBe(expectedBalance);
+      expect(reconciled.balance).toBe(-5n);
+    });
+    expect(await readDemoCirculation(prisma)).toBe(5n);
+  });
 });

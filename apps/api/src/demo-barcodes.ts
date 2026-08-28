@@ -1,32 +1,6 @@
-import { prisma } from './index.js';
-import { AccountType, Asset, Prisma } from '@prisma/client';
-import type { PrismaClient } from '@prisma/client';
-
-type Provisioner = {
-  provisionUser: (prisma: PrismaClient, config: { depositXpub: string }, input: {
-    phoneNumber: string;
-    displayName: string;
-    isDemo: boolean;
-  }) => Promise<{ id: string }>;
-};
-type DemoCore = {
-  issueDemoCoupons: (prisma: PrismaClient, input: {
-    userId: string;
-    userCouponAccountId: string;
-    demoIssuanceAccountId: string;
-    amountCoupons: bigint;
-    externalRef: string;
-  }) => Promise<unknown>;
-  readDemoCirculation: (prisma: PrismaClient) => Promise<bigint>;
-};
-
-async function loadDependencies(): Promise<{ provisionUser: Provisioner['provisionUser']; issueDemoCoupons: DemoCore['issueDemoCoupons']; readDemoCirculation: DemoCore['readDemoCirculation'] }> {
-  const provisioningModulePath = '../../../apps/api/src/user-provisioning.ts';
-  const corePackageName = '@trustme/core';
-  const provisioning = await import(provisioningModulePath) as Provisioner;
-  const core = await import(corePackageName) as DemoCore;
-  return { provisionUser: provisioning.provisionUser, ...core };
-}
+import { AccountType, Asset, Prisma, prisma } from '@trustme/db';
+import { issueDemoCoupons, readDemoCirculation } from '@trustme/core';
+import { provisionUser } from './user-provisioning.js';
 
 const RESERVED_PHONE_PREFIX = '+99000';
 const DEFAULT_BATCH_SIZE = 500;
@@ -65,7 +39,6 @@ async function generate(args: string[]): Promise<void> {
   if (min > max) throw new Error('--min-coupons cannot exceed --max-coupons');
   const depositXpub = process.env.DEPOSIT_XPUB;
   if (!depositXpub) throw new Error('DEPOSIT_XPUB is required');
-  const { provisionUser, issueDemoCoupons } = await loadDependencies();
   let created = 0;
   for (let start = 1; start <= count; start += batch) {
     const end = Math.min(count, start + batch - 1);
@@ -129,6 +102,11 @@ async function purge(args: string[]): Promise<void> {
   let deleted = 0;
   for (const selected of users) {
     await prisma.$transaction(async (tx) => {
+      const demoIssuance = await tx.ledgerAccount.findFirstOrThrow({
+        where: { type: AccountType.SYSTEM_DEMO_ISSUANCE, asset: Asset.COUPON, userId: null },
+        select: { id: true },
+      });
+      await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "LedgerAccount" WHERE "id" = ${demoIssuance.id}::uuid FOR UPDATE`);
       const accounts = await tx.ledgerAccount.findMany({ where: { userId: selected.id }, select: { id: true } });
       const accountIds = accounts.map((account) => account.id);
       await assertPurgeSafe(tx, selected.id, accountIds);
@@ -164,20 +142,22 @@ async function purge(args: string[]): Promise<void> {
       await tx.memberDevice.deleteMany({ where: { userId: selected.id } });
       await tx.depositSweep.deleteMany({ where: { depositAddress: { userId: selected.id } } });
       if (accountIds.length > 0) {
-        const entries = await tx.ledgerEntry.findMany({
-          where: { OR: [{ fromAccountId: { in: accountIds } }, { toAccountId: { in: accountIds } }] },
-          select: { fromAccountId: true, toAccountId: true, amount: true },
-        });
-        for (const entry of entries) {
-          await tx.ledgerAccount.update({ where: { id: entry.fromAccountId }, data: { balance: { increment: entry.amount } } });
-          await tx.ledgerAccount.update({ where: { id: entry.toAccountId }, data: { balance: { decrement: entry.amount } } });
-        }
         await tx.ledgerEntry.deleteMany({ where: { OR: [{ fromAccountId: { in: accountIds } }, { toAccountId: { in: accountIds } }] } });
         await tx.transaction.deleteMany({ where: { userId: selected.id } });
         await tx.ledgerAccount.deleteMany({ where: { id: { in: accountIds } } });
       }
       await tx.depositAddress.deleteMany({ where: { userId: selected.id } });
       await tx.user.delete({ where: { id: selected.id } });
+      const remaining = await tx.ledgerAccount.aggregate({
+        where: { type: AccountType.USER_COUPON, asset: Asset.COUPON, user: { isDemo: true } },
+        _sum: { balance: true },
+      });
+      const expectedBalance = -(remaining._sum.balance ?? 0n);
+      await tx.ledgerAccount.update({ where: { id: demoIssuance.id }, data: { balance: expectedBalance } });
+      const reconciled = await tx.ledgerAccount.findUniqueOrThrow({ where: { id: demoIssuance.id }, select: { balance: true } });
+      if (reconciled.balance !== expectedBalance) {
+        throw new Error(`demo issuance balance reconciliation failed for ${selected.id}`);
+      }
     });
     deleted += 1;
   }
@@ -185,7 +165,6 @@ async function purge(args: string[]): Promise<void> {
 }
 
 async function stats(): Promise<void> {
-  const { readDemoCirculation } = await loadDependencies();
   const [userCount, couponsInCirculation] = await Promise.all([
     prisma.user.count({ where: { isDemo: true } }),
     readDemoCirculation(prisma),

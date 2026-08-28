@@ -58,3 +58,18 @@ export async function assertNotDemoAccount(tx: Prisma.TransactionClient, userId:
   const user = await tx.user.findUniqueOrThrow({ where: { id: userId }, select: { isDemo: true } });
   if (user.isDemo) throw new DomainError('demo accounts cannot withdraw');
 }
+
+
+export async function assertNotDemoCharityDonation(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  toAccountId: string,
+): Promise<void> {
+  const [sender, destination] = await Promise.all([
+    tx.user.findUniqueOrThrow({ where: { id: userId }, select: { isDemo: true } }),
+    tx.ledgerAccount.findUniqueOrThrow({ where: { id: toAccountId }, select: { type: true } }),
+  ]);
+  if (sender.isDemo && destination.type === AccountType.CHARITY_COUPON) {
+    throw new DomainError('demo and real accounts cannot exchange coupons');
+  }
+}
