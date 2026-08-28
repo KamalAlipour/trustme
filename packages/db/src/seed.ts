@@ -12,6 +12,7 @@ const accounts = [
 
 const settings = [
   ['WITHDRAWAL_BASE_FEE_BPS', '100'],
+  ['WITHDRAWAL_MIN_FEE_USDT', '0.20'],
   ['MIN_WITHDRAWAL_USDT', '1'],
   ['AUTO_APPROVAL_LIMIT_USDT', '1000'],
   ['WITHDRAWAL_COOLDOWN_HOURS', '168'],

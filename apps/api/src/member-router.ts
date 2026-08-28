@@ -28,6 +28,7 @@ import {
   repayLoan,
   requestWithdrawal,
   transferCoupons,
+  withdrawalQuote,
   approveRefund,
   createRefundRequest,
   rejectRefund,
@@ -65,6 +66,7 @@ const escrowSchema = z.object({
   pin: fourDigitCodeSchema,
 });
 const withdrawalSchema = z.object({ destinationAddress: evmAddressSchema, couponsGross: couponsSchema, pin: fourDigitCodeSchema });
+const withdrawalQuoteSchema = z.object({ couponsGross: couponsSchema });
 const loanInstallmentSchema = z.object({ dueAt: z.string().datetime(), amountCoupons: couponsSchema });
 const loanGuarantorSchema = z.object({ barcodeId: barcodeIdSchema, amountCoupons: couponsSchema });
 const loanSchema = z.object({
@@ -126,6 +128,20 @@ async function escrowAccount(prisma: PrismaClient, userId: string) {
 
 async function systemAccount(prisma: PrismaClient, type: AccountType, asset: Asset) {
   return prisma.ledgerAccount.findFirstOrThrow({ where: { type, asset, userId: null } });
+}
+
+async function withdrawalSettings(prisma: PrismaClient) {
+  const values = await prisma.systemSetting.findMany({
+    where: { key: { in: ['WITHDRAWAL_BASE_FEE_BPS', 'WITHDRAWAL_MIN_FEE_USDT', 'MIN_WITHDRAWAL_USDT', 'AUTO_APPROVAL_LIMIT_USDT', 'WITHDRAWAL_COOLDOWN_HOURS'] } },
+  });
+  const settings = new Map(values.map((setting) => [setting.key, setting.value]));
+  return {
+    baseFeeBps: BigInt(settings.get('WITHDRAWAL_BASE_FEE_BPS') ?? (() => { throw new Error('missing fee setting'); })()),
+    minimumFeeMicroUsdt: microUsdtFromDecimal(settings.get('WITHDRAWAL_MIN_FEE_USDT') ?? (() => { throw new Error('missing minimum fee setting'); })()),
+    minimumWithdrawalMicroUsdt: microUsdtFromDecimal(settings.get('MIN_WITHDRAWAL_USDT') ?? (() => { throw new Error('missing minimum setting'); })()),
+    autoApprovalLimitMicroUsdt: microUsdtFromDecimal(settings.get('AUTO_APPROVAL_LIMIT_USDT') ?? '0'),
+    cooldownHours: Number(settings.get('WITHDRAWAL_COOLDOWN_HOURS') ?? '168'),
+  };
 }
 
 function serializeWithdrawal(withdrawal: {
@@ -691,25 +707,43 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
     }
   });
 
+  router.get('/withdrawals/quote', async (request, response, next) => {
+    try {
+      const query = withdrawalQuoteSchema.parse(request.query);
+      const settings = await withdrawalSettings(prisma);
+      const quote = withdrawalQuote(parseCoupons(query.couponsGross), {
+        baseFeeBps: settings.baseFeeBps,
+        minimumFeeMicroUsdt: settings.minimumFeeMicroUsdt,
+        minimumWithdrawalMicroUsdt: settings.minimumWithdrawalMicroUsdt,
+      });
+      response.json({
+        grossMicroUsdt: quote.grossMicroUsdt.toString(),
+        feeMicroUsdt: quote.feeMicroUsdt.toString(),
+        netMicroUsdt: quote.netMicroUsdt.toString(),
+        baseFeeBps: settings.baseFeeBps.toString(),
+        minimumFeeMicroUsdt: settings.minimumFeeMicroUsdt.toString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.post('/withdrawals', async (request, response, next) => {
     try {
       const body = withdrawalSchema.parse(request.body);
       const user = await member(prisma, memberClaims(request).sub);
       await verifyMemberPin(prisma, user.id, body.pin);
-      const values = await prisma.systemSetting.findMany({ where: { key: { in: ['WITHDRAWAL_BASE_FEE_BPS', 'MIN_WITHDRAWAL_USDT', 'AUTO_APPROVAL_LIMIT_USDT', 'WITHDRAWAL_COOLDOWN_HOURS'] } } });
-      const settings = new Map(values.map((setting) => [setting.key, setting.value]));
-      const baseFeeBps = BigInt(settings.get('WITHDRAWAL_BASE_FEE_BPS') ?? (() => { throw new Error('missing fee setting'); })());
-      const minimum = microUsdtFromDecimal(settings.get('MIN_WITHDRAWAL_USDT') ?? '0');
-      const autoApproval = microUsdtFromDecimal(settings.get('AUTO_APPROVAL_LIMIT_USDT') ?? '0');
+      const settings = await withdrawalSettings(prisma);
       const withdrawal = await requestWithdrawal(prisma, {
         userId: user.id,
         userAccountId: (await couponAccount(prisma, user.id)).id,
         destinationAddress: body.destinationAddress,
         couponsGross: parseCoupons(body.couponsGross),
-        baseFeeBps,
-        minimumWithdrawalMicroUsdt: minimum,
-        autoApprovalLimitMicroUsdt: autoApproval,
-        cooldownHours: Number(settings.get('WITHDRAWAL_COOLDOWN_HOURS') ?? '168'),
+        baseFeeBps: settings.baseFeeBps,
+        minimumFeeMicroUsdt: settings.minimumFeeMicroUsdt,
+        minimumWithdrawalMicroUsdt: settings.minimumWithdrawalMicroUsdt,
+        autoApprovalLimitMicroUsdt: settings.autoApprovalLimitMicroUsdt,
+        cooldownHours: settings.cooldownHours,
         vaultAccountId: (await systemAccount(prisma, AccountType.SYSTEM_VAULT_USDT, Asset.USDT)).id,
         feeAccountId: (await systemAccount(prisma, AccountType.SYSTEM_FEE_COLLECTION, Asset.USDT)).id,
         pendingAccountId: (await systemAccount(prisma, AccountType.SYSTEM_WITHDRAWAL_PENDING, Asset.USDT)).id,

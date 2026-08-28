@@ -236,9 +236,14 @@ describe('money and ledger domain', () => {
   });
 
   it('calculates fee, net, and approval boundaries with integer arithmetic', () => {
-    expect(quoteWithdrawalForUsdt(10_000n, 125n, 1_000_000n)).toEqual({ grossMicroUsdt: 100_000_000n, feeMicroUsdt: 1_250_000n, netMicroUsdt: 98_750_000n });
-    expect(quoteWithdrawalForUsdt(100n, 100n, 990_000n).netMicroUsdt).toBe(990_000n);
-    expect(() => quoteWithdrawalForUsdt(100n, 100n, 990_001n)).toThrow();
+    expect(quoteWithdrawalForUsdt(10_000n, { baseFeeBps: 125n, minimumFeeMicroUsdt: 0n, minimumWithdrawalMicroUsdt: 1_000_000n })).toEqual({ grossMicroUsdt: 100_000_000n, feeMicroUsdt: 1_250_000n, netMicroUsdt: 98_750_000n });
+    expect(quoteWithdrawalForUsdt(100n, { baseFeeBps: 100n, minimumFeeMicroUsdt: 0n, minimumWithdrawalMicroUsdt: 990_000n }).netMicroUsdt).toBe(990_000n);
+    expect(() => quoteWithdrawalForUsdt(100n, { baseFeeBps: 100n, minimumFeeMicroUsdt: 0n, minimumWithdrawalMicroUsdt: 990_001n })).toThrow();
+    expect(quoteWithdrawalForUsdt(100n, { baseFeeBps: 100n, minimumFeeMicroUsdt: 20_000n, minimumWithdrawalMicroUsdt: 1n }).feeMicroUsdt).toBe(20_000n);
+    expect(quoteWithdrawalForUsdt(10_000n, { baseFeeBps: 100n, minimumFeeMicroUsdt: 2_000n, minimumWithdrawalMicroUsdt: 1n }).feeMicroUsdt).toBe(1_000_000n);
+    expect(() => quoteWithdrawalForUsdt(1n, { baseFeeBps: 0n, minimumFeeMicroUsdt: 10_001n, minimumWithdrawalMicroUsdt: 0n })).toThrow('fee must be less than gross');
+    expect(() => quoteWithdrawalForUsdt(100n, { baseFeeBps: 0n, minimumFeeMicroUsdt: -1n, minimumWithdrawalMicroUsdt: 0n })).toThrow('minimum fee cannot be negative');
+    expect(() => quoteWithdrawalForUsdt(100n, { baseFeeBps: 0n, minimumFeeMicroUsdt: 2_000n, minimumWithdrawalMicroUsdt: 998_001n })).toThrow('withdrawal is below minimum');
   });
 
   it('restores exact balances on withdrawal refund', async () => {
@@ -246,7 +251,7 @@ describe('money and ledger domain', () => {
     const userId = (await prisma.user.findFirstOrThrow()).id;
     await postDeposit(prisma, { externalRef: 'deposit:withdrawal:0', userId, userCouponAccountId: fixtureAccounts.users[0]!, externalOnchainAccountId: fixtureAccounts.external, vaultAccountId: fixtureAccounts.vault, issuanceAccountId: fixtureAccounts.issuance, amountMicroUsdt: 100_000_000n });
     const before = await prisma.ledgerAccount.findMany({ where: { id: { in: [fixtureAccounts.users[0]!, fixtureAccounts.vault, fixtureAccounts.pending, fixtureAccounts.fees, fixtureAccounts.issuance] } }, orderBy: { id: 'asc' } });
-    const withdrawal = await requestWithdrawal(prisma, { userId, userAccountId: fixtureAccounts.users[0]!, destinationAddress: '0x52908400098527886E0F7030069857D2E4169EE7', couponsGross: 1_000n, baseFeeBps: 100n, minimumWithdrawalMicroUsdt: 1n, autoApprovalLimitMicroUsdt: 1_000_000_000n, vaultAccountId: fixtureAccounts.vault, feeAccountId: fixtureAccounts.fees, pendingAccountId: fixtureAccounts.pending, issuanceAccountId: fixtureAccounts.issuance, cooldownHours: 0 });
+    const withdrawal = await requestWithdrawal(prisma, { userId, userAccountId: fixtureAccounts.users[0]!, destinationAddress: '0x52908400098527886E0F7030069857D2E4169EE7', couponsGross: 1_000n, baseFeeBps: 100n, minimumFeeMicroUsdt: 0n, minimumWithdrawalMicroUsdt: 1n, autoApprovalLimitMicroUsdt: 1_000_000_000n, vaultAccountId: fixtureAccounts.vault, feeAccountId: fixtureAccounts.fees, pendingAccountId: fixtureAccounts.pending, issuanceAccountId: fixtureAccounts.issuance, cooldownHours: 0 });
     await refundWithdrawal(prisma, { withdrawalId: withdrawal.id, userAccountId: fixtureAccounts.users[0]!, vaultAccountId: fixtureAccounts.vault, feeAccountId: fixtureAccounts.fees, pendingAccountId: fixtureAccounts.pending, issuanceAccountId: fixtureAccounts.issuance });
     const after = await prisma.ledgerAccount.findMany({ where: { id: { in: [fixtureAccounts.users[0]!, fixtureAccounts.vault, fixtureAccounts.pending, fixtureAccounts.fees, fixtureAccounts.issuance] } }, orderBy: { id: 'asc' } });
     expect(after.map((item) => item.balance)).toEqual(before.map((item) => item.balance));
@@ -261,7 +266,7 @@ describe('money and ledger domain', () => {
     const fixtureAccounts = await fixture(1);
     const userId = (await prisma.user.findFirstOrThrow()).id;
     await postDeposit(prisma, { externalRef: `deposit:unsafe:${String(status)}`, userId, userCouponAccountId: fixtureAccounts.users[0]!, externalOnchainAccountId: fixtureAccounts.external, vaultAccountId: fixtureAccounts.vault, issuanceAccountId: fixtureAccounts.issuance, amountMicroUsdt: 100_000_000n });
-    const withdrawal = await requestWithdrawal(prisma, { userId, userAccountId: fixtureAccounts.users[0]!, destinationAddress: '0x52908400098527886E0F7030069857D2E4169EE7', couponsGross: 1_000n, baseFeeBps: 100n, minimumWithdrawalMicroUsdt: 1n, autoApprovalLimitMicroUsdt: 0n, vaultAccountId: fixtureAccounts.vault, feeAccountId: fixtureAccounts.fees, pendingAccountId: fixtureAccounts.pending, issuanceAccountId: fixtureAccounts.issuance, cooldownHours: 0 });
+    const withdrawal = await requestWithdrawal(prisma, { userId, userAccountId: fixtureAccounts.users[0]!, destinationAddress: '0x52908400098527886E0F7030069857D2E4169EE7', couponsGross: 1_000n, baseFeeBps: 100n, minimumFeeMicroUsdt: 0n, minimumWithdrawalMicroUsdt: 1n, autoApprovalLimitMicroUsdt: 0n, vaultAccountId: fixtureAccounts.vault, feeAccountId: fixtureAccounts.fees, pendingAccountId: fixtureAccounts.pending, issuanceAccountId: fixtureAccounts.issuance, cooldownHours: 0 });
     await prisma.withdrawal.update({ where: { id: withdrawal.id }, data: { status, ...(chainTxHash === null ? {} : { chainTxHash }) } });
     await expect(refundWithdrawal(prisma, { withdrawalId: withdrawal.id, userAccountId: fixtureAccounts.users[0]!, vaultAccountId: fixtureAccounts.vault, feeAccountId: fixtureAccounts.fees, pendingAccountId: fixtureAccounts.pending, issuanceAccountId: fixtureAccounts.issuance })).rejects.toThrow('cannot be refunded');
   });
@@ -271,7 +276,7 @@ describe('money and ledger domain', () => {
     const userId = (await prisma.user.findFirstOrThrow()).id;
     await postDeposit(prisma, { externalRef: 'deposit:rejected:0', userId, userCouponAccountId: fixtureAccounts.users[0]!, externalOnchainAccountId: fixtureAccounts.external, vaultAccountId: fixtureAccounts.vault, issuanceAccountId: fixtureAccounts.issuance, amountMicroUsdt: 100_000_000n });
     const before = await prisma.ledgerAccount.findMany({ where: { id: { in: [fixtureAccounts.users[0]!, fixtureAccounts.vault, fixtureAccounts.pending, fixtureAccounts.fees, fixtureAccounts.issuance] } }, orderBy: { id: 'asc' } });
-    const withdrawal = await requestWithdrawal(prisma, { userId, userAccountId: fixtureAccounts.users[0]!, destinationAddress: '0x52908400098527886E0F7030069857D2E4169EE7', couponsGross: 1_000n, baseFeeBps: 100n, minimumWithdrawalMicroUsdt: 1n, autoApprovalLimitMicroUsdt: 1_000_000_000n, vaultAccountId: fixtureAccounts.vault, feeAccountId: fixtureAccounts.fees, pendingAccountId: fixtureAccounts.pending, issuanceAccountId: fixtureAccounts.issuance, cooldownHours: 0 });
+    const withdrawal = await requestWithdrawal(prisma, { userId, userAccountId: fixtureAccounts.users[0]!, destinationAddress: '0x52908400098527886E0F7030069857D2E4169EE7', couponsGross: 1_000n, baseFeeBps: 100n, minimumFeeMicroUsdt: 0n, minimumWithdrawalMicroUsdt: 1n, autoApprovalLimitMicroUsdt: 1_000_000_000n, vaultAccountId: fixtureAccounts.vault, feeAccountId: fixtureAccounts.fees, pendingAccountId: fixtureAccounts.pending, issuanceAccountId: fixtureAccounts.issuance, cooldownHours: 0 });
     await rejectWithdrawal(prisma, { withdrawalId: withdrawal.id, userAccountId: fixtureAccounts.users[0]!, vaultAccountId: fixtureAccounts.vault, feeAccountId: fixtureAccounts.fees, pendingAccountId: fixtureAccounts.pending, issuanceAccountId: fixtureAccounts.issuance });
     const after = await prisma.ledgerAccount.findMany({ where: { id: { in: [fixtureAccounts.users[0]!, fixtureAccounts.vault, fixtureAccounts.pending, fixtureAccounts.fees, fixtureAccounts.issuance] } }, orderBy: { id: 'asc' } });
     expect(after.map((item) => item.balance)).toEqual(before.map((item) => item.balance));

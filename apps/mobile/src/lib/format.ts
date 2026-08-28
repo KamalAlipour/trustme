@@ -9,3 +9,10 @@ export function formatCoupons(coupons: string): string {
 export function formatDate(value: string): string {
   return new Intl.DateTimeFormat('fa-IR', { dateStyle: 'medium' }).format(new Date(value));
 }
+
+export function formatMicroUsdt(value: string): string {
+  const micro = BigInt(value);
+  const whole = micro / 1_000_000n;
+  const fraction = (micro % 1_000_000n).toString().padStart(6, '0').replace(/0+$/, '');
+  return fraction ? `${whole}.${fraction}` : whole.toString();
+}
