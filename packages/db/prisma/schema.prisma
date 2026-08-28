@@ -18,6 +18,7 @@ enum AccountType {
   ESCROW
   GUARANTEE_LOCK
   SYSTEM_COUPON_ISSUANCE
+  SYSTEM_DEMO_ISSUANCE
   SYSTEM_VAULT_USDT
   SYSTEM_WITHDRAWAL_PENDING
   SYSTEM_FEE_COLLECTION
@@ -38,6 +39,7 @@ enum TransactionType {
   GUARANTEE_CLAIM
   LOAN_DISBURSE
   LOAN_REPAY
+  DEMO_ISSUE
 }
 
 enum LoanStatus {
@@ -159,6 +161,7 @@ model User {
   biometricEnrolledAt  DateTime?
   setupAcknowledgedAt DateTime?
   pinResetQuarantineUntil DateTime?
+  isDemo               Boolean             @default(false)
   dustMicroUsdt        BigInt              @default(0)
   activeGuaranteeCount Int                 @default(0)
   createdAt            DateTime            @default(now())
@@ -183,6 +186,7 @@ model User {
   sellerRefunds        RefundRequest[]     @relation("RefundSeller")
 
   @@index([pinResetQuarantineUntil])
+  @@index([isDemo])
 }
 
 model MemberDevice {

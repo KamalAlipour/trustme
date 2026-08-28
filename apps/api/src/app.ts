@@ -272,7 +272,7 @@ export function createApp(dependencies: ApiDependencies): express.Express {
       const body = transferBodySchema.parse(request.body);
       const source = await userWithAccounts(prisma, body.fromBarcodeId);
       const destination = await userWithAccounts(prisma, body.toBarcodeId);
-      const transaction = await transferCoupons(prisma, { userId: source.user.id, externalRef: `api:transfer:${body.idempotencyKey}`, fromAccountId: source.account.id, toAccountId: destination.account.id, amountCoupons: parseCoupons(body.amountCoupons) });
+      const transaction = await transferCoupons(prisma, { userId: source.user.id, counterpartyUserId: destination.user.id, externalRef: `api:transfer:${body.idempotencyKey}`, fromAccountId: source.account.id, toAccountId: destination.account.id, amountCoupons: parseCoupons(body.amountCoupons) });
       response.status(201).json({ transactionId: transaction.id, status: transaction.status });
     } catch (error) {
       next(error);

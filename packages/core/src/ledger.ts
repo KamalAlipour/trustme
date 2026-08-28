@@ -69,10 +69,10 @@ async function postWithClient(client: Prisma.TransactionClient, input: PostTrans
     const account = accountsById.get(accountId);
     if (!account) throw new Error('one or more ledger accounts do not exist');
     const resultingBalance = account.balance + change;
-    if (account.type === AccountType.SYSTEM_COUPON_ISSUANCE && resultingBalance > 0n) {
+    if ((account.type === AccountType.SYSTEM_COUPON_ISSUANCE || account.type === AccountType.SYSTEM_DEMO_ISSUANCE) && resultingBalance > 0n) {
       throw new DomainError('coupon issuance account cannot be positive');
     }
-    if (account.type !== AccountType.SYSTEM_COUPON_ISSUANCE && account.type !== AccountType.EXTERNAL_ONCHAIN && resultingBalance < 0n) {
+    if (account.type !== AccountType.SYSTEM_COUPON_ISSUANCE && account.type !== AccountType.SYSTEM_DEMO_ISSUANCE && account.type !== AccountType.EXTERNAL_ONCHAIN && resultingBalance < 0n) {
       throw new DomainError('ledger account balance cannot be negative');
     }
   }

@@ -16,6 +16,7 @@ import { evmAddressSchema, fourDigitCodeSchema } from './schemas.js';
 import { withSerializableRetry } from './retry.js';
 import { DomainError } from './domain-error.js';
 import { assertNoPinResetQuarantine, assertNotRestricted, readWithdrawalAvailabilityInTransaction } from './lending.js';
+import { assertNotDemoAccount, assertSameDemoSide } from './demo.js';
 
 export async function postDeposit(
   prisma: PrismaClient,
@@ -60,13 +61,25 @@ export async function postDeposit(
 
 export async function transferCoupons(
   prisma: PrismaClient,
-  input: { userId?: string; externalRef: string; fromAccountId: string; toAccountId: string; amountCoupons: bigint },
+  input: { userId?: string; counterpartyUserId?: string; externalRef: string; fromAccountId: string; toAccountId: string; amountCoupons: bigint },
 ) {
   if (input.amountCoupons <= 0n) throw new DomainError('transfer amount must be positive');
   return withSerializableRetry(prisma, async (tx) => {
     if (input.userId !== undefined) {
       await assertNotRestricted(tx, input.userId);
       await assertNoPinResetQuarantine(tx, input.userId);
+    }
+    if (input.userId !== undefined && input.counterpartyUserId !== undefined) {
+      await assertSameDemoSide(tx, input.userId, input.counterpartyUserId);
+    }
+    if (input.userId !== undefined) {
+      const [sender, destination] = await Promise.all([
+        tx.user.findUnique({ where: { id: input.userId }, select: { isDemo: true } }),
+        tx.ledgerAccount.findUnique({ where: { id: input.toAccountId }, select: { type: true } }),
+      ]);
+      if (sender?.isDemo === true && destination?.type === AccountType.CHARITY_COUPON) {
+        throw new DomainError('demo and real accounts cannot exchange coupons');
+      }
     }
     return postWithClient(tx, {
       type: TransactionType.TRANSFER,
@@ -103,6 +116,7 @@ export async function createEscrowHold(
     if (existing) return existing;
     await assertNotRestricted(tx, input.senderId);
     await assertNoPinResetQuarantine(tx, input.senderId);
+    await assertSameDemoSide(tx, input.senderId, input.recipientId);
     const transaction = await postWithClient(tx, {
       type: TransactionType.ESCROW_HOLD,
       externalRef,
@@ -157,6 +171,7 @@ export async function releaseEscrow(
     const hold = await tx.escrowHold.findUniqueOrThrow({ where: { id: input.holdId } });
     if (hold.status !== EscrowStatus.ACTIVE) throw new DomainError('escrow is not active');
     if (hold.expiresAt <= new Date()) throw new DomainError('escrow has expired');
+    await assertSameDemoSide(tx, hold.senderId, hold.recipientId);
     // Keep comparison inside the transaction so the attempt counter is atomic.
     const valid = await bcrypt.compare(input.code, hold.codeHash);
     if (!valid) {
@@ -189,6 +204,8 @@ export async function cancelEscrow(
   return withSerializableRetry(prisma, async (tx: Prisma.TransactionClient) => {
     await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "EscrowHold" WHERE "id" = ${input.holdId}::uuid FOR UPDATE`);
     const hold = await tx.escrowHold.findUniqueOrThrow({ where: { id: input.holdId } });
+    await assertSameDemoSide(tx, hold.senderId, hold.recipientId);
+    await assertNoPinResetQuarantine(tx, hold.senderId);
     const expired = input.expired || hold.expiresAt <= new Date();
     return cancelLockedHold(
       tx,
@@ -236,6 +253,7 @@ export async function requestWithdrawal(
   return withSerializableRetry(prisma, async (tx: Prisma.TransactionClient) => {
     await assertNotRestricted(tx, input.userId);
     await assertNoPinResetQuarantine(tx, input.userId);
+    await assertNotDemoAccount(tx, input.userId);
     const availability = await readWithdrawalAvailabilityInTransaction(tx, input.userId);
     if (availability.blockers.includes('pending_code')) throw new DomainError('withdrawal blocked by pending code');
     if (availability.blockers.includes('unresolved_claim')) throw new DomainError('withdrawal blocked by unresolved claim');

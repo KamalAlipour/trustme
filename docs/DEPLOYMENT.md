@@ -242,6 +242,37 @@ duration.
 
 The user must still provide and authorize:
 
+## Demo barcode data
+
+Demo data is isolated from real circulation and solvency metrics. The CLI uses
+the reserved, non-routable phone range `+99000` followed by an eight-digit
+decimal index (for example, `+9900000000001`), and creates users without PINs.
+It must never be run against the production database without a separate,
+explicit operator decision.
+
+Every mutating command requires the explicit safety gate:
+
+```text
+ALLOW_DEMO_DATA=true npm run demo-barcodes --workspace @trustme/db -- generate --count 5000
+ALLOW_DEMO_DATA=true npm run demo-barcodes --workspace @trustme/db -- purge --count 500
+ALLOW_DEMO_DATA=true npm run demo-barcodes --workspace @trustme/db -- purge --all
+```
+
+The read-only statistics command is:
+
+```text
+npm run demo-barcodes --workspace @trustme/db -- stats
+```
+
+Generation accepts `--min-coupons`, `--max-coupons`, and `--batch` (default
+500). It is safe to rerun for the same reserved indexes. Purge removes demo
+users oldest first and refuses unsafe rows if any ledger entry touches a
+non-demo account; it never cascades into real users or their accounts.
+Administrative overview displays demo circulation and user count in a separate
+block from real circulation and solvency. If a member is quarantined after a
+PIN reset, the admin member/withdrawal view shows the quarantine timestamp and
+the `pin_reset_quarantine` blocker.
+
 * distinct TrustMe API and admin hostnames;
 * TLS certificates and certbot policy;
 * Polygon RPC URL, deposit xpub, hot-wallet address/private key, API token,

@@ -33,6 +33,8 @@ export const openapiDocument = {
       get: { responses: { '200': { description: 'Member profile' }, '401': { description: 'Unauthorized' } } },
       patch: { responses: { '200': { description: 'Updated member profile' } } },
     },
+    '/v1/me/barcodes': { get: { responses: { '200': { description: 'Member barcode search results' } } } },
+    '/v1/me/barcodes/{barcodeId}': { get: { responses: { '200': { description: 'Member barcode details' }, '404': { description: 'Member not found' } } } },
     '/v1/me/pin': { post: { responses: { '204': { description: 'PIN changed' } } } },
     '/v1/me/email': { post: { responses: { '202': { description: 'Email verification requested' }, '503': { description: 'Email delivery unavailable' } } } },
     '/v1/me/email/verify': { post: { responses: { '200': { description: 'Verified member profile' } } } },

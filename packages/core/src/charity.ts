@@ -133,6 +133,8 @@ export async function createAidRequest(
   if (input.description.trim().length === 0) throw new DomainError('aid description is required');
   return withSerializableRetry(prisma, async (tx) => {
     await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "User" WHERE "id" = ${input.applicantId}::uuid FOR UPDATE`);
+    const applicant = await tx.user.findUniqueOrThrow({ where: { id: input.applicantId }, select: { isDemo: true } });
+    if (applicant.isDemo) throw new DomainError('demo and real accounts cannot exchange coupons');
     const charity = await tx.charity.findUnique({ where: { id: input.charityId } });
     if (charity === null || !charity.isActive) throw new DomainError('charity not found', 404);
     if (input.loanId !== undefined) {
@@ -161,6 +163,8 @@ export async function attachAidDocuments(prisma: PrismaClient, input: { aidReque
   return withSerializableRetry(prisma, async (tx) => {
     await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "AidRequest" WHERE "id" = ${input.aidRequestId}::uuid FOR UPDATE`);
     const request = await tx.aidRequest.findUniqueOrThrow({ where: { id: input.aidRequestId } });
+    const applicant = await tx.user.findUniqueOrThrow({ where: { id: request.applicantId }, select: { isDemo: true } });
+    if (applicant.isDemo) throw new DomainError('demo and real accounts cannot exchange coupons');
     if (request.applicantId !== input.applicantId) throw new DomainError('forbidden', 403);
     if (request.status !== AidRequestStatus.DOCUMENTS_REQUESTED) throw new DomainError('documents are not requested', 409);
     await attachMedia(tx, input.applicantId, input.mediaIds, request.id);

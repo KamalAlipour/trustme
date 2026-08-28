@@ -2,6 +2,9 @@ import { beforeAll, afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { PrismaClient, AccountType, Asset, EscrowStatus, TransactionStatus, WithdrawalStatus } from '@trustme/db';
 import {
   calculateSolvency,
+  issueDemoCoupons,
+  readDemoCirculation,
+  readSolvency,
   cancelEscrow,
   createEscrowHold,
   postDeposit,
@@ -336,5 +339,31 @@ describe('money and ledger domain', () => {
       surplusMicroUsdt: 0n,
       isSolvent: true,
     });
+  });
+
+  it('keeps demo issuance outside real solvency and tracks it separately', async () => {
+    const fixtureAccounts = await fixture(1);
+    const demoUser = await prisma.user.create({ data: { phoneNumber: '+9900000000001', barcodeId: 'demo-1', isDemo: true } });
+    const demoAccount = await account(AccountType.USER_COUPON, Asset.COUPON, demoUser.id);
+    const demoIssuance = await account(AccountType.SYSTEM_DEMO_ISSUANCE, Asset.COUPON);
+    const before = await readSolvency(prisma);
+    const transaction = await issueDemoCoupons(prisma, {
+      userId: demoUser.id,
+      userCouponAccountId: demoAccount.id,
+      demoIssuanceAccountId: demoIssuance.id,
+      amountCoupons: 7n,
+      externalRef: 'demo:test:issue',
+    });
+    expect(transaction.type).toBe('DEMO_ISSUE');
+    expect(await readDemoCirculation(prisma)).toBe(7n);
+    expect(await readSolvency(prisma)).toEqual(before);
+    await expect(transferCoupons(prisma, {
+      userId: demoUser.id,
+      counterpartyUserId: (await prisma.user.findFirstOrThrow({ where: { isDemo: false } })).id,
+      fromAccountId: demoAccount.id,
+      toAccountId: fixtureAccounts.users[0]!,
+      amountCoupons: 1n,
+      externalRef: 'demo:test:mixed-transfer',
+    })).rejects.toThrow('demo and real accounts cannot exchange coupons');
   });
 });

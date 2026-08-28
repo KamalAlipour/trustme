@@ -17,6 +17,7 @@ import {
   getHotWalletBalances,
   microUsdtFromDecimal,
   readSolvency,
+  readDemoCirculation,
   rejectWithdrawal,
   withSerializableRetry,
   createCharity,
@@ -174,7 +175,7 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
 
   router.get('/overview', async (_request, response, next) => {
     try {
-      const [vault, issuance, fees, pending, dust, solvency, countRows] = await Promise.all([
+      const [vault, issuance, fees, pending, dust, solvency, countRows, demoCirculation, demoUserCount] = await Promise.all([
         systemAccount(prisma, AccountType.SYSTEM_VAULT_USDT, Asset.USDT),
         systemAccount(prisma, AccountType.SYSTEM_COUPON_ISSUANCE, Asset.COUPON),
         systemAccount(prisma, AccountType.SYSTEM_FEE_COLLECTION, Asset.USDT),
@@ -186,6 +187,8 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
           where: { createdAt: { gte: new Date(Date.now() - 86_400_000) } },
           _count: { _all: true },
         }),
+        readDemoCirculation(prisma),
+        prisma.user.count({ where: { isDemo: true } }),
       ]);
       let chain: Record<string, unknown> = { available: false };
       try {
@@ -230,6 +233,10 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
             couponsUsdt: decimalFromMicroUsdt((-issuance.balance) * 10_000n),
             dustUsdt: decimalFromMicroUsdt(dust._sum.dustMicroUsdt ?? 0n),
           },
+        },
+        demo: {
+          couponsInCirculation: demoCirculation.toString(),
+          userCount: demoUserCount,
         },
         transactionCount24hByType,
         chain,

@@ -27,6 +27,8 @@ export type SecuritySetup = {
   completedAt: string | null;
 };
 export type Balance = { barcodeId: string; coupons: string; dustMicroUsdt: string; depositAddress: string | null };
+export type BarcodeResult = { barcodeId: string; displayName: string | null; isDemo: boolean };
+export type BarcodeDetail = BarcodeResult & { kycStatus: string };
 export type Transaction = {
   id: string;
   transactionId: string;

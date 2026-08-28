@@ -172,6 +172,27 @@ describe('member API', () => {
     expect(setup.body.requiresEmailVerification).toBe(false);
   });
 
+  it('searches demo and real barcodes with the same identity-only shape', async () => {
+    const { app } = appFixture();
+    const registered = await request(app).post('/v1/auth/register').send({ phone: '+1555000115', pin: '2468' });
+    expect(registered.status).toBe(201);
+    await request(app).post('/v1/member/security/biometric')
+      .set('Authorization', `Bearer ${registered.body.tokens.accessToken}`)
+      .send({ pin: '2468', biometricEnrolled: true });
+    await provisionUser(prisma, { depositXpub: config.depositXpub }, { phoneNumber: '+9900000000001', displayName: 'Demo 000001', isDemo: true });
+    const real = await provisionUser(prisma, { depositXpub: config.depositXpub }, { phoneNumber: '+1555000114', displayName: 'Real 000001' });
+    const token = registered.body.tokens.accessToken as string;
+    const search = await request(app).get('/v1/me/barcodes?query=demo&limit=25').set('Authorization', `Bearer ${token}`);
+    expect(search.status).toBe(200);
+    expect(search.body.items).toEqual([{ barcodeId: expect.any(String), displayName: 'Demo 000001', isDemo: true }]);
+    const caseInsensitive = await request(app).get(`/v1/me/barcodes?query=${real.barcodeId.toLowerCase()}`).set('Authorization', `Bearer ${token}`);
+    expect(caseInsensitive.body.items).toEqual([{ barcodeId: real.barcodeId, displayName: 'Real 000001', isDemo: false }]);
+    const detail = await request(app).get(`/v1/me/barcodes/${real.barcodeId}`).set('Authorization', `Bearer ${token}`);
+    expect(detail.status).toBe(200);
+    expect(detail.body).toEqual({ barcodeId: real.barcodeId, displayName: 'Real 000001', isDemo: false, kycStatus: 'UNVERIFIED' });
+    expect(detail.body).not.toHaveProperty('balance');
+  });
+
   it('rejects biometric setup with the wrong PIN without changing enrollment state', async () => {
     const { app } = appFixture();
     const registered = await request(app).post('/v1/auth/register').send({ phone: '+1555000117', pin: '2468' });

@@ -8,3 +8,4 @@ export * from './hot-wallet.js';
 export * from './domain-error.js';
 export * from './refunds.js';
 export * from './charity.js';
+export * from './demo.js';

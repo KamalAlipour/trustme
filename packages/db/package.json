@@ -8,7 +8,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "demo-barcodes": "tsx src/demo-barcodes.ts"
   },
   "dependencies": {
     "@prisma/client": "6.19.3",

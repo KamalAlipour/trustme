@@ -19,6 +19,7 @@ export const styles = StyleSheet.create({
   heading: { color: colors.ink, fontSize: 20, fontWeight: '700', textAlign: 'right' },
   text: { color: colors.ink, fontSize: 16, textAlign: 'right', lineHeight: 25 },
   muted: { color: colors.muted, fontSize: 14, textAlign: 'right', lineHeight: 22 },
+  demoLabel: { color: '#8A949C', fontSize: 11, textAlign: 'right', lineHeight: 16 },
   card: { backgroundColor: colors.card, borderRadius: 18, padding: 18, gap: 10, borderWidth: 1, borderColor: colors.border },
   input: { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border, borderRadius: 12, padding: 13, fontSize: 16, color: colors.ink, textAlign: 'right' },
   button: { backgroundColor: colors.primary, borderRadius: 12, padding: 14, alignItems: 'center' },
