@@ -10,6 +10,7 @@ export type IngestConfig = {
   chainStartBlock: number;
   confirmations: number;
   maxBlockRange: number;
+  ingestChunksPerTick: number;
   reorgRewindBlocks: number;
 };
 
@@ -57,6 +58,27 @@ export async function ingestOnce(
   provider: ChainProvider,
   config: IngestConfig,
   log: Pick<Console, 'error'> = console,
+): Promise<IngestResult> {
+  let processed = 0;
+  let ignored = 0;
+  let rewound = false;
+  let scannedThrough: number | null = null;
+  for (let chunk = 0; chunk < config.ingestChunksPerTick; chunk += 1) {
+    const result = await ingestRange(prisma, provider, config, log);
+    processed += result.processed;
+    ignored += result.ignored;
+    rewound ||= result.rewound;
+    if (result.scannedThrough !== null) scannedThrough = result.scannedThrough;
+    if (result.rewound || result.scannedThrough === null) break;
+  }
+  return { processed, ignored, rewound, scannedThrough };
+}
+
+async function ingestRange(
+  prisma: PrismaClient,
+  provider: ChainProvider,
+  config: IngestConfig,
+  log: Pick<Console, 'error'>,
 ): Promise<IngestResult> {
   const cursor = await getCursor(prisma, config.chainStartBlock);
   const nextBlock = Number(cursor.nextBlock);
