@@ -1,16 +1,16 @@
 import { ApiError } from '../api/client';
-import { fa } from '../i18n/fa';
+import type { Translations } from '../i18n/en';
 
-export function mapApiError(error: unknown): string {
-  if (!(error instanceof ApiError)) return fa.unknownError;
-  if (error.status === 413) return 'حجم مدرک بیش از حد مجاز است.';
-  if (error.status === 415) return 'نوع مدرک پشتیبانی نمی‌شود.';
+export function mapApiError(error: unknown, t: Translations): string {
+  if (!(error instanceof ApiError)) return t.unknownError;
+  if (error.status === 413) return t.mediaTooLarge;
+  if (error.status === 415) return t.unsupportedMedia;
   const messages: Record<string, string> = {
-    'refund is already pending': 'برای این خرید یک درخواست مرجوعی در حال بررسی وجود دارد.',
-    'refund exceeds refundable amount': 'مبلغ مرجوعی از مبلغ قابل بازپرداخت بیشتر است.',
-    'transaction is not refundable': 'این تراکنش قابل بازپرداخت نیست.',
-    'insufficient balance for refund': 'موجودی کوپن برای بازپرداخت کافی نیست.',
-    'insufficient charity balance': 'موجودی خیریه کافی نیست.',
+    'refund is already pending': t.refundAlreadyPending,
+    'refund exceeds refundable amount': t.refundExceedsAmount,
+    'transaction is not refundable': t.transactionNotRefundable,
+    'insufficient balance for refund': t.insufficientRefundBalance,
+    'insufficient charity balance': t.insufficientCharityBalance,
   };
   return messages[error.message] ?? error.message;
 }

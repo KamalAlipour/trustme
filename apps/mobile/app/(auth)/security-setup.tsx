@@ -5,12 +5,13 @@ import { ApiError, request } from '../../src/api/client';
 import { useSession } from '../../src/auth/session';
 import { shouldEnrollBiometrics } from '../../src/auth/setup-capabilities';
 import { Page } from '../../src/components/Screen';
-import { fa } from '../../src/i18n/fa';
+import { useTranslation } from '../../src/i18n';
 import { authenticateLocally, biometricAvailable } from '../../src/lib/biometrics';
 import { readPin } from '../../src/lib/storage';
 import { styles } from '../../src/styles';
 
 export default function SecuritySetup() {
+  const { t } = useTranslation();
   const { refreshSetup } = useSession();
   const [available, setAvailable] = useState(false);
   const [error, setError] = useState('');
@@ -27,13 +28,13 @@ export default function SecuritySetup() {
       const biometricEnrolled = shouldEnrollBiometrics(Platform.OS, available);
       if (biometricEnrolled) {
         if (!await authenticateLocally()) {
-          setError(fa.biometricCancelled);
+          setError(t.biometricCancelled);
           return;
         }
       }
       const pin = await readPin();
       if (pin === null) {
-        setError(fa.pinUnavailable);
+        setError(t.pinUnavailable);
         return;
       }
       await request('/v1/member/security/biometric', {
@@ -43,7 +44,7 @@ export default function SecuritySetup() {
       await refreshSetup();
       router.replace('/');
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : fa.unknownError);
+      setError(cause instanceof ApiError ? cause.message : t.unknownError);
     } finally {
       setBusy(false);
     }
@@ -51,11 +52,11 @@ export default function SecuritySetup() {
 
   return (
     <Page>
-      <Text style={styles.title}>{fa.securitySetup}</Text>
-      <Text style={styles.text}>{fa.biometricInstructions}</Text>
-      {Platform.OS === 'web' ? <Text style={styles.notice}>{fa.browserBiometricNotice}</Text> : null}
-      {Platform.OS !== 'web' && !available ? <Text style={styles.muted}>{fa.biometricUnavailable}</Text> : null}
-      <Pressable disabled={busy} onPress={() => void enroll()} style={styles.button}><Text style={styles.buttonText}>{fa.enrolBiometric}</Text></Pressable>
+      <Text style={styles.title}>{t.securitySetup}</Text>
+      <Text style={styles.text}>{t.biometricInstructions}</Text>
+      {Platform.OS === 'web' ? <Text style={styles.notice}>{t.browserBiometricNotice}</Text> : null}
+      {Platform.OS !== 'web' && !available ? <Text style={styles.muted}>{t.biometricUnavailable}</Text> : null}
+      <Pressable disabled={busy} onPress={() => void enroll()} style={styles.button}><Text style={styles.buttonText}>{t.enrolBiometric}</Text></Pressable>
       {error ? <Text style={styles.danger}>{error}</Text> : null}
     </Page>
   );

@@ -5,13 +5,14 @@ import { request } from '../../src/api/client';
 import type { TransactionsPage } from '../../src/api/types';
 import { Page, LoadingScreen, ErrorMessage } from '../../src/components/Screen';
 import { formatCoupons, formatDate } from '../../src/lib/format';
-import { fa } from '../../src/i18n/fa';
+import { useTranslation } from '../../src/i18n';
 import { styles } from '../../src/styles';
 import { RefundSheet } from '../../src/components/RefundSheet';
 import { SellerRefundPanel } from '../../src/components/SellerRefundPanel';
 import { canRequestRefund, refundableRemainder } from '../../src/lib/refunds';
 
 export default function Purchases() {
+  const { t, language } = useTranslation();
   const [search, setSearch] = React.useState('');
   const [sort, setSort] = React.useState<'direction' | 'date-desc' | 'date-asc' | 'amount-desc' | 'amount-asc'>('date-desc');
   const [refundItem, setRefundItem] = React.useState<{ id: string; amount: string } | null>(null);
@@ -37,30 +38,30 @@ export default function Purchases() {
       return sort === 'amount-desc' ? difference : -difference;
     });
   const nextSort = { direction: 'date-desc', 'date-desc': 'date-asc', 'date-asc': 'amount-desc', 'amount-desc': 'amount-asc', 'amount-asc': 'direction' } as const;
-  const sortLabel = { direction: 'مرتب‌سازی جهت', 'date-desc': 'جدیدترین ابتدا', 'date-asc': 'قدیمی‌ترین ابتدا', 'amount-desc': 'بیشترین مبلغ ابتدا', 'amount-asc': 'کمترین مبلغ ابتدا' }[sort];
+  const sortLabel = { direction: t.sortDirection, 'date-desc': t.newestFirst, 'date-asc': t.oldestFirst, 'amount-desc': t.highestAmountFirst, 'amount-asc': t.lowestAmountFirst }[sort];
   return (
     <Page>
-      <Text style={styles.title}>{fa.purchases}</Text>
+      <Text style={styles.title}>{t.purchases}</Text>
       <SellerRefundPanel />
-      <TextInput value={search} onChangeText={setSearch} placeholder="جستجوی طرف مقابل" style={styles.input} />
-      <Text style={styles.muted}>جستجو فقط در تاریخچه بارگذاری‌شده انجام می‌شود.</Text>
+      <TextInput value={search} onChangeText={setSearch} placeholder={t.searchCounterparty} style={styles.input} />
+      <Text style={styles.muted}>{t.loadedHistoryOnly}</Text>
       <Pressable onPress={() => setSort(nextSort[sort])} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{sortLabel}</Text></Pressable>
-      {items.length === 0 ? <Text style={styles.muted}>هنوز تراکنشی ثبت نشده است.</Text> : items.map((item) => (
+      {items.length === 0 ? <Text style={styles.muted}>{t.noTransactions}</Text> : items.map((item) => (
         <View key={item.id} style={styles.card}>
           <View style={styles.row}>
-            <Text style={{ ...styles.heading, color: item.direction === 'in' ? '#216E4E' : '#B3261E' }}>{item.direction === 'in' ? '+' : '-'}{formatCoupons(item.amountCoupons)}</Text>
-            <Text style={styles.text}>{item.counterparty.displayName ?? item.counterparty.barcodeId ?? item.counterparty.systemAccountType ?? 'سیستم'}</Text>
+            <Text style={{ ...styles.heading, color: item.direction === 'in' ? '#216E4E' : '#B3261E' }}>{item.direction === 'in' ? '+' : '-'}{formatCoupons(item.amountCoupons, language)}</Text>
+            <Text style={styles.text}>{item.counterparty.displayName ?? item.counterparty.barcodeId ?? item.counterparty.systemAccountType ?? t.system}</Text>
           </View>
-          <Text style={styles.muted}>{formatDate(item.transaction.createdAt)} · {item.transaction.status}</Text>
-          {item.refund?.status === 'PENDING' ? <Text style={styles.muted}>🟡 {fa.refundPending}</Text> : null}
-          {item.refund?.status === 'APPROVED' ? <Text style={styles.notice}>🟢 {fa.refundApproved}</Text> : null}
-          {item.refund?.status === 'REJECTED' ? <Text style={styles.danger}>🔴 {fa.refundRejected}</Text> : null}
+          <Text style={styles.muted}>{formatDate(item.transaction.createdAt, language)} · {item.transaction.status}</Text>
+          {item.refund?.status === 'PENDING' ? <Text style={styles.muted}>🟡 {t.refundPending}</Text> : null}
+          {item.refund?.status === 'APPROVED' ? <Text style={styles.notice}>🟢 {t.refundApproved}</Text> : null}
+          {item.refund?.status === 'REJECTED' ? <Text style={styles.danger}>🔴 {t.refundRejected}</Text> : null}
           {canRequestRefund(item)
-            ? <Pressable onPress={() => item.refundableTransactionId === null ? undefined : setRefundItem({ id: item.refundableTransactionId, amount: refundableRemainder(item) })} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{item.refund === null ? fa.requestRefund : fa.requestAnotherRefund}</Text></Pressable>
+            ? <Pressable onPress={() => item.refundableTransactionId === null ? undefined : setRefundItem({ id: item.refundableTransactionId, amount: refundableRemainder(item) })} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{item.refund === null ? t.requestRefund : t.requestAnotherRefund}</Text></Pressable>
             : null}
         </View>
       ))}
-      {transactions.hasNextPage ? <Pressable onPress={() => void transactions.fetchNextPage()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>تراکنش‌های بیشتر</Text></Pressable> : null}
+      {transactions.hasNextPage ? <Pressable onPress={() => void transactions.fetchNextPage()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.moreTransactions}</Text></Pressable> : null}
       {refundItem ? <RefundSheet transactionId={refundItem.id} purchaseAmount={refundItem.amount} onClose={() => setRefundItem(null)} /> : null}
     </Page>
   );

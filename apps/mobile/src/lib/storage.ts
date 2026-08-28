@@ -5,6 +5,7 @@ const REFRESH_TOKEN_KEY = 'trustcoupon.refreshToken';
 const PIN_KEY = 'trustcoupon.pin';
 const SESSION_MARKER_KEY = 'trustcoupon.session';
 const MANIFESTO_SEEN_KEY = 'trustcoupon.manifestoSeen';
+const LANGUAGE_KEY = 'trustcoupon.language';
 const options = { requireAuthentication: true, keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY };
 let webRefreshToken: string | null = null;
 let webPin: string | null = null;
@@ -84,4 +85,29 @@ export async function markManifestoSeen(): Promise<void> {
     return;
   }
   await SecureStore.setItemAsync(MANIFESTO_SEEN_KEY, '1');
+}
+
+export type Language = 'en' | 'fa';
+
+export async function readLanguage(): Promise<Language> {
+  try {
+    const value = isWebPlatform()
+      ? (typeof window === 'undefined' ? null : window.localStorage.getItem(LANGUAGE_KEY))
+      : await SecureStore.getItemAsync(LANGUAGE_KEY);
+    return value === 'fa' ? 'fa' : 'en';
+  } catch {
+    return 'en';
+  }
+}
+
+export async function saveLanguage(language: Language): Promise<void> {
+  try {
+    if (isWebPlatform()) {
+      if (typeof window !== 'undefined') window.localStorage.setItem(LANGUAGE_KEY, language);
+      return;
+    }
+    await SecureStore.setItemAsync(LANGUAGE_KEY, language);
+  } catch {
+    return;
+  }
 }
