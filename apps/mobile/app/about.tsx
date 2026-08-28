@@ -24,6 +24,18 @@ export default function About() {
         <Text style={styles.heading}>{fa.manifesto.capabilitiesTitle}</Text>
         {fa.manifesto.capabilities.map((item) => <Text key={item} style={styles.text}>{item}</Text>)}
       </View>
+      <View style={styles.card}>
+        <Text style={styles.muted}>{fa.manifesto.government.badge}</Text>
+        <Text style={styles.heading}>{fa.manifesto.government.title}</Text>
+        <Text style={styles.text}>{fa.manifesto.government.lead}</Text>
+        {fa.manifesto.government.items.map((item) => (
+          <View key={item.title}>
+            <Text style={styles.heading}>{item.title}</Text>
+            <Text style={styles.text}>{item.body}</Text>
+          </View>
+        ))}
+        <Text style={styles.muted}>{fa.manifesto.government.status}</Text>
+      </View>
       <Text style={styles.text}>{fa.manifesto.closing}</Text>
       <Pressable onPress={() => void dismiss()} style={styles.button}><Text style={styles.buttonText}>{fa.close}</Text></Pressable>
     </Page>
