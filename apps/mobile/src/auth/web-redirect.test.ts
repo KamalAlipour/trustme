@@ -1,7 +1,25 @@
 import { describe, expect, it } from 'vitest';
-import { readIdTokenFromUrl, readSocialCallbackFromUrl, readSocialCallbackStateFromUrl } from './web-redirect';
+import {
+  getWebRedirectHandlingMode,
+  readIdTokenFromUrl,
+  readSocialCallbackFromUrl,
+  readSocialCallbackStateFromUrl,
+} from './web-redirect';
 
 describe('web OAuth redirect parsing', () => {
+  it('handles callbacks immediately without an opener', () => {
+    expect(getWebRedirectHandlingMode(true, false)).toBe('immediate');
+  });
+
+  it('defers callbacks with an opener for popup liveness', () => {
+    expect(getWebRedirectHandlingMode(true, true)).toBe('deferred');
+  });
+
+  it('does not handle URLs without a callback', () => {
+    expect(getWebRedirectHandlingMode(false, false)).toBeNull();
+    expect(getWebRedirectHandlingMode(false, true)).toBeNull();
+  });
+
   it('reads an ID token from the fragment', () => {
     expect(readIdTokenFromUrl('https://app.example.test/#id_token=fragment-token&state=state')).toBe('fragment-token');
   });

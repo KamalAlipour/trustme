@@ -4,49 +4,68 @@ import { I18nManager, Platform } from 'react-native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { SessionProvider, useSession } from '../src/auth/session';
 import { LanguageProvider } from '../src/i18n';
-import { readSocialCallbackFromUrl, readSocialCallbackStateFromUrl } from '../src/auth/web-redirect';
+import {
+  getWebRedirectHandlingMode,
+  readSocialCallbackFromUrl,
+  readSocialCallbackStateFromUrl,
+} from '../src/auth/web-redirect';
 import { appleWebStateKey } from '../src/auth/apple-web';
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, retry: 1 } } });
+const WEB_REDIRECT_DEFER_MS = 1_200;
 
 I18nManager.allowRTL(true);
 
 function WebRedirectHandler() {
   const { member, signInWithSocial } = useSession();
   const handledRedirect = useRef(false);
+  const scheduledRedirect = useRef(false);
   useEffect(() => {
-    if (Platform.OS !== 'web' || member !== null || handledRedirect.current || window.opener) return;
+    if (Platform.OS !== 'web' || member !== null || handledRedirect.current) return;
     const callback = readSocialCallbackFromUrl(window.location.href);
     if (callback === null) return;
     const callbackState = readSocialCallbackStateFromUrl(window.location.href);
-    handledRedirect.current = true;
-    const cleanUrl = new URL(window.location.href);
-    for (const parameter of ['id_token', 'code', 'state']) {
-      cleanUrl.searchParams.delete(parameter);
-    }
-    const hashParams = new URLSearchParams(cleanUrl.hash.replace(/^#/, ''));
-    for (const parameter of ['id_token', 'code', 'state']) {
-      hashParams.delete(parameter);
-    }
-    cleanUrl.hash = hashParams.toString() === '' ? '' : `#${hashParams.toString()}`;
-    window.history.replaceState(null, document.title, `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
-    let stateValid = true;
-    if (callback.provider === 'apple') {
-      try {
-        const expectedState = window.sessionStorage.getItem(appleWebStateKey);
-        window.sessionStorage.removeItem(appleWebStateKey);
-        stateValid = expectedState !== null && callbackState === expectedState;
-      } catch {
-        stateValid = false;
+    const handlingMode = getWebRedirectHandlingMode(true, Boolean(window.opener));
+    const handleRedirect = () => {
+      if (handledRedirect.current) return;
+      handledRedirect.current = true;
+      const cleanUrl = new URL(window.location.href);
+      for (const parameter of ['id_token', 'code', 'state']) {
+        cleanUrl.searchParams.delete(parameter);
       }
+      const hashParams = new URLSearchParams(cleanUrl.hash.replace(/^#/, ''));
+      for (const parameter of ['id_token', 'code', 'state']) {
+        hashParams.delete(parameter);
+      }
+      cleanUrl.hash = hashParams.toString() === '' ? '' : `#${hashParams.toString()}`;
+      window.history.replaceState(null, document.title, `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
+      let stateValid = true;
+      if (callback.provider === 'apple') {
+        try {
+          const expectedState = window.sessionStorage.getItem(appleWebStateKey);
+          window.sessionStorage.removeItem(appleWebStateKey);
+          stateValid = expectedState !== null && callbackState === expectedState;
+        } catch {
+          stateValid = false;
+        }
+      }
+      if (!stateValid) {
+        router.replace({ pathname: '/(auth)/login', params: { error: 'social' } });
+        return;
+      }
+      void signInWithSocial(callback.provider, callback.idToken)
+        .then(() => router.replace('/'))
+        .catch(() => router.replace({ pathname: '/(auth)/login', params: { error: 'social' } }));
+    };
+    if (handlingMode === 'deferred') {
+      if (!scheduledRedirect.current) {
+        scheduledRedirect.current = true;
+        setTimeout(handleRedirect, WEB_REDIRECT_DEFER_MS);
+      }
+      return undefined;
     }
-    if (!stateValid) {
-      router.replace({ pathname: '/(auth)/login', params: { error: 'social' } });
-      return;
-    }
-    void signInWithSocial(callback.provider, callback.idToken)
-      .then(() => router.replace('/'))
-      .catch(() => router.replace({ pathname: '/(auth)/login', params: { error: 'social' } }));
+    handleRedirect();
+    return undefined;
   }, [member, signInWithSocial]);
   return null;
 }
