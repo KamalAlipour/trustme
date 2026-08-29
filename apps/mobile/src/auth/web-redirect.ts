@@ -1,3 +1,6 @@
+import { appleWebStateKey } from './apple-web';
+import { googleWebStateKey } from './google-web';
+
 type SocialCallback = {
   provider: 'google' | 'apple';
   idToken: string;
@@ -9,12 +12,32 @@ type SocialCallbackDetails = SocialCallback & {
 
 export type WebRedirectHandlingMode = 'immediate' | 'deferred' | null;
 
+export type WebRedirectStateStorage = {
+  getItem: (key: string) => string | null;
+  removeItem: (key: string) => void;
+};
+
 export function getWebRedirectHandlingMode(
   hasCallback: boolean,
   hasOpener: boolean,
 ): WebRedirectHandlingMode {
   if (!hasCallback) return null;
   return hasOpener ? 'deferred' : 'immediate';
+}
+
+export function validateWebRedirectState(
+  provider: SocialCallback['provider'],
+  callbackState: string | null,
+  storage: WebRedirectStateStorage,
+): boolean {
+  const stateKey = provider === 'apple' ? appleWebStateKey : googleWebStateKey;
+  try {
+    const expectedState = storage.getItem(stateKey);
+    storage.removeItem(stateKey);
+    return expectedState !== null && callbackState === expectedState;
+  } catch {
+    return false;
+  }
 }
 
 function readSocialCallbackDetailsFromUrl(url: string): SocialCallbackDetails | null {
