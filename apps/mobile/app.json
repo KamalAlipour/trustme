@@ -4,36 +4,52 @@
     "slug": "trust-coupon",
     "scheme": "trustcoupon",
     "version": "0.1.0",
+    "icon": "./assets/icon.png",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
+    "locales": {
+      "fa": "./locales/fa.json"
+    },
     "plugins": [
       "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#176B87"
+        }
+      ],
       "expo-local-authentication",
       "expo-secure-store",
       "expo-camera",
       [
         "expo-image-picker",
         {
-          "photosPermission": "برای انتخاب مدرک تصویری به دسترسی عکس‌ها نیاز است.",
-          "cameraPermission": "برای ثبت مدرک تصویری به دسترسی دوربین نیاز است."
+          "photosPermission": "Trust Coupon needs access to your photos so you can attach existing images as evidence.",
+          "cameraPermission": "Trust Coupon uses the camera to scan member barcodes and to record visual evidence for refund requests."
         }
       ],
       [
         "expo-audio",
         {
-          "microphonePermission": "برای ضبط مدرک صوتی به دسترسی میکروفون نیاز است."
+          "microphonePermission": "Trust Coupon uses the microphone to record audio evidence for refund and aid requests."
         }
       ]
     ],
     "ios": {
       "bundleIdentifier": "as.komasi.trustcoupon",
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "برای ضبط مدرک صوتی به دسترسی میکروفون نیاز است.",
-        "NSPhotoLibraryUsageDescription": "برای انتخاب مدرک تصویری به دسترسی عکس‌ها نیاز است.",
-        "NSCameraUsageDescription": "برای ثبت مدرک تصویری به دسترسی دوربین نیاز است."
+        "NSMicrophoneUsageDescription": "Trust Coupon uses the microphone to record audio evidence for refund and aid requests.",
+        "NSPhotoLibraryUsageDescription": "Trust Coupon needs access to your photos so you can attach existing images as evidence.",
+        "NSCameraUsageDescription": "Trust Coupon uses the camera to scan member barcodes and to record visual evidence for refund requests."
       }
     },
     "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#176B87"
+      },
       "package": "as.komasi.trustcoupon",
       "permissions": [
         "android.permission.RECORD_AUDIO",
@@ -42,6 +58,9 @@
         "android.permission.USE_FINGERPRINT",
         "android.permission.MODIFY_AUDIO_SETTINGS"
       ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
     },
     "extra": {
       "router": {},

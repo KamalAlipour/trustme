@@ -1,0 +1,5 @@
+{
+  "NSMicrophoneUsageDescription": "برای ضبط مدرک صوتی به دسترسی میکروفون نیاز است.",
+  "NSPhotoLibraryUsageDescription": "برای انتخاب مدرک تصویری به دسترسی عکس‌ها نیاز است.",
+  "NSCameraUsageDescription": "برای ثبت مدرک تصویری به دسترسی دوربین نیاز است."
+}
