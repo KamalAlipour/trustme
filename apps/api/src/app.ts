@@ -119,6 +119,8 @@ export type ApiDependencies = {
   chainProvider?: AdminChainProvider;
   emailSender?: import('./member-auth.js').EmailSender;
   logEmailCode?: (email: string, code: string) => void;
+  verifyGoogleIdToken?: import('./social-auth.js').MemberIdTokenVerifier;
+  verifyAppleIdToken?: import('./social-auth.js').MemberIdTokenVerifier;
 };
 
 function serviceTokenMatches(expected: string, provided: string | undefined): boolean {
@@ -143,7 +145,7 @@ async function systemAccount(prisma: PrismaClient, type: AccountType, asset: Ass
   return prisma.ledgerAccount.findFirstOrThrow({ where: { type, asset, userId: null } });
 }
 
-function serializeUser(user: { id: string; phoneNumber: string; barcodeId: string; aliasName: string | null }, depositAddress: string | null) {
+function serializeUser(user: { id: string; phoneNumber: string | null; barcodeId: string; aliasName: string | null }, depositAddress: string | null) {
   return { id: user.id, phone: user.phoneNumber, barcodeId: user.barcodeId, alias: user.aliasName, depositAddress };
 }
 
@@ -185,6 +187,8 @@ export function createApp(dependencies: ApiDependencies): express.Express {
     prisma,
     ...(dependencies.emailSender === undefined ? {} : { emailSender: dependencies.emailSender }),
     logEmailCode,
+    ...(dependencies.verifyGoogleIdToken === undefined ? {} : { verifyGoogleIdToken: dependencies.verifyGoogleIdToken }),
+    ...(dependencies.verifyAppleIdToken === undefined ? {} : { verifyAppleIdToken: dependencies.verifyAppleIdToken }),
   }));
   app.use('/v1/me', requireMember(config.memberJwtSecret, prisma), createMemberRouter({
     config,

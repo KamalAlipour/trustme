@@ -11,6 +11,7 @@ type SessionContextValue = {
   biometric: boolean;
   signIn: (phone: string, pin: string) => Promise<void>;
   signUp: (phone: string, pin: string, displayName?: string, email?: string) => Promise<AuthResponse>;
+  signInWithSocial: (provider: 'google' | 'apple', idToken: string, displayName?: string) => Promise<void>;
   refreshSetup: () => Promise<SecuritySetup>;
   signOut: () => Promise<void>;
   getStepUpPin: () => Promise<string | null>;
@@ -79,6 +80,15 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       setMember(result.member);
       setSetup(await request<SecuritySetup>('/v1/me/security-setup'));
       return result;
+    },
+    signInWithSocial: async (provider, idToken, displayName) => {
+      const result = await authenticate(`/v1/auth/${provider}`, {
+        idToken,
+        ...(displayName === undefined ? {} : { displayName }),
+      });
+      await saveCredentials(result.tokens.refreshToken, '');
+      setMember(result.member);
+      setSetup(await request<SecuritySetup>('/v1/me/security-setup'));
     },
     refreshSetup: async () => {
       const result = await request<SecuritySetup>('/v1/me/security-setup');

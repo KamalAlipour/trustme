@@ -12,7 +12,7 @@ export type UserProvisioningConfig = {
 };
 
 export type UserProvisioningInput = {
-  phoneNumber: string;
+  phoneNumber?: string | null;
   barcodeId?: string;
   aliasName?: string;
   displayName?: string;
@@ -35,7 +35,7 @@ export async function createUserWithAccounts(
 ) {
   const user = await tx.user.create({
     data: {
-      phoneNumber: input.phoneNumber,
+      phoneNumber: input.phoneNumber ?? null,
       barcodeId: input.barcodeId,
       ...(input.aliasName === undefined ? {} : { aliasName: input.aliasName }),
       ...(input.displayName === undefined ? {} : { displayName: input.displayName }),

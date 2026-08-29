@@ -121,7 +121,7 @@ export default function Profile() {
       </View>
       <View style={styles.card}>
         <Text style={styles.heading}>{current?.displayName ?? t.member}</Text>
-        <Text style={styles.text}>{t.phoneLabel}: {current?.phone ? `••••${current.phone.slice(-4)}` : '••••'}</Text>
+        <Text style={styles.text}>{t.phoneLabel}: {current?.phone ? `••••${current.phone.slice(-4)}` : t.phoneUnavailable}</Text>
         <Text style={styles.text}>{t.emailLabel}: {current?.email ?? t.notRegistered}</Text>
         <Text style={styles.muted}>KYC: {current?.kycStatus}</Text>
         <TextInput value={displayName} onChangeText={setDisplayName} placeholder={t.displayName} style={styles.input} />

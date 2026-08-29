@@ -2,7 +2,7 @@ export type Member = {
   id: string;
   displayName: string | null;
   barcodeId: string;
-  phone: string;
+  phone: string | null;
   email: string | null;
   emailVerified: boolean;
   kycStatus: string;
@@ -23,7 +23,7 @@ export type SecuritySetup = {
   biometricEnrolled: boolean;
   biometricPending: boolean;
   requiresEmailVerification: boolean;
-  remaining: Array<'email_verification' | 'biometric_enrolment'>;
+  remaining: Array<'pin' | 'email_verification' | 'biometric_enrolment'>;
   completedAt: string | null;
 };
 export type Balance = { barcodeId: string; coupons: string; dustMicroUsdt: string; depositAddress: string | null };

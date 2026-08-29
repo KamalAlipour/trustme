@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { getSetupRoute } from './setup-routing';
 
-const setup = (remaining: Array<'email_verification' | 'biometric_enrolment'>) => ({
+const setup = (remaining: Array<'pin' | 'email_verification' | 'biometric_enrolment'>) => ({
   emailVerified: !remaining.includes('email_verification'),
   biometricEnrolled: !remaining.includes('biometric_enrolment'),
   biometricPending: false,
@@ -17,6 +17,10 @@ describe('security setup routing', () => {
 
   it('routes to biometric setup when email is complete', () => {
     expect(getSetupRoute(setup(['biometric_enrolment']))).toBe('security-setup');
+  });
+
+  it('routes to PIN creation before biometric setup', () => {
+    expect(getSetupRoute(setup(['pin', 'biometric_enrolment']))).toBe('create-pin');
   });
 
   it('opens the app only after setup is complete', () => {

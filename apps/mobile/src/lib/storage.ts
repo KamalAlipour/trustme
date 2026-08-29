@@ -40,6 +40,14 @@ export async function saveRefreshToken(refreshToken: string): Promise<void> {
   await SecureStore.setItemAsync(REFRESH_TOKEN_KEY, refreshToken, options);
 }
 
+export async function savePin(pin: string): Promise<void> {
+  if (isWebPlatform()) {
+    webPin = pin;
+    return;
+  }
+  await SecureStore.setItemAsync(PIN_KEY, pin, options);
+}
+
 export async function readRefreshToken(): Promise<string | null> {
   if (isWebPlatform()) return webRefreshToken;
   return SecureStore.getItemAsync(REFRESH_TOKEN_KEY, options);
