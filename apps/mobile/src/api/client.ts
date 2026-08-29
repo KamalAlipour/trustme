@@ -68,14 +68,16 @@ async function refreshSession(): Promise<RefreshResult> {
   if (refreshFlight !== null) return refreshFlight;
   refreshFlight = (async () => {
     const refreshToken = await readRefreshToken();
-    if (refreshToken === null) return expireSession();
+    if (refreshToken === null) throw new ApiError(401, { error: 'secure session unavailable' });
     const response = await fetch(`${API_BASE_URL}/v1/auth/refresh`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ refreshToken }),
     });
     const body = await parseResponse(response) as { tokens?: Tokens; member?: AuthResponse['member']; error?: string; retryAfter?: number };
-    if (!response.ok || body.tokens === undefined) return expireSession();
+    if (response.status === 401) return expireSession();
+    if (!response.ok) throw new ApiError(response.status, body);
+    if (body.tokens === undefined) throw new ApiError(502, { error: 'invalid refresh response' });
     accessToken = body.tokens.accessToken;
     await saveRefreshToken(body.tokens.refreshToken);
     return { ...body.tokens, ...(body.member === undefined ? {} : { member: body.member }) };
