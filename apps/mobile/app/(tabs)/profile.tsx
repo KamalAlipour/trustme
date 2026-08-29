@@ -12,6 +12,7 @@ import { isPlausiblePhoneNumber } from '../../src/lib/phone-validation';
 import { useTranslation } from '../../src/i18n';
 import { styles } from '../../src/styles';
 import { ISO_ALPHA2_COUNTRIES } from '../../src/lib/countries';
+import { isValidEmail, isValidEmailCode, submitEmailAction } from '../../src/lib/email-validation';
 import { LiveIdentityCapture } from '../../src/components/LiveIdentityCapture';
 
 export default function Profile() {
@@ -48,7 +49,12 @@ export default function Profile() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const phoneIsValid = isPlausiblePhoneNumber(newPhone);
+  const [emailFeedback, setEmailFeedback] = useState('');
+  const [emailError, setEmailError] = useState('');
+  const [emailBusy, setEmailBusy] = useState<'send' | 'verify' | null>(null);
   const previousLanguage = useRef(language);
+  const emailIsValid = isValidEmail(email);
+  const emailCodeIsValid = isValidEmailCode(emailCode);
   const updateWithdrawAmount = (value: string) => {
     const amount = value.replace(/\D/g, '');
     setWithdrawAmount(amount);
@@ -110,8 +116,14 @@ export default function Profile() {
     } catch (cause) { setError(cause instanceof LockedError ? `${cause.message} (${t.lockedSeconds(cause.retryAfter)})` : cause instanceof ApiError ? cause.message : t.unknownError); }
   };
   const requestEmail = async () => {
-    setError(''); setNotice('');
-    try { await request('/v1/me/email', { method: 'POST', body: { email } }); setNotice(t.emailCodeSentNotice); } catch (cause) { setError(cause instanceof ApiError ? cause.message : t.unknownError); }
+    if (!emailIsValid || emailBusy !== null) return;
+    setEmailFeedback(''); setEmailError(''); setEmailBusy('send');
+    try {
+      const message = await submitEmailAction('send', email, async (value) => {
+        await request('/v1/me/email', { method: 'POST', body: { email: value } });
+      }, t);
+      if (message !== null) setEmailFeedback(message);
+    } catch (cause) { setEmailError(cause instanceof ApiError ? cause.message : t.unknownError); } finally { setEmailBusy(null); }
   };
   const savePhone = async () => {
     if (!phoneIsValid || phonePin.length !== 4 || phoneBusy) return;
@@ -129,8 +141,14 @@ export default function Profile() {
     }
   };
   const verifyEmail = async () => {
-    setError(''); setNotice('');
-    try { await request('/v1/me/email/verify', { method: 'POST', body: { code: emailCode } }); setEmailCode(''); setNotice(t.emailVerified); await invalidate(); } catch (cause) { setError(cause instanceof ApiError ? cause.message : t.unknownError); }
+    if (!emailCodeIsValid || emailBusy !== null) return;
+    setEmailFeedback(''); setEmailError(''); setEmailBusy('verify');
+    try {
+      const message = await submitEmailAction('verify', emailCode, async (value) => {
+        await request('/v1/me/email/verify', { method: 'POST', body: { code: value } });
+      }, t);
+      if (message !== null) { setEmailCode(''); setEmailFeedback(message); await invalidate(); }
+    } catch (cause) { setEmailError(cause instanceof ApiError ? cause.message : t.unknownError); } finally { setEmailBusy(null); }
   };
   const changePin = async () => {
     setError(''); setNotice('');
@@ -268,10 +286,13 @@ export default function Profile() {
       </View>
       <View style={styles.card}>
         <Text style={styles.heading}>{t.email}</Text>
-        <TextInput value={email} onChangeText={setEmail} placeholder={t.email} style={styles.input} keyboardType="email-address" autoCapitalize="none" />
-        <Pressable onPress={() => void requestEmail()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.sendCode}</Text></Pressable>
+        <TextInput value={email} onChangeText={(value) => { setEmail(value); setEmailFeedback(''); setEmailError(''); }} placeholder={t.email} style={styles.input} keyboardType="email-address" autoCapitalize="none" />
+        {!emailIsValid && email.trim().length > 0 ? <Text style={styles.danger}>{t.invalidEmail}</Text> : null}
+        <Pressable disabled={!emailIsValid || emailBusy !== null} onPress={() => void requestEmail()} style={[styles.secondaryButton, !emailIsValid || emailBusy !== null ? styles.buttonDisabled : null]}><Text style={styles.secondaryButtonText}>{emailBusy === 'send' ? t.sendingEmailCode : t.sendCode}</Text></Pressable>
         <TextInput value={emailCode} onChangeText={(value) => setEmailCode(value.replace(/\D/g, '').slice(0, 6))} placeholder={t.sixDigitCode} style={styles.input} keyboardType="number-pad" />
-        <Pressable onPress={() => void verifyEmail()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.verify}</Text></Pressable>
+        <Pressable disabled={!emailCodeIsValid || emailBusy !== null} onPress={() => void verifyEmail()} style={[styles.secondaryButton, !emailCodeIsValid || emailBusy !== null ? styles.buttonDisabled : null]}><Text style={styles.secondaryButtonText}>{emailBusy === 'verify' ? t.verifyingEmail : t.verify}</Text></Pressable>
+        {emailFeedback ? <Text style={styles.notice}>{emailFeedback}</Text> : null}
+        {emailError ? <Text style={styles.danger}>{emailError}</Text> : null}
       </View>
       <View style={styles.card}>
         <Text style={styles.heading}>{t.pin}</Text>
