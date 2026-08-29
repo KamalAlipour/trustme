@@ -12,7 +12,6 @@ import { createMemberJwt } from '../src/member-auth.js';
 import { createAdminJwt } from '../src/admin-auth.js';
 import type { AdminChainProvider } from '../src/admin.js';
 import { hashIdentityValue } from '../src/identity.js';
-import { disclosureCodeHash } from '../src/balance-disclosure.js';
 
 const prisma = new PrismaClient();
 const token = 'test-service-token';
@@ -1193,14 +1192,12 @@ describe('member API', () => {
 });
 
 describe('public reserves and balance disclosure API', () => {
-  const pepper = 'public-disclosure-test-pepper-that-is-at-least-32-characters';
-
   async function createPublicUser(phone: string, barcodeId: string) {
     return provisionUser(prisma, { depositXpub: config.depositXpub }, { phoneNumber: phone, barcodeId });
   }
 
   it('publishes separate ledger-derived real and demo reserves and anonymized newest-first feed', async () => {
-    const { app } = appFixture(undefined, undefined, { identityHashPepper: pepper });
+    const { app } = appFixture();
     const systems = await addSystemAccounts();
     const real = await createPublicUser('+15550003001', 'public-real');
     const demo = await createPublicUser('+15550003002', 'public-demo');
@@ -1230,11 +1227,11 @@ describe('public reserves and balance disclosure API', () => {
   });
 
   it('returns barcode status only and enforces one-time disclosure confirmation', async () => {
-    const { app } = appFixture(undefined, undefined, { identityHashPepper: pepper });
+    const { app } = appFixture();
     await createPublicUser('+15550003003', 'public-owner');
     const status = await request(app).get('/v1/public/barcodes/public-owner');
     expect(status.status).toBe(200);
-    expect(status.body).toEqual({ barcodeId: 'public-owner', isDemo: false, status: 'ACTIVE' });
+    expect(status.body).toEqual({ barcodeId: 'public-owner', isDemo: false, valid: true });
     expect(status.body).not.toHaveProperty('balance');
     const missing = await request(app).get('/v1/public/barcodes/unknown-public');
     expect(missing.status).toBe(404);
@@ -1245,12 +1242,13 @@ describe('public reserves and balance disclosure API', () => {
     const duplicate = await request(app).post('/v1/public/barcodes/public-owner/disclosure');
     expect(duplicate.status).toBe(409);
     const direct = await prisma.balanceDisclosureRequest.create({
-      data: { userId: (await createPublicUser('+15550003006', 'public-owner-two')).id, codeHash: disclosureCodeHash('000001', pepper), expiresAt: new Date(Date.now() + 600_000) },
+      data: { userId: (await createPublicUser('+15550003006', 'public-owner-two')).id, code: '000001', expiresAt: new Date(Date.now() + 600_000) },
     });
     const ownerToken = await memberToken(app, '+15550003006');
     const disclosures = await request(app).get('/v1/me/disclosures').set('Authorization', `Bearer ${ownerToken}`);
     expect(disclosures.status).toBe(200);
     expect(disclosures.body.items).toEqual([expect.objectContaining({ id: direct.id, code: '000001' })]);
+    expect((await prisma.balanceDisclosureRequest.findUniqueOrThrow({ where: { id: direct.id } })).code).toBe('000001');
     await createPublicUser('+15550003004', 'public-stranger');
     const strangerToken = await memberToken(app, '+15550003004');
     const denied = await request(app).post(`/v1/me/disclosures/${direct.id}/deny`).set('Authorization', `Bearer ${strangerToken}`);
@@ -1260,32 +1258,39 @@ describe('public reserves and balance disclosure API', () => {
     await prisma.balanceDisclosureRequest.update({ where: { id: direct.id }, data: { attempts: 4 } });
     const fifth = await request(app).post(`/v1/public/disclosures/${direct.id}/confirm`).send({ code: '999999' });
     expect(fifth.status).toBe(401);
-    expect((await prisma.balanceDisclosureRequest.findUniqueOrThrow({ where: { id: direct.id } })).status).toBe(BalanceDisclosureStatus.DENIED);
+    expect((await prisma.balanceDisclosureRequest.findUniqueOrThrow({ where: { id: direct.id } }))).toMatchObject({ status: BalanceDisclosureStatus.DENIED, code: null });
   });
 
   it('expires requests, denies pending owner requests, and returns confirmation history once', async () => {
-    const { app } = appFixture(undefined, undefined, { identityHashPepper: pepper });
+    const { app } = appFixture();
     const systems = await addSystemAccounts();
     const owner = await createPublicUser('+15550003005', 'public-history');
     const ownerAccount = await prisma.ledgerAccount.findFirstOrThrow({ where: { userId: owner.id, type: AccountType.USER_COUPON, asset: Asset.COUPON } });
     await prisma.ledgerAccount.update({ where: { id: ownerAccount.id }, data: { balance: 75n } });
     const oldestTransaction = await prisma.transaction.create({ data: { type: TransactionType.TRANSFER, status: 'COMPLETED', amountCoupons: 25n, externalRef: 'public-history-oldest', createdAt: new Date(Date.now() - 60_000) } });
     const newestTransaction = await prisma.transaction.create({ data: { type: TransactionType.TRANSFER, status: 'COMPLETED', amountCoupons: 50n, externalRef: 'public-history-newest' } });
+    const escrowAccount = await account(AccountType.ESCROW, Asset.COUPON);
+    const heldTransaction = await prisma.transaction.create({ data: { type: TransactionType.ESCROW_HOLD, status: 'CONFIRMED', amountCoupons: 10n, externalRef: 'public-history-held' } });
     await prisma.ledgerEntry.create({ data: { transactionId: oldestTransaction.id, fromAccountId: systems.issuance.id, toAccountId: ownerAccount.id, amount: 25n, asset: Asset.COUPON } });
     await prisma.ledgerEntry.create({ data: { transactionId: newestTransaction.id, fromAccountId: systems.issuance.id, toAccountId: ownerAccount.id, amount: 50n, asset: Asset.COUPON } });
-    const expired = await prisma.balanceDisclosureRequest.create({ data: { userId: owner.id, codeHash: disclosureCodeHash('000002', pepper), expiresAt: new Date(Date.now() - 1_000) } });
+    await prisma.ledgerEntry.create({ data: { transactionId: heldTransaction.id, fromAccountId: ownerAccount.id, toAccountId: escrowAccount.id, amount: 10n, asset: Asset.COUPON } });
+    const expired = await prisma.balanceDisclosureRequest.create({ data: { userId: owner.id, code: '000002', expiresAt: new Date(Date.now() - 1_000) } });
     const expiredResponse = await request(app).post(`/v1/public/disclosures/${expired.id}/confirm`).send({ code: '000002' });
     expect(expiredResponse.status).toBe(410);
-    const pending = await prisma.balanceDisclosureRequest.create({ data: { userId: owner.id, codeHash: disclosureCodeHash('000003', pepper), expiresAt: new Date(Date.now() + 600_000) } });
+    expect((await prisma.balanceDisclosureRequest.findUniqueOrThrow({ where: { id: expired.id } })).code).toBeNull();
+    const pending = await prisma.balanceDisclosureRequest.create({ data: { userId: owner.id, code: '000003', expiresAt: new Date(Date.now() + 600_000) } });
     const ownerToken = await memberToken(app, '+15550003005');
     const denied = await request(app).post(`/v1/me/disclosures/${pending.id}/deny`).set('Authorization', `Bearer ${ownerToken}`);
     expect(denied.status).toBe(204);
-    const success = await prisma.balanceDisclosureRequest.create({ data: { userId: owner.id, codeHash: disclosureCodeHash('000004', pepper), expiresAt: new Date(Date.now() + 600_000) } });
+    expect((await prisma.balanceDisclosureRequest.findUniqueOrThrow({ where: { id: pending.id } })).code).toBeNull();
+    const success = await prisma.balanceDisclosureRequest.create({ data: { userId: owner.id, code: '000004', expiresAt: new Date(Date.now() + 600_000) } });
     const confirmed = await request(app).post(`/v1/public/disclosures/${success.id}/confirm`).send({ code: '000004' });
     expect(confirmed.status).toBe(200);
     expect(confirmed.body).toMatchObject({ barcodeId: 'public-history', balanceCoupons: '75', totalReceivedCoupons: '75' });
-    expect(confirmed.body.transactions[0]).toMatchObject({ amountCoupons: '50', balanceAfterCoupons: '75' });
-    expect(confirmed.body.transactions[1]).toMatchObject({ amountCoupons: '25', balanceAfterCoupons: '25' });
+    expect(confirmed.body.transactions[0]).toMatchObject({ type: 'ESCROW_HOLD', status: 'CONFIRMED', amountCoupons: '-10', balanceAfterCoupons: '75' });
+    expect(confirmed.body.transactions[1]).toMatchObject({ amountCoupons: '50', balanceAfterCoupons: '85' });
+    expect(confirmed.body.transactions[2]).toMatchObject({ amountCoupons: '25', balanceAfterCoupons: '35' });
+    expect((await prisma.balanceDisclosureRequest.findUniqueOrThrow({ where: { id: success.id } })).code).toBeNull();
     const reused = await request(app).post(`/v1/public/disclosures/${success.id}/confirm`).send({ code: '000004' });
     expect(reused.status).toBe(410);
   });

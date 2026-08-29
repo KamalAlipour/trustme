@@ -184,7 +184,7 @@ export function createApp(dependencies: ApiDependencies): express.Express {
   app.use(pinoHttp({ logger }));
   app.use('/v1', rateLimit({ windowMs: config.rateLimitWindowMs, limit: config.rateLimitMax, standardHeaders: true, legacyHeaders: false }));
   useConfiguredCors(app, config.allowedOrigins);
-  app.use('/v1/public', createPublicRouter(config, prisma));
+  app.use('/v1/public', createPublicRouter(prisma));
   const logEmailCode = dependencies.logEmailCode ?? ((email: string, code: string) => logger.info({ email }, `member email code ${code}`));
   app.use('/v1/auth', createMemberAuthRouter({
     config,

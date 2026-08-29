@@ -53,7 +53,7 @@ export const openapiDocument = {
         responses: { '201': { description: 'Manual identity review submitted' }, '400': { description: 'Country is required' }, '403': { description: 'Media asset is not owned by the member' }, '409': { description: 'Manual review is unavailable, already pending, or identity is verified' } },
       },
     },
-    '/v1/me/disclosures': { get: { responses: { '200': { description: 'Pending balance disclosure requests for the member' }, '503': { description: 'Disclosure is not configured' } } } },
+    '/v1/me/disclosures': { get: { responses: { '200': { description: 'Pending balance disclosure requests for the member' } } } },
     '/v1/me/disclosures/{id}/deny': { post: { responses: { '204': { description: 'Disclosure request denied' }, '404': { description: 'Disclosure request not found' }, '409': { description: 'Disclosure request is no longer pending' } } } },
     '/v1/me/country': { put: { responses: { '200': { description: 'Updated account country' }, '409': { description: 'Country cannot change after verification' } } } },
     '/v1/me/barcodes': { get: { responses: { '200': { description: 'Member barcode search results' } } } },

@@ -1,21 +1,21 @@
 import { randomInt, timingSafeEqual } from 'node:crypto';
 import express from 'express';
 import rateLimit from 'express-rate-limit';
+import { z } from 'zod';
 import { AccountType, Asset, BalanceDisclosureStatus, Prisma, PrismaClient, TransactionStatus, TransactionType } from '@trustme/db';
-import { decimalFromMicroUsdt, readDemoCirculation, readSolvency } from '@trustme/core';
-import type { ApiConfig } from './config.js';
+import { barcodeIdSchema, decimalFromMicroUsdt, readDemoCirculation, readSolvency } from '@trustme/core';
 import { HttpError } from './http-error.js';
-import { disclosureCodeHash } from './balance-disclosure.js';
 
 const publicTypes = [
   TransactionType.DEPOSIT,
   TransactionType.WITHDRAWAL,
   TransactionType.TRANSFER,
-  TransactionType.PURCHASE,
   TransactionType.REFUND,
-  TransactionType.DONATION,
 ];
-const codeSchema = /^\d{6}$/;
+const barcodeParamsSchema = z.object({ barcodeId: barcodeIdSchema });
+const disclosureParamsSchema = z.object({ requestId: z.string().uuid() });
+const disclosureCodeSchema = z.object({ code: z.string().regex(/^\d{6}$/, 'code must be exactly six digits') }).strict();
+const ledgerQuerySchema = z.object({ limit: z.coerce.number().int().min(1).max(50).default(20) });
 
 function cacheHeaders(response: express.Response): void {
   response.setHeader('Cache-Control', 'public, max-age=10');
@@ -41,11 +41,10 @@ async function disclosurePayload(prisma: DatabaseClient, userId: string, barcode
   const entries = await prisma.ledgerEntry.findMany({
     where: {
       asset: Asset.COUPON,
-      transaction: { status: TransactionStatus.COMPLETED },
       OR: [{ fromAccountId: account.id }, { toAccountId: account.id }],
     },
     include: {
-      transaction: { select: { type: true, createdAt: true } },
+      transaction: { select: { type: true, status: true, createdAt: true } },
     },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     take: 100,
@@ -53,7 +52,6 @@ async function disclosurePayload(prisma: DatabaseClient, userId: string, barcode
   const allEntries = await prisma.ledgerEntry.findMany({
     where: {
       asset: Asset.COUPON,
-      transaction: { status: TransactionStatus.COMPLETED },
       OR: [{ fromAccountId: account.id }, { toAccountId: account.id }],
     },
     select: { fromAccountId: true, toAccountId: true, amount: true },
@@ -68,6 +66,7 @@ async function disclosurePayload(prisma: DatabaseClient, userId: string, barcode
     const item = {
       at: entry.transaction.createdAt,
       type: entry.transaction.type,
+      status: entry.transaction.status,
       amountCoupons: signed.toString(),
       balanceAfterCoupons: balance.toString(),
     };
@@ -83,17 +82,14 @@ async function disclosurePayload(prisma: DatabaseClient, userId: string, barcode
   };
 }
 
-export function createPublicRouter(config: ApiConfig, prisma: PrismaClient): express.Router {
+export function createPublicRouter(prisma: PrismaClient): express.Router {
   const router = express.Router();
   const readLimiter = rateLimit({ windowMs: 60 * 60_000, limit: 300, standardHeaders: true, legacyHeaders: false });
   const barcodeLimiter = rateLimit({ windowMs: 60 * 60_000, limit: 30, standardHeaders: true, legacyHeaders: false });
   const disclosureLimiter = rateLimit({ windowMs: 60 * 60_000, limit: 10, standardHeaders: true, legacyHeaders: false });
   const barcodeDisclosureLimiter = rateLimit({ windowMs: 60 * 60_000, limit: 3, keyGenerator: (request) => typeof request.params.barcodeId === 'string' ? request.params.barcodeId : (request.ip ?? 'unknown'), standardHeaders: true, legacyHeaders: false });
-  router.use((request, response, next) => {
+  router.use((_request, response, next) => {
     response.setHeader('Access-Control-Allow-Origin', '*');
-    if (request.headers.cookie !== undefined || request.headers.authorization !== undefined) {
-      response.removeHeader('Access-Control-Allow-Origin');
-    }
     next();
   });
 
@@ -131,13 +127,12 @@ export function createPublicRouter(config: ApiConfig, prisma: PrismaClient): exp
   router.get('/ledger', readLimiter, async (request, response, next) => {
     try {
       cacheHeaders(response);
-      const parsed = Number(request.query.limit ?? 20);
-      if (!Number.isInteger(parsed) || parsed < 1 || parsed > 50) throw new HttpError(400, 'limit must be between 1 and 50');
+      const { limit } = ledgerQuerySchema.parse(request.query);
       const rows = await prisma.transaction.findMany({
         where: { status: TransactionStatus.COMPLETED, type: { in: publicTypes } },
         include: { user: { select: { isDemo: true } } },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-        take: parsed,
+        take: limit,
       });
       response.json({
         items: rows.map((row) => ({
@@ -156,11 +151,10 @@ export function createPublicRouter(config: ApiConfig, prisma: PrismaClient): exp
   router.get('/barcodes/:barcodeId', barcodeLimiter, async (request, response, next) => {
     try {
       cacheHeaders(response);
-      const barcodeId = request.params.barcodeId;
-      if (typeof barcodeId !== 'string') throw new HttpError(400, 'barcodeId is required');
-      const user = await prisma.user.findUnique({ where: { barcodeId }, select: { barcodeId: true, isDemo: true, activeGuaranteeCount: true } });
+      const { barcodeId } = barcodeParamsSchema.parse(request.params);
+      const user = await prisma.user.findUnique({ where: { barcodeId }, select: { barcodeId: true, isDemo: true } });
       if (user === null) throw new HttpError(404, 'member not found');
-      response.json({ barcodeId: user.barcodeId, isDemo: user.isDemo, status: user.activeGuaranteeCount > 0 ? 'RESTRICTED' : 'ACTIVE' });
+      response.json({ barcodeId: user.barcodeId, isDemo: user.isDemo, valid: true });
     } catch (error) {
       next(error);
     }
@@ -168,23 +162,20 @@ export function createPublicRouter(config: ApiConfig, prisma: PrismaClient): exp
 
   router.post('/barcodes/:barcodeId/disclosure', disclosureLimiter, barcodeDisclosureLimiter, async (request, response, next) => {
     try {
-      if (config.identityHashPepper === undefined) throw new HttpError(503, 'disclosure is not configured');
-      const pepper = config.identityHashPepper;
-      const barcodeId = request.params.barcodeId;
-      if (typeof barcodeId !== 'string') throw new HttpError(400, 'barcodeId is required');
+      const { barcodeId } = barcodeParamsSchema.parse(request.params);
       const user = await prisma.user.findUnique({ where: { barcodeId }, select: { id: true } });
       if (user === null) throw new HttpError(404, 'member not found');
       const expiresAt = new Date(Date.now() + 10 * 60_000);
       const requestRow = await prisma.$transaction(async (tx) => {
         await tx.balanceDisclosureRequest.updateMany({
           where: { userId: user.id, status: BalanceDisclosureStatus.PENDING, expiresAt: { lte: new Date() } },
-          data: { status: BalanceDisclosureStatus.EXPIRED, resolvedAt: new Date() },
+          data: { status: BalanceDisclosureStatus.EXPIRED, code: null, resolvedAt: new Date() },
         });
         const pending = await tx.balanceDisclosureRequest.findFirst({ where: { userId: user.id, status: BalanceDisclosureStatus.PENDING } });
         if (pending !== null) throw new HttpError(409, 'disclosure request already pending');
         const code = sixDigitCode();
         return tx.balanceDisclosureRequest.create({
-          data: { userId: user.id, codeHash: disclosureCodeHash(code, pepper), expiresAt },
+          data: { userId: user.id, code, expiresAt },
           select: { id: true, expiresAt: true },
         });
       });
@@ -196,28 +187,25 @@ export function createPublicRouter(config: ApiConfig, prisma: PrismaClient): exp
 
   router.post('/disclosures/:requestId/confirm', async (request, response, next) => {
     try {
-      if (config.identityHashPepper === undefined) throw new HttpError(503, 'disclosure is not configured');
-      const pepper = config.identityHashPepper;
-      if (typeof request.body.code !== 'string' || !codeSchema.test(request.body.code)) throw new HttpError(400, 'code must be exactly six digits');
-      const requestId = request.params.requestId;
-      if (typeof requestId !== 'string') throw new HttpError(400, 'requestId is required');
+      const { code } = disclosureCodeSchema.parse(request.body);
+      const { requestId } = disclosureParamsSchema.parse(request.params);
       const result = await prisma.$transaction(async (tx) => {
         const row = await tx.balanceDisclosureRequest.findUnique({ where: { id: requestId }, include: { user: { select: { barcodeId: true, isDemo: true } } } });
         if (row === null) return { error: new HttpError(404, 'disclosure request not found') };
         if (row.status !== BalanceDisclosureStatus.PENDING || row.expiresAt <= new Date()) {
-          if (row.status === BalanceDisclosureStatus.PENDING) await tx.balanceDisclosureRequest.update({ where: { id: row.id }, data: { status: BalanceDisclosureStatus.EXPIRED, resolvedAt: new Date() } });
+          if (row.status === BalanceDisclosureStatus.PENDING) await tx.balanceDisclosureRequest.update({ where: { id: row.id }, data: { status: BalanceDisclosureStatus.EXPIRED, code: null, resolvedAt: new Date() } });
           return { error: new HttpError(410, 'disclosure request is no longer available') };
         }
         if (row.attempts >= 5) return { error: new HttpError(401, 'invalid disclosure code') };
-        const expected = disclosureCodeHash(request.body.code, pepper);
-        const stored = Buffer.from(row.codeHash, 'hex');
-        const valid = stored.length === 32 && timingSafeEqual(Buffer.from(expected, 'hex'), stored);
+        const expected = Buffer.from(code, 'utf8');
+        const stored = Buffer.from(row.code ?? '', 'utf8');
+        const valid = stored.length === expected.length && timingSafeEqual(expected, stored);
         if (!valid) {
           const attempts = row.attempts + 1;
-          await tx.balanceDisclosureRequest.update({ where: { id: row.id }, data: { attempts, ...(attempts >= 5 ? { status: BalanceDisclosureStatus.DENIED, resolvedAt: new Date() } : {}) } });
+          await tx.balanceDisclosureRequest.update({ where: { id: row.id }, data: { attempts, ...(attempts >= 5 ? { status: BalanceDisclosureStatus.DENIED, code: null, resolvedAt: new Date() } : {}) } });
           return { error: new HttpError(401, 'invalid disclosure code') };
         }
-        await tx.balanceDisclosureRequest.update({ where: { id: row.id }, data: { status: BalanceDisclosureStatus.CONSUMED, resolvedAt: new Date() } });
+        await tx.balanceDisclosureRequest.update({ where: { id: row.id }, data: { status: BalanceDisclosureStatus.CONSUMED, code: null, resolvedAt: new Date() } });
         return { payload: await disclosurePayload(tx, row.userId, row.user.barcodeId, row.user.isDemo) };
       });
       if ('error' in result) throw result.error;

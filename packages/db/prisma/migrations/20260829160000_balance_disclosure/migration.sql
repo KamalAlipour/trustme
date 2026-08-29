@@ -1,11 +1,9 @@
 CREATE TYPE "BalanceDisclosureStatus" AS ENUM ('PENDING', 'CONSUMED', 'DENIED', 'EXPIRED');
-ALTER TYPE "TransactionType" ADD VALUE 'PURCHASE';
-ALTER TYPE "TransactionType" ADD VALUE 'DONATION';
 
 CREATE TABLE "BalanceDisclosureRequest" (
     "id" UUID NOT NULL,
     "userId" UUID NOT NULL,
-    "codeHash" TEXT NOT NULL,
+    "code" TEXT,
     "status" "BalanceDisclosureStatus" NOT NULL DEFAULT 'PENDING',
     "attempts" INTEGER NOT NULL DEFAULT 0,
     "expiresAt" TIMESTAMP(3) NOT NULL,

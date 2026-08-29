@@ -28,13 +28,11 @@ enum AccountType {
 enum TransactionType {
   DEPOSIT
   TRANSFER
-  PURCHASE
   ESCROW_HOLD
   ESCROW_RELEASE
   ESCROW_CANCEL
   WITHDRAWAL
   REFUND
-  DONATION
   FEE
   GUARANTEE_LOCK
   GUARANTEE_RELEASE
@@ -243,7 +241,7 @@ model IdentityCheck {
 model BalanceDisclosureRequest {
   id         String                  @id @default(uuid()) @db.Uuid
   userId     String                  @db.Uuid
-  codeHash   String
+  code       String?
   status     BalanceDisclosureStatus @default(PENDING)
   attempts   Int                     @default(0)
   expiresAt  DateTime
