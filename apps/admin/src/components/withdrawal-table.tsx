@@ -8,6 +8,7 @@ export { canApproveWithdrawal, canRejectWithdrawal } from './withdrawal-rules';
 export type WithdrawalRow = {
   id: string;
   barcodeId: string;
+  country: string | null;
   identityVerificationStatus: string;
   couponsGross: string;
   feeUsdt: string;
@@ -24,12 +25,13 @@ export function WithdrawalTable({ rows, role }: Readonly<{ rows: WithdrawalRow[]
     <div className="overflow-x-auto rounded-lg border bg-white shadow-sm">
       <table className="min-w-full text-left text-sm">
         <thead className="bg-slate-50">
-          <tr>{[labels.barcode, labels.identityVerificationStatus, labels.grossCoupons, labels.fee, labels.net, labels.destination, labels.status, labels.chainTxHash, labels.createdAt, labels.actions].map((label) => <th className="whitespace-nowrap px-4 py-3 font-medium" key={label}>{label}</th>)}</tr>
+          <tr>{[labels.barcode, labels.country, labels.identityVerificationStatus, labels.grossCoupons, labels.fee, labels.net, labels.destination, labels.status, labels.chainTxHash, labels.createdAt, labels.actions].map((label) => <th className="whitespace-nowrap px-4 py-3 font-medium" key={label}>{label}</th>)}</tr>
         </thead>
         <tbody className="divide-y">
           {rows.map((row) => (
             <tr key={row.id}>
               <td className="px-4 py-3">{row.barcodeId}</td>
+              <td className="px-4 py-3">{row.country ?? '—'}</td>
               <td className="px-4 py-3">{row.identityVerificationStatus}</td>
               <td className="px-4 py-3">{row.couponsGross}</td>
               <td className="px-4 py-3">{row.feeUsdt}</td>
@@ -48,7 +50,7 @@ export function WithdrawalTable({ rows, role }: Readonly<{ rows: WithdrawalRow[]
               </td>
             </tr>
           ))}
-          {rows.length === 0 ? <tr><td className="px-4 py-8 text-center text-slate-500" colSpan={10}>{labels.noRows}</td></tr> : null}
+          {rows.length === 0 ? <tr><td className="px-4 py-8 text-center text-slate-500" colSpan={11}>{labels.noRows}</td></tr> : null}
         </tbody>
       </table>
     </div>

@@ -161,6 +161,7 @@ model User {
   barcodeId            String              @unique
   aliasName            String?
   displayName          String?
+  country              String?
   kycStatus            KycStatus           @default(UNVERIFIED)
   identityVerificationStatus IdentityVerificationStatus @default(UNVERIFIED)
   identityVerifiedAt   DateTime?

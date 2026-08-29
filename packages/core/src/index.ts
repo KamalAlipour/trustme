@@ -9,3 +9,5 @@ export * from './domain-error.js';
 export * from './refunds.js';
 export * from './charity.js';
 export * from './demo.js';
+export * from './countries.js';
+export * from './identity-policy.js';

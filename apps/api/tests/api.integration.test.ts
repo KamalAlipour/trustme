@@ -107,7 +107,7 @@ async function adminToken(app: ReturnType<typeof appFixture>['app'], username: s
 
 async function memberToken(app: ReturnType<typeof appFixture>['app'], phone: string, displayName?: string) {
   const user = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: phone } });
-  await prisma.user.update({ where: { id: user.id }, data: { pinHash: await bcrypt.hash('2468', 12), biometricEnrolledAt: new Date(), securitySetupCompletedAt: new Date(), ...(displayName === undefined ? {} : { displayName }) } });
+  await prisma.user.update({ where: { id: user.id }, data: { pinHash: await bcrypt.hash('2468', 12), biometricEnrolledAt: new Date(), securitySetupCompletedAt: new Date(), ...(phone.startsWith('09') ? { country: 'IR' } : {}), ...(displayName === undefined ? {} : { displayName }) } });
   const login = await request(app).post('/v1/auth/login').send({ phone, pin: '2468' });
   expect(login.status).toBe(200);
   return login.body.tokens.accessToken as string;
@@ -152,6 +152,7 @@ beforeEach(async () => {
     { key: 'WITHDRAWAL_MIN_FEE_USDT', value: '0.20' },
     { key: 'MIN_WITHDRAWAL_USDT', value: '1' },
     { key: 'AUTO_APPROVAL_LIMIT_USDT', value: '1000' },
+    { key: 'REQUIRE_IDENTITY_FOR_WITHDRAWAL', value: 'false' },
   ] });
 });
 afterAll(async () => {
@@ -185,6 +186,7 @@ describe('member API', () => {
         securitySetupCompletedAt: new Date(),
       },
     });
+    await prisma.user.update({ where: { id: user.id }, data: { country: 'IR' } });
     const device = await prisma.memberDevice.create({ data: { userId: user.id, label: 'test', refreshTokenHash: 'identity-no-phone-token', expiresAt: new Date(Date.now() + 60_000) } });
     const accessToken = createMemberJwt(user.id, device.id, config.memberJwtSecret, 900);
     const result = await request(app).post('/v1/me/identity').set('Authorization', `Bearer ${accessToken}`).send({ nationalCode });
@@ -286,6 +288,7 @@ describe('member API', () => {
       },
     });
     await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000008', barcodeId: 'identity-invalid-phone' });
+    await prisma.user.update({ where: { phoneNumber: '+1555000008' }, data: { country: 'IR' } });
     const invalidToken = await memberToken(app, '+1555000008');
     const invalid = await request(app).post('/v1/me/identity').set('Authorization', `Bearer ${invalidToken}`).send({ nationalCode });
     expect(invalid.status).toBe(400);
@@ -319,6 +322,74 @@ describe('member API', () => {
     const result = await request(app).post('/v1/me/identity').set('Authorization', `Bearer ${accessToken}`).send({ nationalCode });
     expect(result.body.status).toBe('VERIFIED');
     expect(await prisma.identityCheck.count({ where: { userId: user.id, status: 'INCONCLUSIVE' } })).toBe(1);
+  });
+
+  it('updates and normalizes the account country, but locks it after verification', async () => {
+    const { app } = appFixture();
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000020', barcodeId: 'country-update' });
+    const accessToken = await memberToken(app, '+1555000020');
+    const updated = await request(app).put('/v1/me/country').set('Authorization', `Bearer ${accessToken}`).send({ country: ' no ' });
+    expect(updated.status).toBe(200);
+    expect(updated.body.member?.country ?? updated.body.country).toBe('NO');
+    const user = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000020' } });
+    expect(user.country).toBe('NO');
+    await prisma.user.update({ where: { id: user.id }, data: { identityVerificationStatus: 'VERIFIED' } });
+    const locked = await request(app).put('/v1/me/country').set('Authorization', `Bearer ${accessToken}`).send({ country: 'SE' });
+    expect(locked.status).toBe(409);
+    expect(locked.body).toEqual({ error: 'country cannot be changed after identity verification' });
+  });
+
+  it('rejects unknown account countries', async () => {
+    const { app } = appFixture();
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000021', barcodeId: 'country-invalid' });
+    const accessToken = await memberToken(app, '+1555000021');
+    const result = await request(app).put('/v1/me/country').set('Authorization', `Bearer ${accessToken}`).send({ country: 'ZZ' });
+    expect(result.status).toBe(400);
+  });
+
+  it('does not call Shahkar for a country whose active path is not Shahkar', async () => {
+    let calls = 0;
+    const { app } = appFixture(undefined, undefined, identityConfig, true, {
+      checkShahkarMatch: async () => {
+        calls += 1;
+        return { status: 'MATCH', providerCode: 0 };
+      },
+    });
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000022', barcodeId: 'identity-non-shahkar' });
+    const accessToken = await memberToken(app, '+1555000022');
+    expect((await request(app).put('/v1/me/country').set('Authorization', `Bearer ${accessToken}`).send({ country: 'NO' })).status).toBe(200);
+    const result = await request(app).post('/v1/me/identity').set('Authorization', `Bearer ${accessToken}`).send({ nationalCode });
+    expect(result.status).toBe(409);
+    expect(result.body).toEqual({ error: 'shahkar is not the active identity path for this account' });
+    expect(calls).toBe(0);
+  });
+
+  it('requires an account country before attempting identity verification', async () => {
+    let calls = 0;
+    const { app } = appFixture(undefined, undefined, identityConfig, true, {
+      checkShahkarMatch: async () => {
+        calls += 1;
+        return { status: 'MATCH', providerCode: 0 };
+      },
+    });
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000023', barcodeId: 'identity-no-country' });
+    const accessToken = await memberToken(app, '+1555000023');
+    const result = await request(app).post('/v1/me/identity').set('Authorization', `Bearer ${accessToken}`).send({ nationalCode });
+    expect(result.status).toBe(400);
+    expect(result.body).toEqual({ error: 'account country is required' });
+    expect(calls).toBe(0);
+  });
+
+  it('reports the derived identity path and withdrawal requirement setting', async () => {
+    const { app } = appFixture(undefined, undefined, identityConfig);
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '09000000024', barcodeId: 'identity-info' });
+    const accessToken = await memberToken(app, '09000000024');
+    const manual = await request(app).get('/v1/me/identity').set('Authorization', `Bearer ${accessToken}`);
+    expect(manual.status).toBe(200);
+    expect(manual.body).toMatchObject({ country: 'IR', mode: 'AUTOMATED', provider: 'SHAHKAR', requiredForWithdrawal: false });
+    await prisma.systemSetting.update({ where: { key: 'REQUIRE_IDENTITY_FOR_WITHDRAWAL' }, data: { value: 'true' } });
+    const enabled = await request(app).get('/v1/me/identity').set('Authorization', `Bearer ${accessToken}`);
+    expect(enabled.body.requiredForWithdrawal).toBe(true);
   });
 
   it('creates and reuses Google identities and requires first-time PIN setup', async () => {

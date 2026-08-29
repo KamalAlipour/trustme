@@ -71,6 +71,7 @@ const settingSchema = z.object({
   minimumFeeMicroUsdt: nonNegativeIntegerString.refine((value) => BigInt(value) <= 100_000_000n, 'minimum fee must be at most 100 USDT'),
   minimumWithdrawalMicroUsdt: nonNegativeIntegerString,
   autoApprovalLimitMicroUsdt: nonNegativeIntegerString,
+  requireIdentityForWithdrawal: z.boolean(),
 }).strict();
 const patchSettingsSchema = settingSchema.partial().strict();
 const statusSchema = z.nativeEnum(WithdrawalStatus).optional();
@@ -91,7 +92,7 @@ function jsonValue(value: unknown): string {
 
 function serializeWithdrawal(withdrawal: {
   id: string;
-  user: { barcodeId: string; identityVerificationStatus: string };
+  user: { barcodeId: string; country: string | null; identityVerificationStatus: string };
   couponsGross: bigint;
   feeMicroUsdt: bigint;
   netMicroUsdt: bigint;
@@ -106,6 +107,7 @@ function serializeWithdrawal(withdrawal: {
     id: withdrawal.id,
     barcodeId: withdrawal.user.barcodeId,
     identityVerificationStatus: withdrawal.user.identityVerificationStatus,
+    country: withdrawal.user.country,
     couponsGross: withdrawal.couponsGross.toString(),
     grossUsdt: decimalFromMicroUsdt(withdrawal.grossMicroUsdt),
     feeUsdt: decimalFromMicroUsdt(withdrawal.feeMicroUsdt),
@@ -144,13 +146,14 @@ function nextCursor(createdAt: Date, id: string): string {
 }
 
 async function readAdminSettings(prisma: PrismaClient) {
-  const rows = await prisma.systemSetting.findMany({ where: { key: { in: ['WITHDRAWAL_BASE_FEE_BPS', 'WITHDRAWAL_MIN_FEE_USDT', 'MIN_WITHDRAWAL_USDT', 'AUTO_APPROVAL_LIMIT_USDT'] } } });
+  const rows = await prisma.systemSetting.findMany({ where: { key: { in: ['WITHDRAWAL_BASE_FEE_BPS', 'WITHDRAWAL_MIN_FEE_USDT', 'MIN_WITHDRAWAL_USDT', 'AUTO_APPROVAL_LIMIT_USDT', 'REQUIRE_IDENTITY_FOR_WITHDRAWAL'] } } });
   const values = new Map(rows.map((row) => [row.key, row.value]));
   return {
     withdrawalBaseFeeBps: values.get('WITHDRAWAL_BASE_FEE_BPS') ?? '0',
     minimumFeeMicroUsdt: microUsdtFromDecimal(values.get('WITHDRAWAL_MIN_FEE_USDT') ?? '0').toString(),
     minimumWithdrawalMicroUsdt: microUsdtFromDecimal(values.get('MIN_WITHDRAWAL_USDT') ?? '0').toString(),
     autoApprovalLimitMicroUsdt: microUsdtFromDecimal(values.get('AUTO_APPROVAL_LIMIT_USDT') ?? '0').toString(),
+    requireIdentityForWithdrawal: (values.get('REQUIRE_IDENTITY_FOR_WITHDRAWAL') ?? 'true') === 'true',
   };
 }
 
@@ -269,6 +272,7 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
           minimumFeeMicroUsdt: 'WITHDRAWAL_MIN_FEE_USDT',
           minimumWithdrawalMicroUsdt: 'MIN_WITHDRAWAL_USDT',
           autoApprovalLimitMicroUsdt: 'AUTO_APPROVAL_LIMIT_USDT',
+          requireIdentityForWithdrawal: 'REQUIRE_IDENTITY_FOR_WITHDRAWAL',
         };
         const before = await tx.systemSetting.findMany({ where: { key: { in: keys.map((key) => keyMap[key]!) } } });
         const oldValues = Object.fromEntries(before.map((row) => [row.key, row.value]));
@@ -276,7 +280,7 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
           const value = body[field as keyof typeof body];
           if (value === undefined) continue;
           const key = keyMap[field]!;
-          const storedValue = field === 'withdrawalBaseFeeBps' ? value : decimalFromMicroUsdt(BigInt(value));
+          const storedValue = field === 'withdrawalBaseFeeBps' || field === 'requireIdentityForWithdrawal' ? String(value) : decimalFromMicroUsdt(BigInt(value));
           await tx.systemSetting.upsert({ where: { key }, update: { value: storedValue }, create: { key, value: storedValue } });
         }
         const after = await tx.systemSetting.findMany({ where: { key: { in: keys.map((key) => keyMap[key]!) } } });
@@ -312,7 +316,7 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
       }
       const rows = await prisma.withdrawal.findMany({
         where,
-        include: { user: { select: { barcodeId: true, identityVerificationStatus: true } } },
+        include: { user: { select: { barcodeId: true, country: true, identityVerificationStatus: true } } },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: limit + 1,
       });

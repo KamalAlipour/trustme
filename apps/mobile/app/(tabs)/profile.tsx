@@ -1,20 +1,22 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Pressable, Text, TextInput, View } from 'react-native';
+import { FlatList, Modal, Pressable, Text, TextInput, View } from 'react-native';
 import { router } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 import { request, ApiError, LockedError } from '../../src/api/client';
 import type { WithdrawalQuote } from '../../src/api/types';
 import { useSession } from '../../src/auth/session';
-import { useAvailability, useBalance, useInvalidateMoney, useMember } from '../../src/hooks';
+import { useAvailability, useBalance, useIdentity, useInvalidateMoney, useMember } from '../../src/hooks';
 import { Page, LoadingScreen } from '../../src/components/Screen';
 import { formatCoupons, formatDate, formatMicroUsdt } from '../../src/lib/format';
 import { useTranslation } from '../../src/i18n';
 import { styles } from '../../src/styles';
+import { ISO_ALPHA2_COUNTRIES } from '../../../../packages/core/src/countries.js';
 
 export default function Profile() {
   const { t, language, setLanguage } = useTranslation();
   const { signOut, getStepUpPin, refreshSetup, setup, biometric } = useSession();
   const member = useMember();
+  const identity = useIdentity();
   const balance = useBalance();
   const availability = useAvailability();
   const invalidate = useInvalidateMoney();
@@ -27,6 +29,10 @@ export default function Profile() {
   const [currentPin, setCurrentPin] = useState('');
   const [newPin, setNewPin] = useState('');
   const [nationalCode, setNationalCode] = useState('');
+  const [country, setCountry] = useState('');
+  const [countryLoading, setCountryLoading] = useState(false);
+  const [countryPickerOpen, setCountryPickerOpen] = useState(false);
+  const [countrySearch, setCountrySearch] = useState('');
   const [identityLoading, setIdentityLoading] = useState(false);
   const [eligibleAt, setEligibleAt] = useState<string | null>(null);
   const [withdrawalQuote, setWithdrawalQuote] = useState<WithdrawalQuote | null>(null);
@@ -135,9 +141,30 @@ export default function Profile() {
       setIdentityLoading(false);
     }
   };
+  const saveCountry = async () => {
+    setError(''); setNotice(''); setCountryLoading(true);
+    try {
+      await request('/v1/me/country', { method: 'PUT', body: { country } });
+      setNotice(t.identityCountrySaved);
+      await invalidate();
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : t.unknownError);
+    } finally {
+      setCountryLoading(false);
+    }
+  };
   const current = member.data;
+  const selectedCountry = country || current?.country || '';
+  const filteredCountries = ISO_ALPHA2_COUNTRIES.filter(({ code, name }) => {
+    const query = countrySearch.trim().toLowerCase();
+    return query.length === 0 || code.toLowerCase().includes(query) || name.toLowerCase().includes(query);
+  });
   const identityStatus = current?.identityVerification.status ?? 'UNVERIFIED';
-  const identityCopy = identityStatus === 'VERIFIED'
+  const identityCopy = current?.country === null || current?.country === undefined
+    ? t.countryRequired
+    : identity.data?.mode === 'MANUAL'
+      ? `${t.manualIdentity}${identity.data.plannedProviderLabel ? ` ${t.plannedIdentity(identity.data.plannedProviderLabel)}` : ''}`
+      : identityStatus === 'VERIFIED'
     ? `${t.identityVerified}${current?.identityVerification.verifiedAt ? ` ${t.identityVerifiedAt(formatDate(current.identityVerification.verifiedAt, language))}` : ''}`
     : identityStatus === 'MISMATCH' ? t.identityMismatch : identityStatus === 'INCONCLUSIVE' ? t.identityInconclusive : t.identityUnverified;
   return (
@@ -149,6 +176,25 @@ export default function Profile() {
           <Pressable onPress={() => void setLanguage('en')} style={language === 'en' ? styles.languageActive : styles.languageButton}><Text style={styles.secondaryButtonText}>{t.english}</Text></Pressable>
           <Pressable onPress={() => void setLanguage('fa')} style={language === 'fa' ? styles.languageActive : styles.languageButton}><Text style={styles.secondaryButtonText}>{t.persian}</Text></Pressable>
         </View>
+      </View>
+      <View style={styles.card}>
+        <Text style={styles.heading}>{t.country}</Text>
+        <Pressable disabled={identityStatus === 'VERIFIED'} onPress={() => setCountryPickerOpen(true)} style={styles.input}><Text style={selectedCountry ? styles.text : styles.muted}>{selectedCountry || t.selectCountry}</Text></Pressable>
+        {selectedCountry && selectedCountry !== current?.country ? <Pressable disabled={countryLoading} onPress={() => void saveCountry()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.saveCountry}</Text></Pressable> : null}
+        {identityStatus === 'VERIFIED' ? <Text style={styles.muted}>{t.countryLocked}</Text> : null}
+        <Modal visible={countryPickerOpen} animationType="slide" onRequestClose={() => setCountryPickerOpen(false)}>
+          <View style={styles.card}>
+            <Text style={styles.heading}>{t.selectCountry}</Text>
+            <TextInput value={countrySearch} onChangeText={setCountrySearch} placeholder={t.searchCountries} style={styles.input} autoFocus />
+            <FlatList
+              data={filteredCountries}
+              keyExtractor={({ code }) => code}
+              ListEmptyComponent={<Text style={styles.muted}>{t.noCountriesFound}</Text>}
+              renderItem={({ item }) => <Pressable onPress={() => { setCountry(item.code); setCountryPickerOpen(false); }} style={styles.row}><Text style={styles.text}>{item.name} ({item.code})</Text></Pressable>}
+            />
+            <Pressable onPress={() => setCountryPickerOpen(false)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.cancel}</Text></Pressable>
+          </View>
+        </Modal>
       </View>
       <View style={styles.card}>
         <Pressable onPress={() => router.push('/about')} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.about}</Text></Pressable>
@@ -199,7 +245,7 @@ export default function Profile() {
           <Text style={styles.text}>{t.lockedGuarantee}: {formatCoupons(availability.data.lockedGuaranteeCoupons, language)}</Text>
           <Text style={styles.text}>{t.debt}: {formatCoupons(availability.data.outstandingDebtCoupons, language)}</Text>
           <Text style={styles.heading}>{t.availableToWithdraw}: {formatCoupons(availability.data.availableToWithdrawCoupons, language)}</Text>
-          {availability.data.blockers.map((blocker) => <Text key={blocker} style={styles.danger}>{blocker}</Text>)}
+          {availability.data.blockers.map((blocker) => <Text key={blocker} style={styles.danger}>{blocker === 'identity_unverified' ? t.identityWithdrawalRequired : blocker}</Text>)}
         </> : null}
         <TextInput value={withdrawAmount} onChangeText={updateWithdrawAmount} placeholder={t.amount} style={styles.input} keyboardType="number-pad" />
         {withdrawalQuoteLoading ? <Text style={styles.muted}>{t.quoteLoading}</Text> : null}
@@ -216,7 +262,7 @@ export default function Profile() {
       <View style={styles.card}>
         <Text style={styles.heading}>{t.identityVerification}</Text>
         <Text style={styles.text}>{identityCopy}</Text>
-        {identityStatus !== 'VERIFIED' ? <>
+        {current?.country && identity.data?.mode === 'AUTOMATED' && identityStatus !== 'VERIFIED' ? <>
           <TextInput
             value={nationalCode}
             onChangeText={(value) => setNationalCode(value.replace(/\D/g, '').slice(0, 10))}

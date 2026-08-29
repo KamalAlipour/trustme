@@ -36,7 +36,7 @@ async function account(type: AccountType, asset: Asset, userId?: string) {
 }
 
 async function fixture() {
-  const user = await prisma.user.create({ data: { phoneNumber: '+1555000999', barcodeId: 'worker-user' } });
+  const user = await prisma.user.create({ data: { phoneNumber: '+1555000999', barcodeId: 'worker-user', identityVerificationStatus: 'VERIFIED', identityVerifiedAt: new Date() } });
   const userAccount = await account(AccountType.USER_COUPON, Asset.COUPON, user.id);
   const depositAddress = await prisma.depositAddress.create({
     data: { userId: user.id, address: getAddress(`0x${'bb'.repeat(20)}`) },

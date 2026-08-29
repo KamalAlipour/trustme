@@ -16,6 +16,7 @@ const settings = [
   ['MIN_WITHDRAWAL_USDT', '1'],
   ['AUTO_APPROVAL_LIMIT_USDT', '1000'],
   ['WITHDRAWAL_COOLDOWN_HOURS', '168'],
+  ['REQUIRE_IDENTITY_FOR_WITHDRAWAL', 'true'],
 ] as const;
 
 for (const account of accounts) {

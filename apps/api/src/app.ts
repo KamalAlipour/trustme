@@ -325,7 +325,7 @@ export function createApp(dependencies: ApiDependencies): express.Express {
     try {
       const body = withdrawalBodySchema.parse(request.body);
       const member = await userWithAccounts(prisma, body.barcodeId);
-      const values = await prisma.systemSetting.findMany({ where: { key: { in: ['WITHDRAWAL_BASE_FEE_BPS', 'WITHDRAWAL_MIN_FEE_USDT', 'MIN_WITHDRAWAL_USDT', 'AUTO_APPROVAL_LIMIT_USDT', 'WITHDRAWAL_COOLDOWN_HOURS'] } } });
+      const values = await prisma.systemSetting.findMany({ where: { key: { in: ['WITHDRAWAL_BASE_FEE_BPS', 'WITHDRAWAL_MIN_FEE_USDT', 'MIN_WITHDRAWAL_USDT', 'AUTO_APPROVAL_LIMIT_USDT', 'WITHDRAWAL_COOLDOWN_HOURS', 'REQUIRE_IDENTITY_FOR_WITHDRAWAL'] } } });
       const settings = new Map(values.map((setting) => [setting.key, setting.value]));
       const baseFeeBps = BigInt(settings.get('WITHDRAWAL_BASE_FEE_BPS') ?? (() => { throw new Error('missing fee setting'); })());
       const minimumFee = microUsdtFromDecimal(settings.get('WITHDRAWAL_MIN_FEE_USDT') ?? (() => { throw new Error('missing minimum fee setting'); })());
@@ -336,7 +336,8 @@ export function createApp(dependencies: ApiDependencies): express.Express {
       const pending = await systemAccount(prisma, AccountType.SYSTEM_WITHDRAWAL_PENDING, Asset.USDT);
       const issuance = await systemAccount(prisma, AccountType.SYSTEM_COUPON_ISSUANCE, Asset.COUPON);
       const cooldownHours = Number(settings.get('WITHDRAWAL_COOLDOWN_HOURS') ?? '168');
-      const withdrawal = await requestWithdrawal(prisma, { userId: member.user.id, userAccountId: member.account.id, destinationAddress: evmAddressSchema.parse(body.destinationAddress), couponsGross: parseCoupons(body.couponsGross), baseFeeBps, minimumFeeMicroUsdt: minimumFee, minimumWithdrawalMicroUsdt: minimum, autoApprovalLimitMicroUsdt: autoApproval, cooldownHours, vaultAccountId: vault.id, feeAccountId: fees.id, pendingAccountId: pending.id, issuanceAccountId: issuance.id });
+      const requireIdentityVerification = (settings.get('REQUIRE_IDENTITY_FOR_WITHDRAWAL') ?? 'true') === 'true';
+      const withdrawal = await requestWithdrawal(prisma, { userId: member.user.id, userAccountId: member.account.id, destinationAddress: evmAddressSchema.parse(body.destinationAddress), couponsGross: parseCoupons(body.couponsGross), baseFeeBps, minimumFeeMicroUsdt: minimumFee, minimumWithdrawalMicroUsdt: minimum, autoApprovalLimitMicroUsdt: autoApproval, cooldownHours, requireIdentityVerification, vaultAccountId: vault.id, feeAccountId: fees.id, pendingAccountId: pending.id, issuanceAccountId: issuance.id });
       if (withdrawal.status === WithdrawalStatus.APPROVED) await queue.add('dispatch', { withdrawalId: withdrawal.id }, { jobId: withdrawal.id });
       response.status(201).json(serializeWithdrawal(withdrawal));
     } catch (error) {
@@ -348,7 +349,8 @@ export function createApp(dependencies: ApiDependencies): express.Express {
     try {
       const { barcodeId } = availabilityQuerySchema.parse(request.query);
       const member = await userWithAccounts(prisma, barcodeId);
-      const availability = await readWithdrawalAvailability(prisma, member.user.id);
+      const requireIdentityVerification = (await prisma.systemSetting.findUnique({ where: { key: 'REQUIRE_IDENTITY_FOR_WITHDRAWAL' } }))?.value !== 'false';
+      const availability = await readWithdrawalAvailability(prisma, member.user.id, { requireIdentityVerification });
       response.json({
         balanceCoupons: availability.balanceCoupons.toString(),
         lockedGuaranteeCoupons: availability.lockedGuaranteeCoupons.toString(),

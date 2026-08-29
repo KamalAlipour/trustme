@@ -12,6 +12,18 @@ deliberately independent of the method that produced it, so the withdrawal
 rule can be written once while each country supplies its own verification
 method.
 
+The account stores its selected ISO 3166-1 alpha-2 country. The active path is
+derived from that country and current provider access: implemented automated
+providers are used when reachable, while planned or unavailable providers fall
+back to manual review. Withdrawal identity enforcement is controlled by the
+`REQUIRE_IDENTITY_FOR_WITHDRAWAL` admin setting, which defaults to enabled.
+The country selector, active-path derivation, and withdrawal gate are additive
+extensions to the original Shahkar release.
+
+The member-facing country and identity state does not expose national ID
+material. Identity checks retain HMAC hashes only, and the audit provider
+remains a string so future methods can be recorded without a schema change.
+
 ## Method per country
 
 In Iran, the current method is Shahkar: the account holder's mobile number is
@@ -86,13 +98,14 @@ an identity registry.
 
 ## Required follow-ups
 
-The following are explicitly not implemented in this PR:
+The following remain explicitly out of scope for this PR:
 
-- a per-account country field;
-- country-scoped policy and method selection;
 - the manual-review path, including document/selfie upload and an admin
   decision;
-- wiring the account trust state into the bank/fiat withdrawal path.
+- future BankID and other country integrations;
+- per-country operational enable/disable controls beyond the derived current
+  Shahkar access check.
 
-Until those follow-ups exist, the Shahkar check remains optional and is not
-wired into any withdrawal blocker.
+The country field, country-scoped policy selection, and identity requirement
+setting are implemented here; the general trust state is now wired into the
+withdrawal blocker.

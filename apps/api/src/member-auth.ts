@@ -182,6 +182,7 @@ export function serializeMember(user: {
   displayName: string | null;
   barcodeId: string;
   phoneNumber: string | null;
+  country: string | null;
   email: string | null;
   emailVerifiedAt: Date | null;
   kycStatus: string;
@@ -196,12 +197,15 @@ export function serializeMember(user: {
     phone: maskPhone(user.phoneNumber),
     email: maskEmail(user.email),
     emailVerified: user.emailVerifiedAt !== null,
+    country: user.country,
     kycStatus: user.kycStatus,
     activeGuaranteeCount: user.activeGuaranteeCount,
     isRestricted: user.activeGuaranteeCount > 0,
     identityVerification: {
       status: user.identityVerificationStatus,
       verifiedAt: user.identityVerifiedAt,
+      mode: null,
+      provider: null,
     },
   };
 }
