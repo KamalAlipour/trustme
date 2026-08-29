@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Link, router } from 'expo-router';
+import { Link, router, useLocalSearchParams } from 'expo-router';
 import { Pressable, Text, TextInput, View } from 'react-native';
 import { ApiError, LockedError } from '../../src/api/client';
 import { useSession } from '../../src/auth/session';
@@ -13,6 +13,7 @@ import { SocialAuthButtons } from '../../src/components/SocialAuthButtons';
 export default function Login() {
   const { t, language, setLanguage } = useTranslation();
   const { signIn, signInWithSocial, biometric, ready, member } = useSession();
+  const { error: routeError } = useLocalSearchParams<{ error?: string }>();
   const [phone, setPhone] = useState('');
   const [pin, setPin] = useState('');
   const [error, setError] = useState('');
@@ -29,6 +30,9 @@ export default function Login() {
   useEffect(() => {
     if (ready && member !== null) router.replace('/');
   }, [member, ready]);
+  useEffect(() => {
+    if (routeError === 'social') setError(t.socialSignInUnavailable);
+  }, [routeError, t.socialSignInUnavailable]);
   useEffect(() => {
     if (previousLanguage.current !== language) {
       setLanguageNotice(t.languageRestartNotice(language));
@@ -64,7 +68,7 @@ export default function Login() {
       {biometric ? <Text style={styles.muted}>{t.biometricSessionNotice}</Text> : null}
       {error ? <Text style={styles.danger}>{error}</Text> : null}
       {remaining > 0 ? <Text style={styles.muted}>{t.unlockIn(Math.ceil(remaining / 1000))}</Text> : null}
-      <Link href="/(auth)/register" style={styles.secondaryButtonText}>{t.accountExists}</Link>
+      <Link href="/(auth)/register" style={styles.secondaryButtonText}>{t.noAccountRegister}</Link>
       <View style={styles.languageRow}>
         <Pressable onPress={() => void setLanguage('en')} style={language === 'en' ? styles.languageActive : styles.languageButton}><Text style={styles.secondaryButtonText}>{t.english}</Text></Pressable>
         <Pressable onPress={() => void setLanguage('fa')} style={language === 'fa' ? styles.languageActive : styles.languageButton}><Text style={styles.secondaryButtonText}>{t.persian}</Text></Pressable>

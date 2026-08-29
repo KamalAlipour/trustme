@@ -110,6 +110,7 @@ export const en = {
   cameraPermission: 'Camera access is required.',
   allow: 'Allow',
   accountExists: 'Already have an account? Log in',
+  noAccountRegister: 'New here? Create an account',
   pinMismatch: 'The PINs do not match.',
   weakPin: 'Repeated or sequential PINs cannot be used.',
   sixDigitCode: 'Six-digit code',
