@@ -1,11 +1,42 @@
-export function readIdTokenFromUrl(url: string): string | null {
+type SocialCallback = {
+  provider: 'google' | 'apple';
+  idToken: string;
+};
+
+type SocialCallbackDetails = SocialCallback & {
+  state: string | null;
+};
+
+function readSocialCallbackDetailsFromUrl(url: string): SocialCallbackDetails | null {
   try {
     const parsed = new URL(url);
-    const fragmentToken = new URLSearchParams(parsed.hash.replace(/^#/, '')).get('id_token');
-    if (fragmentToken) return fragmentToken;
-    const queryToken = parsed.searchParams.get('id_token');
-    return queryToken || null;
+    const sources = [
+      new URLSearchParams(parsed.hash.replace(/^#/, '')),
+      parsed.searchParams,
+    ];
+    for (const params of sources) {
+      const idToken = params.get('id_token');
+      if (idToken) {
+        const state = params.get('state');
+        return { provider: state?.startsWith('apple:') === true ? 'apple' : 'google', idToken, state };
+      }
+    }
+    return null;
   } catch {
     return null;
   }
+}
+
+export function readSocialCallbackFromUrl(url: string): SocialCallback | null {
+  const callback = readSocialCallbackDetailsFromUrl(url);
+  if (callback === null) return null;
+  return { provider: callback.provider, idToken: callback.idToken };
+}
+
+export function readSocialCallbackStateFromUrl(url: string): string | null {
+  return readSocialCallbackDetailsFromUrl(url)?.state ?? null;
+}
+
+export function readIdTokenFromUrl(url: string): string | null {
+  return readSocialCallbackFromUrl(url)?.idToken ?? null;
 }

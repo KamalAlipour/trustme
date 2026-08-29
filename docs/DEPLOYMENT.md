@@ -240,6 +240,13 @@ being managed separately, operators re-arm it by setting its pending marker;
 the security quarantine itself expires automatically according to the configured
 duration.
 
+## Web Apple sign-in
+
+Web Apple sign-in requires the Apple Services ID in
+`EXPO_PUBLIC_APPLE_WEB_CLIENT_ID` at web build time and appended to the API's
+`APPLE_OAUTH_AUDIENCES`. Apple also requires the domain-association file at
+`/.well-known/` for the configured web domain.
+
 The user must still provide and authorize:
 
 ## Demo barcode data

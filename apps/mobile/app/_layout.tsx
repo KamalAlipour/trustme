@@ -4,7 +4,8 @@ import { I18nManager, Platform } from 'react-native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { SessionProvider, useSession } from '../src/auth/session';
 import { LanguageProvider } from '../src/i18n';
-import { readIdTokenFromUrl } from '../src/auth/web-redirect';
+import { readSocialCallbackFromUrl, readSocialCallbackStateFromUrl } from '../src/auth/web-redirect';
+import { appleWebStateKey } from '../src/auth/apple-web';
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, retry: 1 } } });
 
@@ -15,8 +16,9 @@ function WebRedirectHandler() {
   const handledRedirect = useRef(false);
   useEffect(() => {
     if (Platform.OS !== 'web' || member !== null || handledRedirect.current || window.opener) return;
-    const idToken = readIdTokenFromUrl(window.location.href);
-    if (idToken === null) return;
+    const callback = readSocialCallbackFromUrl(window.location.href);
+    if (callback === null) return;
+    const callbackState = readSocialCallbackStateFromUrl(window.location.href);
     handledRedirect.current = true;
     const cleanUrl = new URL(window.location.href);
     cleanUrl.searchParams.delete('id_token');
@@ -26,7 +28,21 @@ function WebRedirectHandler() {
       cleanUrl.hash = hashParams.toString() === '' ? '' : `#${hashParams.toString()}`;
     }
     window.history.replaceState(null, document.title, `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
-    void signInWithSocial('google', idToken)
+    let stateValid = true;
+    if (callback.provider === 'apple') {
+      try {
+        const expectedState = window.sessionStorage.getItem(appleWebStateKey);
+        window.sessionStorage.removeItem(appleWebStateKey);
+        stateValid = expectedState !== null && callbackState === expectedState;
+      } catch {
+        stateValid = false;
+      }
+    }
+    if (!stateValid) {
+      router.replace({ pathname: '/(auth)/login', params: { error: 'social' } });
+      return;
+    }
+    void signInWithSocial(callback.provider, callback.idToken)
       .then(() => router.replace('/'))
       .catch(() => router.replace({ pathname: '/(auth)/login', params: { error: 'social' } }));
   }, [member, signInWithSocial]);
