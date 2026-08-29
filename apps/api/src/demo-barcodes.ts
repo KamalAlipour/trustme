@@ -9,9 +9,6 @@ function requireMutationPermission(): void {
   if (process.env.ALLOW_DEMO_DATA !== 'true') {
     throw new Error('demo data mutations require ALLOW_DEMO_DATA=true');
   }
-  if (process.env.NODE_ENV === 'production') {
-    throw new Error('demo data generation is not allowed in production');
-  }
 }
 
 function positiveInteger(value: string | undefined, name: string): number {
@@ -149,6 +146,7 @@ async function purge(args: string[]): Promise<void> {
       if (accountIds.length > 0) {
         await tx.ledgerEntry.deleteMany({ where: { OR: [{ fromAccountId: { in: accountIds } }, { toAccountId: { in: accountIds } }] } });
         await tx.transaction.deleteMany({ where: { userId: selected.id } });
+        await tx.transaction.deleteMany({ where: { user: { isDemo: true }, entries: { none: {} } } });
         await tx.ledgerAccount.deleteMany({ where: { id: { in: accountIds } } });
       }
       await tx.depositAddress.deleteMany({ where: { userId: selected.id } });

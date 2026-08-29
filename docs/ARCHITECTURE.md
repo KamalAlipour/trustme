@@ -98,7 +98,13 @@ fund, reserve, or collateral figures. Demo users have no PIN and cannot log in
 or withdraw. Transfers, escrows, loans, and guarantees require all
 participating users to be on the same demo/real side; mixed operations are
 rejected at the domain boundary. Demo data can therefore support search and
-demonstrations without becoming value in the real economy.
+demonstrations without becoming value in the real economy. When explicitly
+enabled with `ALLOW_DEMO_DATA=true`, the worker's bounded demo-churn job moves
+coupons only between demo user accounts and preserves total demo circulation.
+Its cadence and bounds are controlled by `DEMO_CHURN_INTERVAL_MS`,
+`DEMO_CHURN_TRANSFERS_PER_TICK`, and `DEMO_CHURN_MAX_COUPONS`. Demo activity is
+always labelled `Demo / Testdata` in public output and never affects real
+reserves or solvency.
 
 **Concurrency.** A posting runs inside a single `prisma.$transaction` at
 `Serializable`, and locks the touched accounts with `SELECT ... FOR UPDATE`

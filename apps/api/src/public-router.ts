@@ -129,7 +129,7 @@ export function createPublicRouter(prisma: PrismaClient): express.Router {
       cacheHeaders(response);
       const { limit } = ledgerQuerySchema.parse(request.query);
       const rows = await prisma.transaction.findMany({
-        where: { status: TransactionStatus.COMPLETED, type: { in: publicTypes } },
+        where: { status: TransactionStatus.CONFIRMED, type: { in: publicTypes } },
         include: { user: { select: { isDemo: true } } },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: limit,

@@ -1,15 +1,17 @@
-import { beforeAll, afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { beforeAll, afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HDNodeWallet, id, Transaction, zeroPadValue, getAddress } from 'ethers';
 import { AccountType, Asset, DepositSweepStatus, PrismaClient, WithdrawalStatus } from '@trustme/db';
-import { postDeposit, requestWithdrawal } from '@trustme/core';
+import { postDeposit, readDemoCirculation, requestWithdrawal } from '@trustme/core';
+import { churnDemoCoupons } from '../src/demo-churn.js';
 import { confirmWithdrawal, dispatchWithdrawal } from '../src/dispatch.js';
 import { ingestOnce } from '../src/ingest.js';
 import { loadDepositAccountNode } from '../src/index.js';
 import { FakeChainProvider, FakeTransactionSigner } from '../src/provider.js';
 import { fundSweepGas, sweepDepositAddress } from '../src/sweep.js';
+import { loadWorkerConfig } from '../src/config.js';
 import type { WorkerConfig } from '../src/config.js';
 
 const prisma = new PrismaClient();
@@ -742,5 +744,86 @@ describe('withdrawal dispatch and confirmation', () => {
     await expect(dispatchWithdrawal(prisma, new FakeChainProvider(), signer, dispatchConfig, withdrawal.id)).rejects.toThrow('cooldown has not elapsed');
     expect(signer.signCount).toBe(0);
     expect(await prisma.withdrawal.findUniqueOrThrow({ where: { id: withdrawal.id } })).toMatchObject({ status: WithdrawalStatus.APPROVED });
+  });
+});
+
+describe('demo churn', () => {
+  async function demoAccount(barcodeId: string, balance: bigint) {
+    const user = await prisma.user.create({ data: { phoneNumber: `+1555${barcodeId}`, barcodeId, isDemo: true } });
+    const userAccount = await account(AccountType.USER_COUPON, Asset.COUPON, user.id);
+    await prisma.ledgerAccount.update({ where: { id: userAccount.id }, data: { balance } });
+    return { user, account: userAccount };
+  }
+
+  it('does not access the database when disabled', async () => {
+    const queryRaw = vi.fn();
+    const config = loadWorkerConfig({
+      DATABASE_URL: 'postgresql://localhost/trustme',
+      REDIS_URL: 'redis://localhost:6379',
+      POLYGON_RPC_URL: 'https://polygon.example',
+      USDT_CONTRACT_ADDRESS: `0x${'aa'.repeat(20)}`,
+      HOT_WALLET_PRIVATE_KEY: 'test-key',
+    });
+    const result = await churnDemoCoupons({ $queryRaw: queryRaw } as unknown as PrismaClient, {
+      enabled: config.allowDemoData,
+      transfersPerTick: 3,
+      maxCouponsPerTransfer: config.demoChurnMaxCoupons,
+    }, { warn: vi.fn() });
+    expect(result).toEqual({ status: 'disabled' });
+    expect(queryRaw).not.toHaveBeenCalled();
+    expect(config.demoChurnIntervalMs).toBe(30_000);
+    expect(config.demoChurnTransfersPerTick).toBe(3);
+  });
+
+  it('only transfers between demo users and preserves demo circulation', async () => {
+    const issuance = await account(AccountType.SYSTEM_DEMO_ISSUANCE, Asset.COUPON);
+    await prisma.ledgerAccount.update({ where: { id: issuance.id }, data: { balance: -100n } });
+    const sender = await demoAccount('demo-churn-sender', 40n);
+    const recipient = await demoAccount('demo-churn-recipient', 60n);
+    const realUser = await prisma.user.create({ data: { phoneNumber: '+15550009998', barcodeId: 'demo-churn-real' } });
+    const realAccount = await account(AccountType.USER_COUPON, Asset.COUPON, realUser.id);
+    await prisma.ledgerAccount.update({ where: { id: realAccount.id }, data: { balance: 100n } });
+    const before = await readDemoCirculation(prisma);
+
+    const result = await churnDemoCoupons(prisma, {
+      enabled: true,
+      transfersPerTick: 5,
+      maxCouponsPerTransfer: 10,
+    }, { warn: vi.fn() });
+
+    expect(result.status).toBe('ok');
+    if (result.status === 'ok') expect(result.transfers).toBeGreaterThan(0);
+    expect(await readDemoCirculation(prisma)).toBe(before);
+    const transactions = await prisma.transaction.findMany({
+      where: { type: 'TRANSFER' },
+      include: { entries: true },
+    });
+    expect(transactions.length).toBeGreaterThan(0);
+    for (const transaction of transactions) {
+      expect([sender.user.id, recipient.user.id]).toContain(transaction.userId);
+      for (const entry of transaction.entries) {
+        expect([sender.account.id, recipient.account.id]).toContain(entry.fromAccountId);
+        expect([sender.account.id, recipient.account.id]).toContain(entry.toAccountId);
+        expect(entry.fromAccountId).not.toBe(realAccount.id);
+        expect(entry.toAccountId).not.toBe(realAccount.id);
+      }
+    }
+  });
+
+  it('is a no-op when there is no funded demo account', async () => {
+    const issuance = await account(AccountType.SYSTEM_DEMO_ISSUANCE, Asset.COUPON);
+    const demo = await demoAccount('demo-churn-empty', 0n);
+    const before = await readDemoCirculation(prisma);
+    const result = await churnDemoCoupons(prisma, {
+      enabled: true,
+      transfersPerTick: 3,
+      maxCouponsPerTransfer: 50,
+    }, { warn: vi.fn() });
+
+    expect(result).toEqual({ status: 'ok', transfers: 0, skipped: 3 });
+    expect(await readDemoCirculation(prisma)).toBe(before);
+    expect(await prisma.transaction.count()).toBe(0);
+    expect((await prisma.ledgerAccount.findUniqueOrThrow({ where: { id: demo.account.id } })).balance).toBe(0n);
+    expect((await prisma.ledgerAccount.findUniqueOrThrow({ where: { id: issuance.id } })).balance).toBe(0n);
   });
 });
