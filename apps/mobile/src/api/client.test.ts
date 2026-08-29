@@ -2,13 +2,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const storage = vi.hoisted(() => ({
   clearCredentials: vi.fn(async () => undefined),
-  readRefreshToken: vi.fn(async () => 'refresh-old'),
+  readRefreshToken: vi.fn(async (): Promise<string | null> => 'refresh-old'),
   saveRefreshToken: vi.fn(async () => undefined),
   saveCredentials: vi.fn(async () => undefined),
 }));
 vi.mock('../lib/storage', () => storage);
 
-import { LockedError, request, setAccessToken } from './client';
+import { ApiError, LockedError, request, setAccessToken } from './client';
 
 describe('mobile API client', () => {
   beforeEach(() => {
@@ -42,6 +42,26 @@ describe('mobile API client', () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401 }));
     await expect(request('/resource')).rejects.toMatchObject({ name: 'SessionExpiredError' });
     expect(storage.clearCredentials).toHaveBeenCalledOnce();
+  });
+
+  it('keeps secure-store values after local authentication fails before refresh', async () => {
+    setAccessToken(null);
+    storage.readRefreshToken.mockRejectedValueOnce(new Error('authentication cancelled'));
+    await expect(request('/resource')).rejects.toThrow('authentication cancelled');
+    expect(storage.clearCredentials).not.toHaveBeenCalled();
+  });
+
+  it('keeps secure-store values when the protected refresh token is unavailable locally', async () => {
+    setAccessToken(null);
+    storage.readRefreshToken.mockResolvedValueOnce(null);
+    await expect(request('/resource')).rejects.toThrow('secure session unavailable');
+    expect(storage.clearCredentials).not.toHaveBeenCalled();
+  });
+
+  it('keeps secure-store values when refresh fails for a non-authentication server error', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ error: 'temporarily unavailable' }), { status: 503 }));
+    await expect(request('/resource')).rejects.toBeInstanceOf(ApiError);
+    expect(storage.clearCredentials).not.toHaveBeenCalled();
   });
 
   it('parses 423 retryAfter into LockedError', async () => {

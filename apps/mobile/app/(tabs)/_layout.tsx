@@ -4,10 +4,11 @@ import { useSession } from '../../src/auth/session';
 import { useTranslation } from '../../src/i18n';
 import { hasSeenManifesto } from '../../src/lib/storage';
 import { shouldShowManifesto } from '../../src/lib/manifesto';
+import { UnlockScreen } from '../../src/auth/UnlockScreen';
 
 export default function TabsLayout() {
   const { t } = useTranslation();
-  const { ready, member } = useSession();
+  const { ready, member, unlockRequired } = useSession();
   const checkedManifesto = useRef(false);
   useEffect(() => {
     if (!ready || member === null || checkedManifesto.current) return;
@@ -17,6 +18,7 @@ export default function TabsLayout() {
     });
   }, [member, ready]);
   if (!ready) return null;
+  if (unlockRequired) return <UnlockScreen />;
   if (member === null) return <Redirect href="/(auth)/login" />;
   return (
     <Tabs screenOptions={{ headerShown: false }}>
