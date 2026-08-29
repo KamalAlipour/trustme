@@ -6,6 +6,8 @@ import {
   AccountType,
   AdminRole,
   Asset,
+  IdentityReviewStatus,
+  IdentityVerificationStatus,
   Prisma,
   PrismaClient,
   TransactionType,
@@ -24,12 +26,14 @@ import {
   updateCharity,
   addCharityAgent,
   revokeCharityAgent,
+  identityPolicyFor,
 } from '@trustme/core';
 import type { QueueLike } from './app.js';
 import { adminClaims, createAdminJwt, requireAdmin, requireRole, verifyAdminPassword } from './admin-auth.js';
 import type { ApiConfig } from './config.js';
 import { HttpError } from './http-error.js';
 import { requireIdentityForWithdrawal } from './withdrawal-settings.js';
+import { deleteMediaFile, mediaPath } from './media.js';
 
 export type AdminChainProvider = {
   getBlockNumber(): Promise<number>;
@@ -76,6 +80,7 @@ const settingSchema = z.object({
 }).strict();
 const patchSettingsSchema = settingSchema.partial().strict();
 const statusSchema = z.nativeEnum(WithdrawalStatus).optional();
+const identityReviewStatusSchema = z.nativeEnum(IdentityReviewStatus).optional();
 const limitSchema = z.coerce.number().int().min(1).max(100).default(50);
 const cursorSchema = z.string().min(1).optional();
 const dateSchema = z.string().datetime().optional();
@@ -118,6 +123,30 @@ function serializeWithdrawal(withdrawal: {
     chainTxHash: withdrawal.chainTxHash,
     createdAt: withdrawal.createdAt,
     broadcastedAt: withdrawal.broadcastedAt,
+  };
+}
+
+function serializeIdentityReview(review: {
+  id: string;
+  country: string;
+  status: IdentityReviewStatus;
+  createdAt: Date;
+  decidedAt: Date | null;
+  decisionNote: string | null;
+  user: { barcodeId: string };
+  documentAsset: { id: string } | null;
+  selfieAsset: { id: string } | null;
+}) {
+  return {
+    id: review.id,
+    barcodeId: review.user.barcodeId,
+    country: review.country,
+    status: review.status,
+    submittedAt: review.createdAt,
+    decidedAt: review.decidedAt,
+    decisionNote: review.decisionNote,
+    documentUrl: review.documentAsset === null ? null : `/admin/identity-reviews/${review.id}/media/${review.documentAsset.id}`,
+    selfieUrl: review.selfieAsset === null ? null : `/admin/identity-reviews/${review.id}/media/${review.selfieAsset.id}`,
   };
 }
 
@@ -324,6 +353,151 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
       const hasMore = rows.length > limit;
       const page = rows.slice(0, limit);
       response.json({ items: page.map(serializeWithdrawal), nextCursor: hasMore ? nextCursor(page[page.length - 1]!.createdAt, page[page.length - 1]!.id) : null });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/identity-reviews', requireRole(AdminRole.APPROVER, AdminRole.ADMIN), async (request, response, next) => {
+    try {
+      const status = identityReviewStatusSchema.parse(request.query.status);
+      const limit = limitSchema.parse(request.query.limit);
+      const cursor = cursorSchema.parse(request.query.cursor);
+      const where: Prisma.IdentityReviewWhereInput = { ...(status === undefined ? {} : { status }) };
+      if (cursor !== undefined) {
+        const parsed = cursorDate(cursor);
+        where.OR = [
+          { createdAt: { lt: parsed.createdAt } },
+          { createdAt: parsed.createdAt, id: { lt: parsed.id } },
+        ];
+      }
+      const rows = await prisma.identityReview.findMany({
+        where,
+        include: {
+          user: { select: { barcodeId: true } },
+          documentAsset: { select: { id: true } },
+          selfieAsset: { select: { id: true } },
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: limit + 1,
+      });
+      const hasMore = rows.length > limit;
+      const page = rows.slice(0, limit);
+      response.json({
+        items: page.map(serializeIdentityReview),
+        nextCursor: hasMore ? nextCursor(page[page.length - 1]!.createdAt, page[page.length - 1]!.id) : null,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/identity-reviews/:id/media/:assetId', requireRole(AdminRole.APPROVER, AdminRole.ADMIN), async (request, response, next) => {
+    try {
+      const reviewId = z.string().uuid().parse(request.params.id);
+      const assetId = z.string().uuid().parse(request.params.assetId);
+      const review = await prisma.identityReview.findUnique({
+        where: { id: reviewId },
+        select: { documentAssetId: true, selfieAssetId: true },
+      });
+      if (review === null || (review.documentAssetId !== assetId && review.selfieAssetId !== assetId)) {
+        throw new HttpError(404, 'resource not found');
+      }
+      const asset = await prisma.mediaAsset.findUnique({ where: { id: assetId }, select: { storageKey: true, mimeType: true } });
+      if (asset === null) throw new HttpError(404, 'resource not found');
+      const file = await mediaPath(config.mediaStorageDir, asset.storageKey);
+      response.setHeader('Content-Disposition', 'inline');
+      response.setHeader('X-Content-Type-Options', 'nosniff');
+      response.setHeader('Cache-Control', 'no-store');
+      response.type(asset.mimeType);
+      response.sendFile(file, (error) => {
+        if (error !== undefined && !response.headersSent) next(error);
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  const decideIdentityReview = async (
+    request: Request,
+    reviewId: string,
+    decision: 'APPROVED' | 'REJECTED',
+    note: string | null,
+  ) => {
+    const result = await withSerializableRetry(prisma, async (tx) => {
+      await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "IdentityReview" WHERE "id" = ${reviewId}::uuid FOR UPDATE`);
+      const current = await tx.identityReview.findUniqueOrThrow({
+        where: { id: reviewId },
+        include: {
+          user: true,
+          documentAsset: { select: { storageKey: true } },
+          selfieAsset: { select: { storageKey: true } },
+        },
+      });
+      if (current.status !== IdentityReviewStatus.PENDING) throw new HttpError(409, 'identity review is not pending');
+      if (decision === 'APPROVED') {
+        const policy = identityPolicyFor(current.country, {
+          shahkar: config.shahkarApiToken !== undefined && config.identityHashPepper !== undefined,
+        });
+        if (policy.mode !== 'MANUAL') throw new HttpError(409, 'manual identity review is not the active identity path for this account');
+      }
+      const now = new Date();
+      const updated = await tx.identityReview.update({
+        where: { id: current.id },
+        data: {
+          status: decision,
+          decisionNote: note,
+          decidedByAdminId: adminId(request),
+          decidedAt: now,
+          documentAssetId: null,
+          selfieAssetId: null,
+        },
+      });
+      if (decision === 'APPROVED') {
+        await tx.user.update({
+          where: { id: current.userId },
+          data: {
+            identityVerificationStatus: IdentityVerificationStatus.VERIFIED,
+            identityVerifiedAt: now,
+            ...(current.user.kycStatus === 'UNVERIFIED' ? { kycStatus: 'VERIFIED' } : {}),
+          },
+        });
+      }
+      const assetIds = [current.documentAssetId, current.selfieAssetId].filter((id): id is string => id !== null);
+      await tx.mediaAsset.deleteMany({ where: { id: { in: assetIds } } });
+      await tx.adminAuditLog.create({
+        data: {
+          adminUserId: adminId(request),
+          action: decision === 'APPROVED' ? 'identity_review.approve' : 'identity_review.reject',
+          entityType: 'IdentityReview',
+          entityId: current.id,
+          oldValue: jsonValue({ status: current.status }),
+          newValue: jsonValue({ status: updated.status, decisionNote: updated.decisionNote }),
+        },
+      });
+      return {
+        updated,
+        storageKeys: [current.documentAsset?.storageKey, current.selfieAsset?.storageKey].filter((key): key is string => key !== undefined),
+      };
+    });
+    await Promise.all(result.storageKeys.map((storageKey) => deleteMediaFile(config.mediaStorageDir, storageKey)));
+    return result.updated;
+  };
+
+  router.post('/identity-reviews/:id/approve', requireRole(AdminRole.APPROVER, AdminRole.ADMIN), async (request, response, next) => {
+    try {
+      const updated = await decideIdentityReview(request, z.string().uuid().parse(request.params.id), 'APPROVED', null);
+      response.json({ id: updated.id, status: updated.status, submittedAt: updated.createdAt, decidedAt: updated.decidedAt, decisionNote: updated.decisionNote });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/identity-reviews/:id/reject', requireRole(AdminRole.APPROVER, AdminRole.ADMIN), async (request, response, next) => {
+    try {
+      const body = z.object({ note: z.string().trim().min(1) }).strict().parse(request.body);
+      const updated = await decideIdentityReview(request, z.string().uuid().parse(request.params.id), 'REJECTED', body.note);
+      response.json({ id: updated.id, status: updated.status, submittedAt: updated.createdAt, decidedAt: updated.decidedAt, decisionNote: updated.decisionNote });
     } catch (error) {
       next(error);
     }

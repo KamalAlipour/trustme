@@ -120,6 +120,12 @@ enum IdentityVerificationStatus {
   INCONCLUSIVE
 }
 
+enum IdentityReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 enum EmailVerificationPurpose {
   VERIFY_EMAIL
   PIN_RESET
@@ -204,6 +210,7 @@ model User {
   sellerRefunds        RefundRequest[]     @relation("RefundSeller")
   identities           UserIdentity[]
   identityChecks       IdentityCheck[]
+  identityReviews      IdentityReview[]
 
   @@index([pinResetQuarantineUntil])
   @@index([isDemo])
@@ -223,6 +230,25 @@ model IdentityCheck {
   @@index([userId])
 }
 
+model IdentityReview {
+  id               String               @id @default(uuid()) @db.Uuid
+  userId           String               @db.Uuid
+  country          String
+  status           IdentityReviewStatus @default(PENDING)
+  documentAssetId  String?              @unique @db.Uuid
+  selfieAssetId    String?              @unique @db.Uuid
+  decisionNote     String?
+  decidedByAdminId String?              @db.Uuid
+  decidedAt        DateTime?
+  createdAt        DateTime              @default(now())
+  user             User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  documentAsset    MediaAsset?          @relation("IdentityReviewDocument", fields: [documentAssetId], references: [id], onDelete: SetNull)
+  selfieAsset      MediaAsset?          @relation("IdentityReviewSelfie", fields: [selfieAssetId], references: [id], onDelete: SetNull)
+  decidedByAdmin   AdminUser?           @relation("IdentityReviewDecider", fields: [decidedByAdminId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@index([userId])
+}
 model UserIdentity {
   id        String           @id @default(uuid()) @db.Uuid
   userId    String           @db.Uuid
@@ -489,6 +515,8 @@ model MediaAsset {
   owner           User           @relation(fields: [ownerId], references: [id])
   refundRequest   RefundRequest? @relation(fields: [refundRequestId], references: [id])
   aidRequest      AidRequest?    @relation(fields: [aidRequestId], references: [id])
+  identityReviewDocuments IdentityReview[] @relation("IdentityReviewDocument")
+  identityReviewSelfies   IdentityReview[] @relation("IdentityReviewSelfie")
 
   @@index([ownerId, createdAt])
   @@index([refundRequestId])
@@ -582,6 +610,7 @@ model AdminUser {
   role         AdminRole
   createdAt    DateTime        @default(now())
   auditLogs    AdminAuditLog[]
+  identityReviews IdentityReview[] @relation("IdentityReviewDecider")
 }
 
 model AdminAuditLog {

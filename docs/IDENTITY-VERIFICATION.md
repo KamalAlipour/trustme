@@ -24,6 +24,14 @@ The member-facing country and identity state does not expose national ID
 material. Identity checks retain HMAC hashes only, and the audit provider
 remains a string so future methods can be recorded without a schema change.
 
+The manual path is implemented for countries whose resolved active path is
+manual. A member submits a government ID photo and a selfie from the app, and
+an authorized administrator approves or rejects the review. Both media files
+are purged when a decision is recorded; the review decision, note, timestamps,
+and audit row remain. A rejection never downgrades an already verified
+account, and a manually verified account remains verified if the country later
+switches to an automated path.
+
 ## Method per country
 
 In Iran, the current method is Shahkar: the account holder's mobile number is
@@ -78,8 +86,8 @@ the audit row records which path produced each verification through its
 
 Iran today has Shahkar access provisioned, so Iran is automated and its manual
 path is closed. This per-country enable/disable mechanism is a required
-follow-up alongside the country field. This PR ships only the Shahkar path and
-the neutral account-level trust state.
+follow-up alongside the country field; the current implementation derives the
+active path from the available Shahkar access and the manual review path.
 
 ## Iran and Shahkar
 
@@ -98,13 +106,11 @@ an identity registry.
 
 ## Required follow-ups
 
-The following remain explicitly out of scope for this PR:
+The following remain explicitly out of scope:
 
-- the manual-review path, including document/selfie upload and an admin
-  decision;
-- future BankID and other country integrations;
-- per-country operational enable/disable controls beyond the derived current
-  Shahkar access check.
+- future BankID and other country integrations, which are planned but not
+  implemented;
+- a deliberate identity-revocation flow.
 
 The country field, country-scoped policy selection, and identity requirement
 setting are implemented here; the general trust state is now wired into the
