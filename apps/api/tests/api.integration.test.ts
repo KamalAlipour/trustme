@@ -11,6 +11,7 @@ import { provisionUser } from '../src/user-provisioning.js';
 import { createMemberJwt } from '../src/member-auth.js';
 import { createAdminJwt } from '../src/admin-auth.js';
 import type { AdminChainProvider } from '../src/admin.js';
+import { hashIdentityValue } from '../src/identity.js';
 
 const prisma = new PrismaClient();
 const token = 'test-service-token';
@@ -46,6 +47,9 @@ const config = {
   allowedOrigins: [],
   googleOAuthClientIds: ['google-client'],
   appleOAuthAudiences: ['as.komasi.trustcoupon'],
+  shahkarApiToken: undefined,
+  shahkarBaseUrl: 'https://provider.test',
+  identityHashPepper: undefined,
 };
 
 async function account(type: AccountType, asset: Asset, userId?: string) {
@@ -71,7 +75,7 @@ function appFixture(
   queueOverride?: ApiDependencies['queue'],
   configOverride: Partial<typeof config> = {},
   captureEmailCode = true,
-  socialOverrides: Pick<ApiDependencies, 'verifyGoogleIdToken' | 'verifyAppleIdToken'> = {},
+  socialOverrides: Pick<ApiDependencies, 'verifyGoogleIdToken' | 'verifyAppleIdToken' | 'checkShahkarMatch'> = {},
 ) {
   const calls: unknown[][] = [];
   const emailCodes = new Map<string, string>();
@@ -155,6 +159,135 @@ afterAll(async () => {
 });
 
 describe('member API', () => {
+  const nationalCode = '3141592659';
+  const identityConfig = { shahkarApiToken: 'test-shahkar-token', identityHashPepper: 'identity-test-pepper-that-is-at-least-32-characters' };
+
+  it('returns 503 when identity verification is not configured', async () => {
+    const { app } = appFixture();
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '09000000001', barcodeId: 'identity-unconfigured' });
+    const accessToken = await memberToken(app, '09000000001');
+    const result = await request(app).post('/v1/me/identity').set('Authorization', `Bearer ${accessToken}`).send({ nationalCode });
+    expect(result.status).toBe(503);
+    expect(result.body).toEqual({ error: 'identity verification is not configured' });
+  });
+
+  it('rejects identity checks for accounts without a phone number', async () => {
+    const { app } = appFixture(undefined, undefined, identityConfig, true, {
+      checkShahkarMatch: async () => ({ status: 'MATCH', providerCode: 0 }),
+    });
+    const user = await prisma.user.create({
+      data: {
+        phoneNumber: null,
+        barcodeId: 'identity-no-phone',
+        pinHash: await bcrypt.hash('2468', 12),
+        biometricEnrolledAt: new Date(),
+        securitySetupCompletedAt: new Date(),
+      },
+    });
+    const device = await prisma.memberDevice.create({ data: { userId: user.id, label: 'test', refreshTokenHash: 'identity-no-phone-token', expiresAt: new Date(Date.now() + 60_000) } });
+    const accessToken = createMemberJwt(user.id, device.id, config.memberJwtSecret, 900);
+    const result = await request(app).post('/v1/me/identity').set('Authorization', `Bearer ${accessToken}`).send({ nationalCode });
+    expect(result.status).toBe(400);
+    expect(result.body).toEqual({ error: 'identity verification requires a phone number' });
+  });
+
+  it('records a match, upgrades only unverified KYC, and stores hashes in the audit row', async () => {
+    const { app } = appFixture(undefined, undefined, identityConfig, true, {
+      checkShahkarMatch: async () => ({ status: 'MATCH', providerCode: 0 }),
+    });
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '09000000002', barcodeId: 'identity-match' });
+    const accessToken = await memberToken(app, '09000000002');
+    const result = await request(app).post('/v1/me/identity').set('Authorization', `Bearer ${accessToken}`).send({ nationalCode });
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ status: 'VERIFIED', verifiedAt: expect.any(String) });
+    const user = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '09000000002' } });
+    expect(user.kycStatus).toBe('VERIFIED');
+    expect(user.nationalIdHash).toBe(hashIdentityValue(nationalCode, identityConfig.identityHashPepper));
+    expect(user.identityCheckCount).toBe(1);
+    const audit = await prisma.identityCheck.findUniqueOrThrow({ where: { id: (await prisma.identityCheck.findFirstOrThrow()).id } });
+    expect(audit.status).toBe('VERIFIED');
+    expect(audit.nationalIdHash).toBe(hashIdentityValue(nationalCode, identityConfig.identityHashPepper));
+    expect(audit.mobileHash).toBe(hashIdentityValue('09000000002', identityConfig.identityHashPepper));
+    expect(audit.nationalIdHash).not.toContain(nationalCode);
+    expect(audit.mobileHash).not.toContain('09000000002');
+    expect(result.body).not.toHaveProperty('message');
+  });
+
+  it.each(['PENDING', 'VERIFIED', 'REJECTED'])('preserves admin KYC decision %s on a match', async (kycStatus) => {
+    const { app } = appFixture(undefined, undefined, identityConfig, true, {
+      checkShahkarMatch: async () => ({ status: 'MATCH', providerCode: 0 }),
+    });
+    const phone = `0900000000${3 + ['PENDING', 'VERIFIED', 'REJECTED'].indexOf(kycStatus)}`;
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone, barcodeId: `identity-${kycStatus.toLowerCase()}` });
+    await prisma.user.update({ where: { phoneNumber: phone }, data: { kycStatus: kycStatus as 'PENDING' | 'VERIFIED' | 'REJECTED' } });
+    const accessToken = await memberToken(app, phone);
+    expect((await request(app).post('/v1/me/identity').set('Authorization', `Bearer ${accessToken}`).send({ nationalCode })).status).toBe(200);
+    expect((await prisma.user.findUniqueOrThrow({ where: { phoneNumber: phone } })).kycStatus).toBe(kycStatus);
+  });
+
+  it('leaves KYC untouched on mismatch and short-circuits a repeated verified check', async () => {
+    let calls = 0;
+    const { app } = appFixture(undefined, undefined, identityConfig, true, {
+      checkShahkarMatch: async () => {
+        calls += 1;
+        return { status: 'MISMATCH', providerCode: 1 };
+      },
+    });
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '09000000006', barcodeId: 'identity-mismatch' });
+    const mismatchToken = await memberToken(app, '09000000006');
+    expect((await request(app).post('/v1/me/identity').set('Authorization', `Bearer ${mismatchToken}`).send({ nationalCode })).status).toBe(200);
+    const mismatchUser = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '09000000006' } });
+    expect(mismatchUser.identityVerificationStatus).toBe('MISMATCH');
+    expect(mismatchUser.kycStatus).toBe('UNVERIFIED');
+    expect(mismatchUser.nationalIdHash).toBeNull();
+
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '09000000007', barcodeId: 'identity-short-circuit' });
+    const verified = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '09000000007' } });
+    await prisma.user.update({ where: { id: verified.id }, data: { identityVerificationStatus: 'VERIFIED', identityVerifiedAt: new Date(), nationalIdHash: hashIdentityValue(nationalCode, identityConfig.identityHashPepper) } });
+    const verifiedToken = await memberToken(app, '09000000007');
+    const shortCircuit = await request(app).post('/v1/me/identity').set('Authorization', `Bearer ${verifiedToken}`).send({ nationalCode });
+    expect(shortCircuit.status).toBe(200);
+    expect(shortCircuit.body.status).toBe('VERIFIED');
+    expect(calls).toBe(1);
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: verified.id } })).identityCheckCount).toBe(0);
+  });
+
+  it('rejects non-Iranian stored phones and enforces the hard provider-call cap', async () => {
+    let calls = 0;
+    const { app } = appFixture(undefined, undefined, identityConfig, true, {
+      checkShahkarMatch: async () => {
+        calls += 1;
+        return { status: 'MATCH', providerCode: 0 };
+      },
+    });
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000008', barcodeId: 'identity-invalid-phone' });
+    const invalidToken = await memberToken(app, '+1555000008');
+    const invalid = await request(app).post('/v1/me/identity').set('Authorization', `Bearer ${invalidToken}`).send({ nationalCode });
+    expect(invalid.status).toBe(400);
+    expect(invalid.body).toEqual({ error: 'phone number must be a valid Iranian mobile number' });
+
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '09000000009', barcodeId: 'identity-cap' });
+    const capped = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '09000000009' } });
+    await prisma.user.update({ where: { id: capped.id }, data: { identityCheckCount: 10 } });
+    const cappedToken = await memberToken(app, '09000000009');
+    const cappedResult = await request(app).post('/v1/me/identity').set('Authorization', `Bearer ${cappedToken}`).send({ nationalCode });
+    expect(cappedResult.status).toBe(429);
+    expect(calls).toBe(0);
+  });
+
+  it('preserves a verified identity status after an inconclusive provider result', async () => {
+    const { app } = appFixture(undefined, undefined, identityConfig, true, {
+      checkShahkarMatch: async () => ({ status: 'INCONCLUSIVE', providerCode: 0 }),
+    });
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '09000000010', barcodeId: 'identity-inconclusive' });
+    const user = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '09000000010' } });
+    await prisma.user.update({ where: { id: user.id }, data: { identityVerificationStatus: 'VERIFIED', identityVerifiedAt: new Date(), nationalIdHash: 'different-hash' } });
+    const accessToken = await memberToken(app, '09000000010');
+    const result = await request(app).post('/v1/me/identity').set('Authorization', `Bearer ${accessToken}`).send({ nationalCode });
+    expect(result.body.status).toBe('VERIFIED');
+    expect(await prisma.identityCheck.count({ where: { userId: user.id, status: 'INCONCLUSIVE' } })).toBe(1);
+  });
+
   it('creates and reuses Google identities and requires first-time PIN setup', async () => {
     const { app } = appFixture(undefined, undefined, {}, true, {
       verifyGoogleIdToken: async () => ({ subject: 'google-subject', email: 'social@example.com' }),

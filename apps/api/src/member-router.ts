@@ -7,6 +7,8 @@ import {
   AccountType,
   Asset,
   EmailVerificationPurpose,
+  IdentityVerificationStatus,
+  KycStatus,
   Prisma,
   PrismaClient,
   WithdrawalStatus,
@@ -22,6 +24,8 @@ import {
   decimalFromMicroUsdt,
   evmAddressSchema,
   fourDigitCodeSchema,
+  iranMobileSchema,
+  nationalCodeSchema,
   microUsdtFromDecimal,
   readWithdrawalAvailability,
   releaseEscrow,
@@ -45,6 +49,8 @@ import { HttpError } from './http-error.js';
 import { isWeakPin, issueEmailCode, memberClaims, requireCompletedSetup, securitySetupStatus, serializeMember, smtpSender, verifyAndSetEmail, verifyMemberPin } from './member-auth.js';
 import type { ApiConfig } from './config.js';
 import { deleteMediaFile, mediaPath, uploadMedia } from './media.js';
+import { hashIdentityValue } from './identity.js';
+import { checkShahkarMatch } from './shahkar.js';
 
 export type MemberRouterDependencies = {
   config: ApiConfig;
@@ -52,6 +58,7 @@ export type MemberRouterDependencies = {
   queue: QueueLike;
   emailSender?: import('./member-auth.js').EmailSender;
   logEmailCode?: (email: string, code: string) => void;
+  checkShahkarMatch?: typeof checkShahkarMatch;
 };
 
 const couponsSchema = z.string().regex(/^[1-9]\d*$/, 'amountCoupons must be a positive decimal string');
@@ -343,6 +350,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
   const sender = dependencies.emailSender ?? smtpSender(dependencies.config);
   const router = express.Router();
   const mediaLimiter = rateLimit({ windowMs: 60 * 60_000, limit: 20, keyGenerator: (request) => memberClaims(request).sub });
+  const identityLimiter = rateLimit({ windowMs: 60 * 60_000, limit: 5, keyGenerator: (request) => memberClaims(request).sub });
   const setupAllowedPaths = new Set(['/security-setup', '/email', '/email/verify', '/logout']);
   router.use((request, response, next) => {
     if (setupAllowedPaths.has(request.path)) {
@@ -400,6 +408,72 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
   router.get('/', async (request, response, next) => {
     try {
       response.json(serializeMember(await member(prisma, memberClaims(request).sub)));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/identity', identityLimiter, async (request, response, next) => {
+    try {
+      const config = dependencies.config;
+      if (config.shahkarApiToken === undefined || config.identityHashPepper === undefined) {
+        throw new HttpError(503, 'identity verification is not configured');
+      }
+      const identityHashPepper = config.identityHashPepper;
+      const body = z.object({ nationalCode: nationalCodeSchema }).parse(request.body);
+      const userId = memberClaims(request).sub;
+      const current = await member(prisma, userId);
+      if (current.phoneNumber === null) throw new HttpError(400, 'identity verification requires a phone number');
+      const mobile = iranMobileSchema.safeParse(current.phoneNumber);
+      if (!mobile.success) throw new HttpError(400, 'phone number must be a valid Iranian mobile number');
+      const nationalIdHash = hashIdentityValue(body.nationalCode, identityHashPepper);
+      if (current.identityVerificationStatus === IdentityVerificationStatus.VERIFIED && current.nationalIdHash === nationalIdHash) {
+        response.json({ status: current.identityVerificationStatus, verifiedAt: current.identityVerifiedAt });
+        return;
+      }
+      if (current.identityCheckCount >= 10) throw new HttpError(429, 'identity verification limit reached');
+      const check = dependencies.checkShahkarMatch ?? checkShahkarMatch;
+      const outcome = await check(
+        { nationalCode: body.nationalCode, mobile: mobile.data },
+        { token: config.shahkarApiToken, baseUrl: config.shahkarBaseUrl },
+      );
+      const updated = await prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${userId}::uuid FOR UPDATE`;
+        const locked = await tx.user.findUniqueOrThrow({ where: { id: userId } });
+        if (locked.identityCheckCount >= 10) throw new HttpError(429, 'identity verification limit reached');
+        const now = new Date();
+        const identityStatus = outcome.status === 'MATCH'
+          ? IdentityVerificationStatus.VERIFIED
+          : outcome.status === 'MISMATCH'
+            ? IdentityVerificationStatus.MISMATCH
+            : IdentityVerificationStatus.INCONCLUSIVE;
+        const data: Prisma.UserUpdateInput = {
+          identityVerificationStatus: identityStatus,
+          identityCheckCount: { increment: 1 },
+          lastIdentityCheckAt: now,
+        };
+        if (outcome.status === 'MATCH') {
+          data.identityVerifiedAt = now;
+          data.nationalIdHash = nationalIdHash;
+          if (locked.kycStatus === KycStatus.UNVERIFIED) data.kycStatus = KycStatus.VERIFIED;
+        } else if (outcome.status === 'MISMATCH') {
+          data.identityVerifiedAt = null;
+          data.nationalIdHash = null;
+        } else if (locked.identityVerificationStatus === IdentityVerificationStatus.VERIFIED) {
+          data.identityVerificationStatus = IdentityVerificationStatus.VERIFIED;
+        }
+        await tx.identityCheck.create({
+          data: {
+            userId,
+            status: identityStatus,
+            providerCode: outcome.providerCode,
+            nationalIdHash,
+            mobileHash: hashIdentityValue(mobile.data, identityHashPepper),
+          },
+        });
+        return tx.user.update({ where: { id: userId }, data });
+      });
+      response.json({ status: updated.identityVerificationStatus, verifiedAt: updated.identityVerifiedAt });
     } catch (error) {
       next(error);
     }

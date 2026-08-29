@@ -91,7 +91,7 @@ function jsonValue(value: unknown): string {
 
 function serializeWithdrawal(withdrawal: {
   id: string;
-  user: { barcodeId: string };
+  user: { barcodeId: string; identityVerificationStatus: string };
   couponsGross: bigint;
   feeMicroUsdt: bigint;
   netMicroUsdt: bigint;
@@ -105,6 +105,7 @@ function serializeWithdrawal(withdrawal: {
   return {
     id: withdrawal.id,
     barcodeId: withdrawal.user.barcodeId,
+    identityVerificationStatus: withdrawal.user.identityVerificationStatus,
     couponsGross: withdrawal.couponsGross.toString(),
     grossUsdt: decimalFromMicroUsdt(withdrawal.grossMicroUsdt),
     feeUsdt: decimalFromMicroUsdt(withdrawal.feeMicroUsdt),
@@ -311,7 +312,7 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
       }
       const rows = await prisma.withdrawal.findMany({
         where,
-        include: { user: { select: { barcodeId: true } } },
+        include: { user: { select: { barcodeId: true, identityVerificationStatus: true } } },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: limit + 1,
       });

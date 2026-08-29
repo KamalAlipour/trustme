@@ -20,6 +20,9 @@ apps/admin       Next.js App Router + Tailwind + shadcn/ui (admin dashboard)
 
 npm workspaces, TypeScript everywhere, `strict: true`, no `any`.
 
+Identity-verification requirements are documented in
+[`docs/IDENTITY-VERIFICATION.md`](IDENTITY-VERIFICATION.md).
+
 ## 2. Units — integers only, never floats
 
 | Asset | Stored as | Unit |

@@ -40,6 +40,7 @@ export const labels = {
   feeEquivalent: 'bps =',
   save: 'Save settings',
   barcode: 'Member barcode',
+  identityVerificationStatus: 'Identity verification',
   grossCoupons: 'Gross coupons',
   fee: 'Fee',
   net: 'Net',
