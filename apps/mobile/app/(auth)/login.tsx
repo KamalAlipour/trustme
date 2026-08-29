@@ -63,7 +63,7 @@ export default function Login() {
         onGoogleToken={async (idToken) => { await signInWithSocial('google', idToken); router.replace('/'); }}
         onAppleToken={async (idToken, displayName) => { await signInWithSocial('apple', idToken, displayName); router.replace('/'); }}
       />
-      <TextInput value={phone} onChangeText={setPhone} placeholder={t.phone} style={styles.input} keyboardType="phone-pad" textContentType="telephoneNumber" />
+      <TextInput value={phone} onChangeText={setPhone} placeholder={t.phone} style={styles.input} keyboardType="phone-pad" textContentType="telephoneNumber" autoComplete="tel" />
       <PinPad value={pin} onChange={setPin} {...(remaining === 0 ? { onSubmit: submit } : {})} />
       {biometric ? <Text style={styles.muted}>{t.biometricSessionNotice}</Text> : null}
       {error ? <Text style={styles.danger}>{error}</Text> : null}
