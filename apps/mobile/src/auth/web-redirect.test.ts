@@ -4,7 +4,9 @@ import {
   readIdTokenFromUrl,
   readSocialCallbackFromUrl,
   readSocialCallbackStateFromUrl,
+  validateWebRedirectState,
 } from './web-redirect';
+import { googleWebStateKey } from './google-web';
 
 describe('web OAuth redirect parsing', () => {
   it('handles callbacks immediately without an opener', () => {
@@ -40,6 +42,34 @@ describe('web OAuth redirect parsing', () => {
     const url = 'https://app.example.test/#id_token=apple-token&state=apple%3Arandom';
     expect(readSocialCallbackFromUrl(url)).toEqual({ provider: 'apple', idToken: 'apple-token' });
     expect(readSocialCallbackStateFromUrl(url)).toBe('apple:random');
+  });
+
+  it('identifies a Google callback from its state prefix', () => {
+    const url = 'https://app.example.test/#id_token=google-token&state=google%3Arandom';
+    expect(readSocialCallbackFromUrl(url)).toEqual({ provider: 'google', idToken: 'google-token' });
+    expect(readSocialCallbackStateFromUrl(url)).toBe('google:random');
+  });
+
+  it('validates and consumes the Google web state', () => {
+    const storage = {
+      getItem: (key: string) => key === googleWebStateKey ? 'google:random' : null,
+      removeItem: (key: string) => {
+        expect(key).toBe(googleWebStateKey);
+      },
+    };
+    expect(validateWebRedirectState('google', 'google:random', storage)).toBe(true);
+  });
+
+  it('rejects a mismatched Google web state and still consumes it', () => {
+    const removed: string[] = [];
+    const storage = {
+      getItem: () => 'google:expected',
+      removeItem: (key: string) => {
+        removed.push(key);
+      },
+    };
+    expect(validateWebRedirectState('google', 'google:actual', storage)).toBe(false);
+    expect(removed).toEqual([googleWebStateKey]);
   });
 
   it('keeps callbacks without an Apple state as Google', () => {

@@ -8,8 +8,8 @@ import {
   getWebRedirectHandlingMode,
   readSocialCallbackFromUrl,
   readSocialCallbackStateFromUrl,
+  validateWebRedirectState,
 } from '../src/auth/web-redirect';
-import { appleWebStateKey } from '../src/auth/apple-web';
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, retry: 1 } } });
 const WEB_REDIRECT_DEFER_MS = 1_200;
@@ -39,16 +39,7 @@ function WebRedirectHandler() {
       }
       cleanUrl.hash = hashParams.toString() === '' ? '' : `#${hashParams.toString()}`;
       window.history.replaceState(null, document.title, `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
-      let stateValid = true;
-      if (callback.provider === 'apple') {
-        try {
-          const expectedState = window.sessionStorage.getItem(appleWebStateKey);
-          window.sessionStorage.removeItem(appleWebStateKey);
-          stateValid = expectedState !== null && callbackState === expectedState;
-        } catch {
-          stateValid = false;
-        }
-      }
+      const stateValid = validateWebRedirectState(callback.provider, callbackState, window.sessionStorage);
       if (!stateValid) {
         router.replace({ pathname: '/(auth)/login', params: { error: 'social' } });
         return;

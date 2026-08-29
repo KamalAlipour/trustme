@@ -7,6 +7,7 @@ import * as WebBrowser from 'expo-web-browser';
 import { useTranslation } from '../i18n';
 import { isAppleSignInAvailable, isGoogleSignInAvailable, socialClientIds } from '../auth/social';
 import { appleWebClientId, appleWebStateKey, buildAppleAuthorizeUrl, isAppleWebSignInAvailable } from '../auth/apple-web';
+import { buildGoogleAuthorizeUrl, googleWebClientId, googleWebStateKey, isGoogleWebSignInAvailable } from '../auth/google-web';
 import { AppleIcon, GoogleIcon } from './BrandIcons';
 import { styles } from '../styles';
 
@@ -69,7 +70,32 @@ export function SocialAuthButtons({
   };
 
   const appleWebAvailable = isAppleWebSignInAvailable(Platform.OS, appleWebClientId);
+  const googleWebAvailable = isGoogleWebSignInAvailable(Platform.OS, googleWebClientId);
   const appleNativeAvailable = isAppleSignInAvailable();
+  const signInWithGoogleWeb = () => {
+    try {
+      if (!googleWebAvailable || typeof window === 'undefined' || window.crypto === undefined) {
+        onError(t.socialSignInUnavailable);
+        return;
+      }
+      const randomBytes = (length: number) => {
+        const bytes = new Uint8Array(length);
+        window.crypto.getRandomValues(bytes);
+        return Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('');
+      };
+      const state = `google:${randomBytes(16)}`;
+      const nonce = randomBytes(16);
+      window.sessionStorage.setItem(googleWebStateKey, state);
+      window.location.assign(buildGoogleAuthorizeUrl({
+        clientId: googleWebClientId as string,
+        redirectUri: window.location.origin,
+        state,
+        nonce,
+      }));
+    } catch {
+      onError(t.socialSignInUnavailable);
+    }
+  };
   const signInWithAppleWeb = () => {
     try {
       if (!appleWebAvailable || typeof window === 'undefined' || window.crypto === undefined) {
@@ -104,8 +130,15 @@ export function SocialAuthButtons({
       <View style={styles.socialAuthRow}>
         {googleAvailable ? <Pressable
           accessibilityLabel={t.signInWithGoogle}
-          disabled={googleRequest === null || busy}
-          onPress={() => void promptGoogle()}
+          disabled={(Platform.OS !== 'web' && googleRequest === null) || busy}
+          onPress={() => {
+            if (busy) return;
+            if (googleWebAvailable) {
+              signInWithGoogleWeb();
+            } else {
+              void promptGoogle();
+            }
+          }}
           style={[styles.socialAuthButton, styles.socialAuthGoogleButton, busy ? styles.socialAuthButtonBusy : null]}
         >
           <GoogleIcon size={20} />
