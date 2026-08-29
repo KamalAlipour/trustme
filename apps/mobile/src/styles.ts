@@ -33,6 +33,7 @@ export const styles = StyleSheet.create({
   danger: { color: colors.danger, fontSize: 16, textAlign: 'auto', writingDirection: 'auto' },
   notice: { color: colors.success, fontSize: 16, textAlign: 'auto', writingDirection: 'auto' },
   cameraPreview: { width: '100%', minHeight: 260, borderRadius: 12, overflow: 'hidden' },
+  barcodeQr: { alignItems: 'center', gap: 12, padding: 8 },
   row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 },
   pill: { borderRadius: 99, backgroundColor: '#E5F2F5', paddingHorizontal: 10, paddingVertical: 5 },
   divider: { height: 1, backgroundColor: colors.border },
