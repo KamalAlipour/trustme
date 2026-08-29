@@ -3,7 +3,7 @@ import request from 'supertest';
 import { getAddress, HDNodeWallet } from 'ethers';
 import { Redis } from 'ioredis';
 import bcrypt from 'bcryptjs';
-import { AccountType, AdminRole, Asset, BalanceDisclosureStatus, PrismaClient, TransactionType, WithdrawalStatus } from '@trustme/db';
+import { AccountType, AdminRole, Asset, BalanceDisclosureStatus, IdentityCaptureStep, PrismaClient, TransactionType, WithdrawalStatus } from '@trustme/db';
 import { createLoanRequest, postDeposit } from '@trustme/core';
 import { createApp, type ApiDependencies } from '../src/app.js';
 import { HttpError } from '../src/http-error.js';
@@ -118,17 +118,42 @@ async function completeMemberSetup(phone: string) {
   await prisma.user.update({ where: { id: user.id }, data: { biometricEnrolledAt: new Date(), securitySetupCompletedAt: new Date() } });
 }
 
-async function createImageAsset(ownerId: string, name: string) {
-  return prisma.mediaAsset.create({
+async function createCaptureFixture(userId: string, name: string, expiresAt = new Date(Date.now() + 5 * 60_000)) {
+  const session = await prisma.identityCaptureSession.create({
     data: {
-      ownerId,
-      kind: 'IMAGE',
-      mimeType: 'image/jpeg',
-      byteSize: 10,
-      sha256: `sha-${name}`,
-      storageKey: `identity/${name}.jpg`,
+      userId,
+      challengeCode: '1234',
+      steps: [IdentityCaptureStep.DOCUMENT_FRONT, IdentityCaptureStep.SELFIE_NEUTRAL, IdentityCaptureStep.SELFIE_TURNED, IdentityCaptureStep.SELFIE_WITH_DOCUMENT],
+      expiresAt,
     },
   });
+  const steps = [IdentityCaptureStep.DOCUMENT_FRONT, IdentityCaptureStep.SELFIE_NEUTRAL, IdentityCaptureStep.SELFIE_TURNED, IdentityCaptureStep.SELFIE_WITH_DOCUMENT];
+  for (const [index, step] of steps.entries()) {
+    await prisma.mediaAsset.create({
+      data: {
+        ownerId: userId,
+        kind: 'IMAGE',
+        mimeType: 'image/jpeg',
+        byteSize: 10,
+        sha256: `capture-${name}-${step}`,
+        storageKey: `identity/${name}-${step}.jpg`,
+        captureSessionId: session.id,
+        captureStep: step,
+        createdAt: new Date(Date.now() - (steps.length - index) * 1000),
+      },
+    });
+  }
+  return session;
+}
+
+async function uploadCaptureFrame(app: ReturnType<typeof appFixture>['app'], accessToken: string, sessionId: string, step: IdentityCaptureStep) {
+  return request(app)
+    .post('/v1/me/media')
+    .set('Authorization', `Bearer ${accessToken}`)
+    .field('kind', 'image')
+    .field('captureSessionId', sessionId)
+    .field('step', step)
+    .attach('file', Buffer.from([0xff, 0xd8, 0xff, 0xd9]), `${step}.jpg`);
 }
 
 async function createPendingWithdrawal(app: ReturnType<typeof appFixture>['app'], barcodeId: string, phone: string, couponsGross = '150000') {
@@ -159,7 +184,7 @@ beforeAll(async () => {
   await prisma.$connect();
 });
 beforeEach(async () => {
-  await prisma.$executeRawUnsafe('TRUNCATE TABLE "BalanceDisclosureRequest", "MediaAsset", "RefundRequest", "AidRequest", "CharityAgent", "Charity", "AdminAuditLog", "AdminUser", "Withdrawal", "EscrowHold", "EmailVerification", "MemberDevice", "Contact", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User", "ChainCursor", "SystemSetting" CASCADE');
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "BalanceDisclosureRequest", "MediaAsset", "IdentityReview", "IdentityCaptureSession", "RefundRequest", "AidRequest", "CharityAgent", "Charity", "AdminAuditLog", "AdminUser", "Withdrawal", "EscrowHold", "EmailVerification", "MemberDevice", "Contact", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User", "ChainCursor", "SystemSetting" CASCADE');
   await prisma.systemSetting.createMany({ data: [
     { key: 'WITHDRAWAL_BASE_FEE_BPS', value: '100' },
     { key: 'WITHDRAWAL_MIN_FEE_USDT', value: '0.20' },
@@ -405,47 +430,84 @@ describe('member API', () => {
     expect(enabled.body.requiredForWithdrawal).toBe(true);
   });
 
-  it('guards manual identity review submission and keeps asset IDs out of identity responses', async () => {
-    const { app } = appFixture(undefined, undefined, identityConfig);
+  it('guards live identity capture submission and keeps asset IDs out of identity responses', async () => {
+    const { app } = appFixture();
     await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000030', barcodeId: 'manual-no-country' });
     const noCountryToken = await memberToken(app, '+1555000030');
     const noCountry = await request(app).post('/v1/me/identity/manual-review').set('Authorization', `Bearer ${noCountryToken}`).send({});
     expect(noCountry.status).toBe(400);
 
-    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '09000000031', barcodeId: 'manual-automated' });
-    const automatedToken = await memberToken(app, '09000000031');
-    const automated = await request(app).post('/v1/me/identity/manual-review').set('Authorization', `Bearer ${automatedToken}`).send({});
+    const automatedApp = appFixture(undefined, undefined, identityConfig).app;
+    await request(automatedApp).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '09000000031', barcodeId: 'manual-automated' });
+    const automatedToken = await memberToken(automatedApp, '09000000031');
+    const automated = await request(automatedApp).post('/v1/me/identity/manual-review').set('Authorization', `Bearer ${automatedToken}`).send({});
     expect(automated.status).toBe(409);
 
     await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000032', barcodeId: 'manual-submit' });
     const submitToken = await memberToken(app, '+1555000032');
     expect((await request(app).put('/v1/me/country').set('Authorization', `Bearer ${submitToken}`).send({ country: 'NO' })).status).toBe(200);
     const submitUser = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000032' } });
-    const document = await createImageAsset(submitUser.id, 'document-32');
-    const selfie = await createImageAsset(submitUser.id, 'selfie-32');
-    const submitted = await request(app).post('/v1/me/identity/manual-review').set('Authorization', `Bearer ${submitToken}`).send({ documentAssetId: document.id, selfieAssetId: selfie.id });
+    const session = await createCaptureFixture(submitUser.id, 'capture-32');
+    const submitted = await request(app).post('/v1/me/identity/manual-review').set('Authorization', `Bearer ${submitToken}`).send({ captureSessionId: session.id });
     expect(submitted.status).toBe(201);
     expect(submitted.body).toMatchObject({ status: 'PENDING', submittedAt: expect.any(String) });
     expect(submitted.body).not.toHaveProperty('documentAssetId');
-    const duplicate = await request(app).post('/v1/me/identity/manual-review').set('Authorization', `Bearer ${submitToken}`).send({ documentAssetId: document.id, selfieAssetId: selfie.id });
+    const duplicate = await request(app).post('/v1/me/identity/manual-review').set('Authorization', `Bearer ${submitToken}`).send({ captureSessionId: session.id });
     expect(duplicate.status).toBe(409);
-    expect(duplicate.body).toEqual({ error: 'identity review already pending' });
+    expect(duplicate.body).toEqual({ error: 'identity capture session is expired or already used' });
+    const pendingSession = await createCaptureFixture(submitUser.id, 'pending-32');
+    const pendingReview = await request(app).post('/v1/me/identity/manual-review').set('Authorization', `Bearer ${submitToken}`).send({ captureSessionId: pendingSession.id });
+    expect(pendingReview.status).toBe(409);
+    expect(pendingReview.body).toEqual({ error: 'identity review already pending' });
     const identity = await request(app).get('/v1/me/identity').set('Authorization', `Bearer ${submitToken}`);
     expect(identity.body.review).toMatchObject({ status: 'PENDING', submittedAt: expect.any(String), decidedAt: null, decisionNote: null });
     expect(identity.body.review).not.toHaveProperty('documentAssetId');
     expect(identity.body.review).not.toHaveProperty('selfieAssetId');
 
     await prisma.user.update({ where: { id: submitUser.id }, data: { identityVerificationStatus: 'VERIFIED' } });
-    const verified = await request(app).post('/v1/me/identity/manual-review').set('Authorization', `Bearer ${submitToken}`).send({ documentAssetId: document.id, selfieAssetId: selfie.id });
+    const verified = await request(app).post('/v1/me/identity/manual-review').set('Authorization', `Bearer ${submitToken}`).send({ captureSessionId: session.id });
     expect(verified.status).toBe(409);
 
     await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000033', barcodeId: 'manual-foreign' });
     const foreignToken = await memberToken(app, '+1555000033');
     await request(app).put('/v1/me/country').set('Authorization', `Bearer ${foreignToken}`).send({ country: 'NO' });
     const foreignUser = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000033' } });
-    const foreignAsset = await createImageAsset(foreignUser.id, 'foreign-33');
-    const foreignResult = await request(app).post('/v1/me/identity/manual-review').set('Authorization', `Bearer ${foreignToken}`).send({ documentAssetId: document.id, selfieAssetId: foreignAsset.id });
+    await createCaptureFixture(foreignUser.id, 'foreign-33');
+    const foreignResult = await request(app).post('/v1/me/identity/manual-review').set('Authorization', `Bearer ${foreignToken}`).send({ captureSessionId: session.id });
     expect(foreignResult.status).toBe(403);
+    const expired = await createCaptureFixture(submitUser.id, 'expired-32', new Date(Date.now() - 1000));
+    const expiredResult = await request(app).post('/v1/me/identity/manual-review').set('Authorization', `Bearer ${submitToken}`).send({ captureSessionId: expired.id });
+    expect(expiredResult.status).toBe(409);
+  });
+
+  it('enforces live capture ownership, steps, expiry, and consumption', async () => {
+    const { app } = appFixture();
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000034', barcodeId: 'live-capture-one' });
+    const accessToken = await memberToken(app, '+1555000034');
+    await request(app).put('/v1/me/country').set('Authorization', `Bearer ${accessToken}`).send({ country: 'NO' });
+    const created = await request(app).post('/v1/me/identity/live-capture-session').set('Authorization', `Bearer ${accessToken}`);
+    expect(created.status).toBe(201);
+    expect(created.body).toMatchObject({ id: expect.any(String), challengeCode: expect.stringMatching(/^\d{4}$/), expiresAt: expect.any(String), steps: expect.arrayContaining(Object.values(IdentityCaptureStep)) });
+    const sessionId = created.body.id as string;
+    const ordinary = await request(app).post('/v1/me/media').set('Authorization', `Bearer ${accessToken}`).field('kind', 'image').attach('file', Buffer.from([0xff, 0xd8, 0xff, 0xd9]), 'ordinary.jpg');
+    expect(ordinary.status).toBe(201);
+    expect((await request(app).post('/v1/me/identity/manual-review').set('Authorization', `Bearer ${accessToken}`).send({ captureSessionId: sessionId })).status).toBe(400);
+    for (const step of Object.values(IdentityCaptureStep)) {
+      expect((await uploadCaptureFrame(app, accessToken, sessionId, step)).status).toBe(201);
+    }
+    expect((await uploadCaptureFrame(app, accessToken, sessionId, IdentityCaptureStep.DOCUMENT_FRONT)).status).toBe(409);
+    const submitted = await request(app).post('/v1/me/identity/manual-review').set('Authorization', `Bearer ${accessToken}`).send({ captureSessionId: sessionId });
+    expect(submitted.status).toBe(201);
+    const persisted = await prisma.identityReview.findUniqueOrThrow({ where: { id: submitted.body.id }, include: { captureSession: true } });
+    expect(persisted).toMatchObject({ challengeCode: created.body.challengeCode, captureSessionId: sessionId, documentFrontCapturedAt: expect.any(Date), selfieNeutralCapturedAt: expect.any(Date), selfieTurnedCapturedAt: expect.any(Date), selfieWithDocumentCapturedAt: expect.any(Date) });
+    expect(persisted.captureSession?.consumedAt).toEqual(expect.any(Date));
+    expect((await request(app).post('/v1/me/identity/manual-review').set('Authorization', `Bearer ${accessToken}`).send({ captureSessionId: sessionId })).status).toBe(409);
+
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000035', barcodeId: 'live-capture-two' });
+    const foreignToken = await memberToken(app, '+1555000035');
+    await request(app).put('/v1/me/country').set('Authorization', `Bearer ${foreignToken}`).send({ country: 'NO' });
+    const foreignAttempt = await request(app).post('/v1/me/identity/manual-review').set('Authorization', `Bearer ${foreignToken}`).send({ captureSessionId: sessionId });
+    expect(foreignAttempt.status).toBe(403);
   });
 
   it('creates and reuses Google identities and requires first-time PIN setup', async () => {
@@ -1267,13 +1329,17 @@ describe('public reserves and balance disclosure API', () => {
     const owner = await createPublicUser('+15550003005', 'public-history');
     const ownerAccount = await prisma.ledgerAccount.findFirstOrThrow({ where: { userId: owner.id, type: AccountType.USER_COUPON, asset: Asset.COUPON } });
     await prisma.ledgerAccount.update({ where: { id: ownerAccount.id }, data: { balance: 75n } });
-    const oldestTransaction = await prisma.transaction.create({ data: { type: TransactionType.TRANSFER, status: 'COMPLETED', amountCoupons: 25n, externalRef: 'public-history-oldest', createdAt: new Date(Date.now() - 60_000) } });
-    const newestTransaction = await prisma.transaction.create({ data: { type: TransactionType.TRANSFER, status: 'COMPLETED', amountCoupons: 50n, externalRef: 'public-history-newest' } });
+    const historyBase = Date.now();
+    const oldestCreatedAt = new Date(historyBase - 180_000);
+    const newestCreatedAt = new Date(historyBase - 120_000);
+    const heldCreatedAt = new Date(historyBase - 60_000);
+    const oldestTransaction = await prisma.transaction.create({ data: { type: TransactionType.TRANSFER, status: 'COMPLETED', amountCoupons: 25n, externalRef: 'public-history-oldest', createdAt: oldestCreatedAt } });
+    const newestTransaction = await prisma.transaction.create({ data: { type: TransactionType.TRANSFER, status: 'COMPLETED', amountCoupons: 50n, externalRef: 'public-history-newest', createdAt: newestCreatedAt } });
     const escrowAccount = await account(AccountType.ESCROW, Asset.COUPON);
-    const heldTransaction = await prisma.transaction.create({ data: { type: TransactionType.ESCROW_HOLD, status: 'CONFIRMED', amountCoupons: 10n, externalRef: 'public-history-held' } });
-    await prisma.ledgerEntry.create({ data: { transactionId: oldestTransaction.id, fromAccountId: systems.issuance.id, toAccountId: ownerAccount.id, amount: 25n, asset: Asset.COUPON } });
-    await prisma.ledgerEntry.create({ data: { transactionId: newestTransaction.id, fromAccountId: systems.issuance.id, toAccountId: ownerAccount.id, amount: 50n, asset: Asset.COUPON } });
-    await prisma.ledgerEntry.create({ data: { transactionId: heldTransaction.id, fromAccountId: ownerAccount.id, toAccountId: escrowAccount.id, amount: 10n, asset: Asset.COUPON } });
+    const heldTransaction = await prisma.transaction.create({ data: { type: TransactionType.ESCROW_HOLD, status: 'CONFIRMED', amountCoupons: 10n, externalRef: 'public-history-held', createdAt: heldCreatedAt } });
+    await prisma.ledgerEntry.create({ data: { transactionId: oldestTransaction.id, fromAccountId: systems.issuance.id, toAccountId: ownerAccount.id, amount: 25n, asset: Asset.COUPON, createdAt: oldestCreatedAt } });
+    await prisma.ledgerEntry.create({ data: { transactionId: newestTransaction.id, fromAccountId: systems.issuance.id, toAccountId: ownerAccount.id, amount: 50n, asset: Asset.COUPON, createdAt: newestCreatedAt } });
+    await prisma.ledgerEntry.create({ data: { transactionId: heldTransaction.id, fromAccountId: ownerAccount.id, toAccountId: escrowAccount.id, amount: 10n, asset: Asset.COUPON, createdAt: heldCreatedAt } });
     const expired = await prisma.balanceDisclosureRequest.create({ data: { userId: owner.id, code: '000002', expiresAt: new Date(Date.now() - 1_000) } });
     const expiredResponse = await request(app).post(`/v1/public/disclosures/${expired.id}/confirm`).send({ code: '000002' });
     expect(expiredResponse.status).toBe(410);
@@ -1305,34 +1371,41 @@ describe('admin API', () => {
     const memberJwt = await memberToken(app, '+1555000040');
     expect((await request(app).put('/v1/me/country').set('Authorization', `Bearer ${memberJwt}`).send({ country: 'NO' })).status).toBe(200);
     const user = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000040' } });
-    const document = await createImageAsset(user.id, 'admin-document-40');
-    const selfie = await createImageAsset(user.id, 'admin-selfie-40');
-    const submitted = await request(app).post('/v1/me/identity/manual-review').set('Authorization', `Bearer ${memberJwt}`).send({ documentAssetId: document.id, selfieAssetId: selfie.id });
+    const session = await createCaptureFixture(user.id, 'admin-capture-40');
+    const captureAssets = await prisma.mediaAsset.findMany({ where: { captureSessionId: session.id } });
+    const submitted = await request(app).post('/v1/me/identity/manual-review').set('Authorization', `Bearer ${memberJwt}`).send({ captureSessionId: session.id });
     const reviewId = submitted.body.id as string;
     const listed = await request(app).get('/admin/identity-reviews').set('Authorization', `Bearer ${jwt}`);
     expect(listed.status).toBe(200);
-    expect(listed.body.items[0]).toMatchObject({ id: reviewId, barcodeId: 'manual-admin-approve', country: 'NO', status: 'PENDING', documentUrl: expect.stringContaining(document.id), selfieUrl: expect.stringContaining(selfie.id) });
+    expect(listed.body.items[0]).toMatchObject({ id: reviewId, barcodeId: 'manual-admin-approve', country: 'NO', status: 'PENDING', challengeCode: '1234' });
+    expect(listed.body.items[0].frames.map((frame: { step: string }) => frame.step)).toEqual([
+      'DOCUMENT_FRONT',
+      'SELFIE_NEUTRAL',
+      'SELFIE_TURNED',
+      'SELFIE_WITH_DOCUMENT',
+    ]);
+    expect(listed.body.items[0].frames.every((frame: { capturedAt: string }) => typeof frame.capturedAt === 'string')).toBe(true);
     await prisma.user.update({ where: { id: user.id }, data: { kycStatus: 'PENDING' } });
     const approved = await request(app).post(`/admin/identity-reviews/${reviewId}/approve`).set('Authorization', `Bearer ${jwt}`);
     expect(approved.status).toBe(200);
     const approvedReview = await prisma.identityReview.findUniqueOrThrow({ where: { id: reviewId } });
     expect(approvedReview).toMatchObject({ status: 'APPROVED', documentAssetId: null, selfieAssetId: null, decidedByAdminId: admin.id });
     expect(approvedReview.decidedAt).toEqual(expect.any(Date));
-    expect(await prisma.mediaAsset.count({ where: { id: { in: [document.id, selfie.id] } } })).toBe(0);
+    expect(await prisma.mediaAsset.count({ where: { id: { in: captureAssets.map((asset) => asset.id) } } })).toBe(0);
     expect(await prisma.adminAuditLog.count({ where: { entityId: reviewId, action: 'identity_review.approve' } })).toBe(1);
     const approvedUser = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
     expect(approvedUser.identityVerificationStatus).toBe('VERIFIED');
     expect(approvedUser.identityVerifiedAt).toEqual(expect.any(Date));
     expect(approvedUser.kycStatus).toBe('PENDING');
-    expect((await request(app).get(`/admin/identity-reviews/${reviewId}/media/${document.id}`).set('Authorization', `Bearer ${jwt}`)).status).toBe(404);
+    expect((await request(app).get(`/admin/identity-reviews/${reviewId}/media/${captureAssets[0]!.id}`).set('Authorization', `Bearer ${jwt}`)).status).toBe(404);
 
     await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000041', barcodeId: 'manual-admin-reject' });
     const rejectMemberJwt = await memberToken(app, '+1555000041');
     await request(app).put('/v1/me/country').set('Authorization', `Bearer ${rejectMemberJwt}`).send({ country: 'NO' });
     const rejectUser = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000041' } });
-    const rejectDocument = await createImageAsset(rejectUser.id, 'admin-document-41');
-    const rejectSelfie = await createImageAsset(rejectUser.id, 'admin-selfie-41');
-    const rejectSubmitted = await request(app).post('/v1/me/identity/manual-review').set('Authorization', `Bearer ${rejectMemberJwt}`).send({ documentAssetId: rejectDocument.id, selfieAssetId: rejectSelfie.id });
+    const rejectSession = await createCaptureFixture(rejectUser.id, 'admin-capture-41');
+    const rejectAssets = await prisma.mediaAsset.findMany({ where: { captureSessionId: rejectSession.id } });
+    const rejectSubmitted = await request(app).post('/v1/me/identity/manual-review').set('Authorization', `Bearer ${rejectMemberJwt}`).send({ captureSessionId: rejectSession.id });
     await prisma.user.update({ where: { id: rejectUser.id }, data: { identityVerificationStatus: 'VERIFIED', identityVerifiedAt: new Date(), nationalIdHash: 'preserve-me' } });
     const rejected = await request(app).post(`/admin/identity-reviews/${rejectSubmitted.body.id}/reject`).set('Authorization', `Bearer ${jwt}`).send({ note: 'The images do not match.' });
     expect(rejected.status).toBe(200);
@@ -1341,7 +1414,7 @@ describe('admin API', () => {
     expect(afterReject.nationalIdHash).toBe('preserve-me');
     const rejectedReview = await prisma.identityReview.findUniqueOrThrow({ where: { id: rejectSubmitted.body.id } });
     expect(rejectedReview).toMatchObject({ status: 'REJECTED', decisionNote: 'The images do not match.', documentAssetId: null, selfieAssetId: null });
-    expect(await prisma.mediaAsset.count({ where: { id: { in: [rejectDocument.id, rejectSelfie.id] } } })).toBe(0);
+    expect(await prisma.mediaAsset.count({ where: { id: { in: rejectAssets.map((asset) => asset.id) } } })).toBe(0);
     expect(await prisma.adminAuditLog.count({ where: { entityId: rejectSubmitted.body.id, action: 'identity_review.reject' } })).toBe(1);
   });
 
@@ -1352,9 +1425,9 @@ describe('admin API', () => {
     await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '09000000042', barcodeId: 'manual-admin-conflict' });
     await memberToken(app, '09000000042');
     const user = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '09000000042' } });
-    const document = await createImageAsset(user.id, 'admin-document-42');
-    const selfie = await createImageAsset(user.id, 'admin-selfie-42');
-    const review = await prisma.identityReview.create({ data: { userId: user.id, country: 'IR', documentAssetId: document.id, selfieAssetId: selfie.id } });
+    const session = await createCaptureFixture(user.id, 'admin-capture-42');
+    const assets = await prisma.mediaAsset.findMany({ where: { captureSessionId: session.id }, orderBy: { captureStep: 'asc' } });
+    const review = await prisma.identityReview.create({ data: { userId: user.id, country: 'IR', captureSessionId: session.id, challengeCode: session.challengeCode, documentAssetId: assets.find((asset) => asset.captureStep === IdentityCaptureStep.DOCUMENT_FRONT)!.id, selfieAssetId: assets.find((asset) => asset.captureStep === IdentityCaptureStep.SELFIE_NEUTRAL)!.id, documentFrontCapturedAt: assets[0]!.createdAt, selfieNeutralCapturedAt: assets[1]!.createdAt, selfieTurnedCapturedAt: assets[2]!.createdAt, selfieWithDocumentCapturedAt: assets[3]!.createdAt } });
     const conflict = await request(app).post(`/admin/identity-reviews/${review.id}/approve`).set('Authorization', `Bearer ${jwt}`);
     expect(conflict.status).toBe(409);
     await prisma.identityReview.update({ where: { id: review.id }, data: { status: 'REJECTED' } });

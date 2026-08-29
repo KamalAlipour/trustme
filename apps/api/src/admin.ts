@@ -136,7 +136,23 @@ function serializeIdentityReview(review: {
   user: { barcodeId: string };
   documentAsset: { id: string } | null;
   selfieAsset: { id: string } | null;
+  challengeCode: string | null;
+  documentFrontCapturedAt: Date | null;
+  selfieNeutralCapturedAt: Date | null;
+  selfieTurnedCapturedAt: Date | null;
+  selfieWithDocumentCapturedAt: Date | null;
+  captureSession: { steps: string[]; mediaAssets: Array<{ id: string; captureStep: string | null; createdAt: Date }> } | null;
 }) {
+  const captureTimes = new Map([
+    ['DOCUMENT_FRONT', review.documentFrontCapturedAt],
+    ['SELFIE_NEUTRAL', review.selfieNeutralCapturedAt],
+    ['SELFIE_TURNED', review.selfieTurnedCapturedAt],
+    ['SELFIE_WITH_DOCUMENT', review.selfieWithDocumentCapturedAt],
+  ]);
+  const frames = review.captureSession === null ? [] : review.captureSession.steps.flatMap((step) => {
+    const asset = review.captureSession?.mediaAssets.find((candidate) => candidate.captureStep === step);
+    return asset === undefined ? [] : [{ step, assetId: asset.id, capturedAt: captureTimes.get(step) ?? asset.createdAt, url: `/admin/identity-reviews/${review.id}/media/${asset.id}` }];
+  });
   return {
     id: review.id,
     barcodeId: review.user.barcodeId,
@@ -147,6 +163,8 @@ function serializeIdentityReview(review: {
     decisionNote: review.decisionNote,
     documentUrl: review.documentAsset === null ? null : `/admin/identity-reviews/${review.id}/media/${review.documentAsset.id}`,
     selfieUrl: review.selfieAsset === null ? null : `/admin/identity-reviews/${review.id}/media/${review.selfieAsset.id}`,
+    challengeCode: review.challengeCode,
+    frames,
   };
 }
 
@@ -377,6 +395,7 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
           user: { select: { barcodeId: true } },
           documentAsset: { select: { id: true } },
           selfieAsset: { select: { id: true } },
+          captureSession: { include: { mediaAssets: { select: { id: true, captureStep: true, createdAt: true, storageKey: true } } } },
         },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: limit + 1,
@@ -398,9 +417,10 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
       const assetId = z.string().uuid().parse(request.params.assetId);
       const review = await prisma.identityReview.findUnique({
         where: { id: reviewId },
-        select: { documentAssetId: true, selfieAssetId: true },
+        select: { documentAssetId: true, selfieAssetId: true, captureSession: { select: { mediaAssets: { select: { id: true } } } } },
       });
-      if (review === null || (review.documentAssetId !== assetId && review.selfieAssetId !== assetId)) {
+      const sessionAssetIds = review?.captureSession?.mediaAssets.map((asset) => asset.id) ?? [];
+      if (review === null || (review.documentAssetId !== assetId && review.selfieAssetId !== assetId && !sessionAssetIds.includes(assetId))) {
         throw new HttpError(404, 'resource not found');
       }
       const asset = await prisma.mediaAsset.findUnique({ where: { id: assetId }, select: { storageKey: true, mimeType: true } });
@@ -432,6 +452,7 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
           user: true,
           documentAsset: { select: { storageKey: true } },
           selfieAsset: { select: { storageKey: true } },
+          captureSession: { include: { mediaAssets: { select: { id: true, storageKey: true } } } },
         },
       });
       if (current.status !== IdentityReviewStatus.PENDING) throw new HttpError(409, 'identity review is not pending');
@@ -463,7 +484,11 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
           },
         });
       }
-      const assetIds = [current.documentAssetId, current.selfieAssetId].filter((id): id is string => id !== null);
+      const assetIds = [
+        current.documentAssetId,
+        current.selfieAssetId,
+        ...(current.captureSession?.mediaAssets.map((asset) => asset.id) ?? []),
+      ].filter((id): id is string => id !== null);
       await tx.mediaAsset.deleteMany({ where: { id: { in: assetIds } } });
       await tx.adminAuditLog.create({
         data: {
@@ -477,7 +502,11 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
       });
       return {
         updated,
-        storageKeys: [current.documentAsset?.storageKey, current.selfieAsset?.storageKey].filter((key): key is string => key !== undefined),
+        storageKeys: [
+          current.documentAsset?.storageKey,
+          current.selfieAsset?.storageKey,
+          ...(current.captureSession?.mediaAssets.map((asset) => asset.storageKey) ?? []),
+        ].filter((key): key is string => key !== undefined),
       };
     });
     await Promise.all(result.storageKeys.map((storageKey) => deleteMediaFile(config.mediaStorageDir, storageKey)));
