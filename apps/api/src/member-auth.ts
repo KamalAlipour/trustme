@@ -4,18 +4,26 @@ import express, { type Request, type RequestHandler } from 'express';
 import rateLimit from 'express-rate-limit';
 import nodemailer from 'nodemailer';
 import { z } from 'zod';
-import { EmailVerificationPurpose, Prisma, PrismaClient } from '@trustme/db';
+import { EmailVerificationPurpose, IdentityProvider, Prisma, PrismaClient } from '@trustme/db';
 import { generateBarcodeId, phoneNumberSchema, fourDigitCodeSchema, withSerializableRetry } from '@trustme/core';
 import { HttpError } from './http-error.js';
-import { isBarcodeUniqueViolation, provisionUser } from './user-provisioning.js';
+import { createUserWithAccounts, isBarcodeUniqueViolation, isEmailUniqueViolation, provisionUser } from './user-provisioning.js';
 import type { ApiConfig } from './config.js';
+import { verifyAppleIdToken, verifyGoogleIdToken, type VerifiedSocialClaims } from './social-auth.js';
 
 export type EmailSender = {
   send(to: string, subject: string, body: string): Promise<void>;
 };
 
 export type MemberClaims = { sub: string; typ: 'member'; sid: string; iat: number; exp: number };
-export type MemberAuthDependencies = { config: ApiConfig; prisma: PrismaClient; emailSender?: EmailSender; logEmailCode?: (email: string, code: string) => void };
+export type MemberAuthDependencies = {
+  config: ApiConfig;
+  prisma: PrismaClient;
+  emailSender?: EmailSender;
+  logEmailCode?: (email: string, code: string) => void;
+  verifyGoogleIdToken?: (idToken: string, audiences: readonly string[]) => Promise<VerifiedSocialClaims>;
+  verifyAppleIdToken?: (idToken: string, audiences: readonly string[]) => Promise<VerifiedSocialClaims>;
+};
 
 const dummyPinHash = bcrypt.hash(randomBytes(32).toString('hex'), 12);
 const genericLoginError = new HttpError(401, 'invalid phone or PIN');
@@ -63,17 +71,19 @@ export type SecuritySetupStatus = {
   biometricEnrolled: boolean;
   biometricPending: boolean;
   requiresEmailVerification: boolean;
-  remaining: Array<'email_verification' | 'biometric_enrolment'>;
+  remaining: Array<'pin' | 'email_verification' | 'biometric_enrolment'>;
   completedAt: Date | null;
 };
 
 export function securitySetupStatus(user: {
+  pinHash: string | null;
   emailVerifiedAt: Date | null;
   biometricEnrolledAt: Date | null;
   setupAcknowledgedAt: Date | null;
   securitySetupCompletedAt: Date | null;
 }, requireEmailVerification: boolean): SecuritySetupStatus {
-  const remaining: Array<'email_verification' | 'biometric_enrolment'> = [];
+  const remaining: Array<'pin' | 'email_verification' | 'biometric_enrolment'> = [];
+  if (user.pinHash === null) remaining.push('pin');
   if (requireEmailVerification && user.emailVerifiedAt === null) remaining.push('email_verification');
   if (user.biometricEnrolledAt === null && user.setupAcknowledgedAt === null) remaining.push('biometric_enrolment');
   return {
@@ -133,7 +143,7 @@ export function requireCompletedSetup(config: ApiConfig, prisma: PrismaClient): 
       const claims = memberClaims(request);
       const user = await prisma.user.findUnique({
         where: { id: claims.sub },
-        select: { emailVerifiedAt: true, biometricEnrolledAt: true, setupAcknowledgedAt: true, securitySetupCompletedAt: true },
+        select: { pinHash: true, emailVerifiedAt: true, biometricEnrolledAt: true, setupAcknowledgedAt: true, securitySetupCompletedAt: true },
       });
       if (user === null) {
         response.status(401).json({ error: 'unauthorized' });
@@ -162,11 +172,12 @@ function maskEmail(email: string | null): string | null {
   const [local, domain] = email.split('@');
   return `${local?.slice(0, 1) ?? ''}****@${domain}`;
 }
-export function maskPhone(phoneNumber: string): string {
+export function maskPhone(phoneNumber: string | null): string | null {
+  if (phoneNumber === null) return null;
   const digits = phoneNumber.replace(/\D/g, '');
   return `*-*-${digits.slice(-4).padStart(4, '*')}`;
 }
-export function serializeMember(user: { id: string; displayName: string | null; barcodeId: string; phoneNumber: string; email: string | null; emailVerifiedAt: Date | null; kycStatus: string; activeGuaranteeCount: number }) {
+export function serializeMember(user: { id: string; displayName: string | null; barcodeId: string; phoneNumber: string | null; email: string | null; emailVerifiedAt: Date | null; kycStatus: string; activeGuaranteeCount: number }) {
   return { id: user.id, displayName: user.displayName, barcodeId: user.barcodeId, phone: maskPhone(user.phoneNumber), email: maskEmail(user.email), emailVerified: user.emailVerifiedAt !== null, kycStatus: user.kycStatus, activeGuaranteeCount: user.activeGuaranteeCount, isRestricted: user.activeGuaranteeCount > 0 };
 }
 
@@ -203,6 +214,57 @@ async function createSession(prisma: PrismaClient, config: ApiConfig, userId: st
 async function tokenResponse(prisma: PrismaClient, config: ApiConfig, userId: string, label: string) {
   const tokens = await createSession(prisma, config, userId, label);
   return { tokens, member: serializeMember(await prisma.user.findUniqueOrThrow({ where: { id: userId } })) };
+}
+
+async function socialTokenResponse(
+  dependencies: MemberAuthDependencies,
+  provider: 'GOOGLE' | 'APPLE',
+  claims: VerifiedSocialClaims,
+  displayName: string | undefined,
+  label: string,
+) {
+  const { prisma, config } = dependencies;
+  const existing = await prisma.userIdentity.findUnique({
+    where: {
+      provider_subject: {
+        provider: provider === 'GOOGLE' ? IdentityProvider.GOOGLE : IdentityProvider.APPLE,
+        subject: claims.subject,
+      },
+    },
+  });
+  if (existing) return tokenResponse(prisma, config, existing.userId, label);
+  let omitEmail = false;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      const user = await withSerializableRetry(prisma, async (tx) => {
+        const emailTaken = claims.email !== null &&
+          await tx.user.findUnique({ where: { email: claims.email }, select: { id: true } }) !== null;
+        const created = await createUserWithAccounts(tx, config, {
+          phoneNumber: null,
+          ...(displayName === undefined ? {} : { displayName }),
+          ...(claims.email === null || emailTaken || omitEmail ? {} : { email: claims.email }),
+          barcodeId: generateBarcodeId(),
+        });
+        await tx.userIdentity.create({
+          data: {
+            userId: created.id,
+            provider: provider === 'GOOGLE' ? IdentityProvider.GOOGLE : IdentityProvider.APPLE,
+            subject: claims.subject,
+            email: claims.email,
+          },
+        });
+        return created;
+      });
+      return tokenResponse(prisma, config, user.id, label);
+    } catch (error) {
+      if (isEmailUniqueViolation(error) && claims.email !== null && !omitEmail) {
+        omitEmail = true;
+        continue;
+      }
+      if (!isBarcodeUniqueViolation(error) || attempt === 4) throw error;
+    }
+  }
+  throw new Error('barcode generation failed');
 }
 
 export function smtpSender(config: ApiConfig): EmailSender | undefined {
@@ -298,6 +360,32 @@ export function createMemberAuthRouter(dependencies: MemberAuthDependencies): ex
       response.json(await tokenResponse(prisma, config, user.id, request.header('x-device-label') ?? 'Unknown device'));
     } catch (error) { next(error); }
   });
+  const socialLogin = (provider: 'GOOGLE' | 'APPLE') => async (request: express.Request, response: express.Response, next: express.NextFunction) => {
+    try {
+      const body = z.object({
+        idToken: z.string().min(1),
+        displayName: z.string().trim().min(1).max(128).optional(),
+      }).parse(request.body);
+      const audiences = provider === 'GOOGLE' ? (config.googleOAuthClientIds ?? []) : (config.appleOAuthAudiences ?? []);
+      if (audiences.length === 0) {
+        response.status(503).json({ error: 'provider_disabled' });
+        return;
+      }
+      const verifier = provider === 'GOOGLE'
+        ? (dependencies.verifyGoogleIdToken ?? verifyGoogleIdToken)
+        : (dependencies.verifyAppleIdToken ?? verifyAppleIdToken);
+      const claims = await verifier(body.idToken, audiences);
+      response.status(200).json(await socialTokenResponse(
+        dependencies,
+        provider,
+        claims,
+        provider === 'APPLE' ? body.displayName : undefined,
+        request.header('x-device-label') ?? 'Unknown device',
+      ));
+    } catch (error) { next(error); }
+  };
+  router.post('/google', limiter, socialLogin('GOOGLE'));
+  router.post('/apple', limiter, socialLogin('APPLE'));
   router.post('/refresh', limiter, async (request, response, next) => {
     try {
       const value = request.body?.refreshToken;
@@ -378,6 +466,26 @@ export function createMemberAuthRouter(dependencies: MemberAuthDependencies): ex
 
 export function createMemberSecurityRouter(dependencies: MemberAuthDependencies): express.Router {
   const router = express.Router();
+  router.post('/security/pin', async (request, response, next) => {
+    try {
+      const body = z.object({ pin: fourDigitCodeSchema }).parse(request.body);
+      if (isWeakPin(body.pin)) throw new HttpError(400, 'PIN is too weak');
+      const userId = memberClaims(request).sub;
+      await withSerializableRetry(dependencies.prisma, async (tx) => {
+        await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${userId}::uuid FOR UPDATE`;
+        const user = await tx.user.findUniqueOrThrow({ where: { id: userId } });
+        if (user.pinHash !== null) throw new HttpError(409, 'PIN already exists');
+        await tx.user.update({
+          where: { id: userId },
+          data: { pinHash: await bcrypt.hash(body.pin, 12), pinUpdatedAt: new Date() },
+        });
+        return recomputeSecuritySetupCompletion(tx, userId, dependencies.config.requireEmailVerification);
+      });
+      response.status(204).send();
+    } catch (error) {
+      next(error);
+    }
+  });
   router.post('/security/biometric', async (request, response, next) => {
     try {
       const body = z.object({ pin: fourDigitCodeSchema, biometricEnrolled: z.boolean() }).parse(request.body);

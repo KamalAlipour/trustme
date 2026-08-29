@@ -29,6 +29,17 @@ describe('API configuration', () => {
     expect(loadApiConfig(validEnvironment).requireEmailVerification).toBe(false);
   });
 
+  it('parses optional social provider audiences', () => {
+    expect(loadApiConfig({
+      ...validEnvironment,
+      GOOGLE_OAUTH_CLIENT_IDS: 'web-client, ios-client ',
+      APPLE_OAUTH_AUDIENCES: 'as.komasi.trustcoupon',
+    })).toMatchObject({
+      googleOAuthClientIds: ['web-client', 'ios-client'],
+      appleOAuthAudiences: ['as.komasi.trustcoupon'],
+    });
+  });
+
   it('rejects mandatory verification without an email delivery channel', () => {
     expect(() => assertEmailVerificationDelivery(true, 'none')).toThrow('REQUIRE_EMAIL_VERIFICATION=true conflicts with EMAIL_DELIVERY=none');
   });

@@ -7,10 +7,11 @@ import { Page } from '../../src/components/Screen';
 import { useTranslation } from '../../src/i18n';
 import { isWeakPin } from '../../src/lib/pin';
 import { styles } from '../../src/styles';
+import { SocialAuthButtons } from '../../src/components/SocialAuthButtons';
 
 export default function Register() {
   const { t } = useTranslation();
-  const { signUp } = useSession();
+  const { signUp, signInWithSocial } = useSession();
   const [phone, setPhone] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
@@ -31,6 +32,11 @@ export default function Register() {
   return (
     <Page>
       <Text style={styles.title}>{t.register}</Text>
+      <SocialAuthButtons
+        onError={setError}
+        onGoogleToken={async (idToken) => { await signInWithSocial('google', idToken); router.replace('/'); }}
+        onAppleToken={async (idToken, displayName) => { await signInWithSocial('apple', idToken, displayName); router.replace('/'); }}
+      />
       <TextInput value={phone} onChangeText={setPhone} placeholder={t.phone} style={styles.input} keyboardType="phone-pad" />
       <TextInput value={displayName} onChangeText={setDisplayName} placeholder={t.displayName} style={styles.input} />
       <TextInput value={email} onChangeText={setEmail} placeholder={t.email} style={styles.input} keyboardType="email-address" autoCapitalize="none" />

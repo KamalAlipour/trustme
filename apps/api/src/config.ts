@@ -36,6 +36,8 @@ export const apiConfigSchema = z.object({
   rateLimitMax: integer.default(60),
   failoverMarkerPath: z.string().default('/etc/trustme/FAILED_OVER'),
   mediaStorageDir: z.string().default('/var/lib/trustme/media'),
+  googleOAuthClientIds: z.string().optional().transform((value) => value?.split(',').map((id) => id.trim()).filter(Boolean)),
+  appleOAuthAudiences: z.string().optional().transform((value) => value?.split(',').map((id) => id.trim()).filter(Boolean)),
   allowedOrigins: z.string().default('').transform((value) => value.split(',').map((origin) => origin.trim()).filter(Boolean)),
 });
 
@@ -71,6 +73,8 @@ export function loadApiConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     rateLimitMax: env.API_RATE_LIMIT_MAX,
     failoverMarkerPath: env.FAILOVER_MARKER_PATH,
     mediaStorageDir: env.MEDIA_STORAGE_DIR,
+    googleOAuthClientIds: env.GOOGLE_OAUTH_CLIENT_IDS,
+    appleOAuthAudiences: env.APPLE_OAUTH_AUDIENCES,
     allowedOrigins: env.API_ALLOWED_ORIGINS,
   });
   if (config.nodeEnv === 'production' && config.emailDelivery === 'log') {

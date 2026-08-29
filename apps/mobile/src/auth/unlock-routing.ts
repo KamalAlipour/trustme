@@ -8,6 +8,7 @@ export type UnlockDecision = {
 
 export function getUnlockDecision(input: {
   storedSession: boolean;
+  pinAvailable?: boolean;
   platform: 'web' | 'native';
   biometricAvailable: boolean;
   refreshState: RefreshState;

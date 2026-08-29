@@ -6,6 +6,7 @@ import bcrypt from 'bcryptjs';
 import { AccountType, AdminRole, Asset, PrismaClient, WithdrawalStatus } from '@trustme/db';
 import { createLoanRequest, postDeposit } from '@trustme/core';
 import { createApp, type ApiDependencies } from '../src/app.js';
+import { HttpError } from '../src/http-error.js';
 import { provisionUser } from '../src/user-provisioning.js';
 import { createMemberJwt } from '../src/member-auth.js';
 import { createAdminJwt } from '../src/admin-auth.js';
@@ -43,6 +44,8 @@ const config = {
   failoverMarkerPath: '/tmp/trustme-marker',
   mediaStorageDir: '/tmp/trustme-media',
   allowedOrigins: [],
+  googleOAuthClientIds: ['google-client'],
+  appleOAuthAudiences: ['as.komasi.trustcoupon'],
 };
 
 async function account(type: AccountType, asset: Asset, userId?: string) {
@@ -63,7 +66,13 @@ async function addSystemAccounts() {
   };
 }
 
-function appFixture(chainProvider?: AdminChainProvider, queueOverride?: ApiDependencies['queue'], configOverride: Partial<typeof config> = {}, captureEmailCode = true) {
+function appFixture(
+  chainProvider?: AdminChainProvider,
+  queueOverride?: ApiDependencies['queue'],
+  configOverride: Partial<typeof config> = {},
+  captureEmailCode = true,
+  socialOverrides: Pick<ApiDependencies, 'verifyGoogleIdToken' | 'verifyAppleIdToken'> = {},
+) {
   const calls: unknown[][] = [];
   const emailCodes = new Map<string, string>();
   const queue = { add: async (...args: unknown[]) => { calls.push(args); return {}; } } as unknown as ApiDependencies['queue'];
@@ -75,6 +84,7 @@ function appFixture(chainProvider?: AdminChainProvider, queueOverride?: ApiDepen
     redis,
     chainProvider,
     ...(captureEmailCode ? { logEmailCode: (email: string, code: string) => emailCodes.set(email, code) } : {}),
+    ...socialOverrides,
   });
   return { app, calls, emailCodes };
 }
@@ -145,6 +155,61 @@ afterAll(async () => {
 });
 
 describe('member API', () => {
+  it('creates and reuses Google identities and requires first-time PIN setup', async () => {
+    const { app } = appFixture(undefined, undefined, {}, true, {
+      verifyGoogleIdToken: async () => ({ subject: 'google-subject', email: 'social@example.com' }),
+    });
+    const first = await request(app).post('/v1/auth/google').set('x-device-label', 'Google device').send({ idToken: 'verified-token' });
+    expect(first.status).toBe(200);
+    expect(first.body.member).toMatchObject({ phone: null, email: 's****@example.com' });
+    expect(await prisma.userIdentity.count()).toBe(1);
+    expect((await request(app).get('/v1/me/security-setup').set('Authorization', `Bearer ${first.body.tokens.accessToken}`)).body.remaining).toEqual(['pin', 'biometric_enrolment']);
+
+    const second = await request(app).post('/v1/auth/google').send({ idToken: 'verified-token' });
+    expect(second.status).toBe(200);
+    expect(second.body.member.id).toBe(first.body.member.id);
+    expect(await prisma.user.count()).toBe(1);
+
+    const pin = await request(app).post('/v1/member/security/pin')
+      .set('Authorization', `Bearer ${first.body.tokens.accessToken}`)
+      .send({ pin: '2468' });
+    expect(pin.status).toBe(204);
+    const duplicate = await request(app).post('/v1/member/security/pin')
+      .set('Authorization', `Bearer ${first.body.tokens.accessToken}`)
+      .send({ pin: '2468' });
+    expect(duplicate.status).toBe(409);
+  });
+
+  it('does not auto-link a social identity by email', async () => {
+    const { app } = appFixture(undefined, undefined, {}, true, {
+      verifyAppleIdToken: async () => ({ subject: 'apple-subject', email: 'taken@example.com' }),
+    });
+    const existing = await request(app).post('/v1/auth/register').send({ phone: '+1555000990', pin: '2468', email: 'taken@example.com' });
+    expect(existing.status).toBe(201);
+    const social = await request(app).post('/v1/auth/apple').send({ idToken: 'verified-token', displayName: 'Apple Member' });
+    expect(social.status).toBe(200);
+    expect(social.body.member.id).not.toBe(existing.body.member.id);
+    expect(social.body.member.email).toBeNull();
+    const identity = await prisma.userIdentity.findUniqueOrThrow({ where: { provider_subject: { provider: 'APPLE', subject: 'apple-subject' } } });
+    expect(identity.email).toBe('taken@example.com');
+  });
+
+  it('returns provider_disabled when a provider has no configured audiences', async () => {
+    const { app } = appFixture(undefined, undefined, { googleOAuthClientIds: [] });
+    const response = await request(app).post('/v1/auth/google').send({ idToken: 'token' });
+    expect(response.status).toBe(503);
+    expect(response.body).toEqual({ error: 'provider_disabled' });
+  });
+
+  it('rejects an invalid verified-provider audience', async () => {
+    const { app } = appFixture(undefined, undefined, {}, true, {
+      verifyGoogleIdToken: async () => { throw new HttpError(401, 'invalid Google identity token'); },
+    });
+    const response = await request(app).post('/v1/auth/google').send({ idToken: 'verified-token' });
+    expect(response.status).toBe(401);
+    expect(response.body).toEqual({ error: 'invalid Google identity token' });
+  });
+
   it('returns the configured withdrawal fee quote and rejects invalid quotes', async () => {
     const { app } = appFixture();
     await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000129', barcodeId: 'api-quote' });

@@ -130,7 +130,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   return await parseResponse(response) as T;
 }
 
-export async function authenticate(path: '/v1/auth/login' | '/v1/auth/register', body: Record<string, unknown>): Promise<AuthResponse> {
+export async function authenticate(path: '/v1/auth/login' | '/v1/auth/register' | '/v1/auth/google' | '/v1/auth/apple', body: Record<string, unknown>): Promise<AuthResponse> {
   const result = await request<AuthResponse>(path, { method: 'POST', auth: 'none', body });
   accessToken = result.tokens.accessToken;
   return result;

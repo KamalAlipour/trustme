@@ -12,7 +12,7 @@ export type UserProvisioningConfig = {
 };
 
 export type UserProvisioningInput = {
-  phoneNumber: string;
+  phoneNumber?: string | null;
   barcodeId?: string;
   aliasName?: string;
   displayName?: string;
@@ -28,6 +28,12 @@ export function isBarcodeUniqueViolation(error: unknown): boolean {
   return Array.isArray(target) ? target.includes('barcodeId') : target === 'barcodeId';
 }
 
+export function isEmailUniqueViolation(error: unknown): boolean {
+  if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') return false;
+  const target = error.meta?.target;
+  return Array.isArray(target) ? target.includes('email') : target === 'email' || target === 'User_email_key';
+}
+
 export async function createUserWithAccounts(
   tx: Prisma.TransactionClient,
   config: UserProvisioningConfig,
@@ -35,7 +41,7 @@ export async function createUserWithAccounts(
 ) {
   const user = await tx.user.create({
     data: {
-      phoneNumber: input.phoneNumber,
+      phoneNumber: input.phoneNumber ?? null,
       barcodeId: input.barcodeId,
       ...(input.aliasName === undefined ? {} : { aliasName: input.aliasName }),
       ...(input.displayName === undefined ? {} : { displayName: input.displayName }),

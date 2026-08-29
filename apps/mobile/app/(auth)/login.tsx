@@ -8,10 +8,11 @@ import { Page } from '../../src/components/Screen';
 import { useTranslation } from '../../src/i18n';
 import { isWebPlatform } from '../../src/lib/platform';
 import { styles } from '../../src/styles';
+import { SocialAuthButtons } from '../../src/components/SocialAuthButtons';
 
 export default function Login() {
   const { t, language, setLanguage } = useTranslation();
-  const { signIn, biometric, ready, member } = useSession();
+  const { signIn, signInWithSocial, biometric, ready, member } = useSession();
   const [phone, setPhone] = useState('');
   const [pin, setPin] = useState('');
   const [error, setError] = useState('');
@@ -53,6 +54,11 @@ export default function Login() {
       <Text style={styles.title}>{t.appName}</Text>
       <Text style={styles.heading}>{t.login}</Text>
       {isWebPlatform() ? <Text style={styles.muted}>{t.browserSessionNotice}</Text> : null}
+      <SocialAuthButtons
+        onError={setError}
+        onGoogleToken={async (idToken) => { await signInWithSocial('google', idToken); router.replace('/'); }}
+        onAppleToken={async (idToken, displayName) => { await signInWithSocial('apple', idToken, displayName); router.replace('/'); }}
+      />
       <TextInput value={phone} onChangeText={setPhone} placeholder={t.phone} style={styles.input} keyboardType="phone-pad" textContentType="telephoneNumber" />
       <PinPad value={pin} onChange={setPin} {...(remaining === 0 ? { onSubmit: submit } : {})} />
       {biometric ? <Text style={styles.muted}>{t.biometricSessionNotice}</Text> : null}

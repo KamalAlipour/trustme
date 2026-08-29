@@ -1,7 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { authenticate, forgetSession, logout, refresh, request, setAccessToken, setSessionExpiredHandler, SessionExpiredError } from '../api/client';
 import type { AuthResponse, Member, SecuritySetup } from '../api/types';
-import { hasStoredCredentials, saveCredentials } from '../lib/storage';
+import { hasStoredCredentials, saveCredentials, saveCredentialsWithoutPin } from '../lib/storage';
 import { biometricAvailable, unlockPin } from '../lib/biometrics';
 import { isWebPlatform } from '../lib/platform';
 import { getUnlockDecision } from './unlock-routing';
@@ -16,6 +16,7 @@ type SessionContextValue = {
   unlockError: boolean;
   signIn: (phone: string, pin: string) => Promise<void>;
   signUp: (phone: string, pin: string, displayName?: string, email?: string) => Promise<AuthResponse>;
+  signInWithSocial: (provider: 'google' | 'apple', idToken: string, displayName?: string) => Promise<void>;
   refreshSetup: () => Promise<SecuritySetup>;
   signOut: () => Promise<void>;
   getStepUpPin: () => Promise<string | null>;
@@ -133,6 +134,15 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       setSetup(await request<SecuritySetup>('/v1/me/security-setup'));
       setUnlockRequired(false);
       return result;
+    },
+    signInWithSocial: async (provider, idToken, displayName) => {
+      const result = await authenticate(`/v1/auth/${provider}`, {
+        idToken,
+        ...(displayName === undefined ? {} : { displayName }),
+      });
+      await saveCredentialsWithoutPin(result.tokens.refreshToken);
+      setMember(result.member);
+      setSetup(await request<SecuritySetup>('/v1/me/security-setup'));
     },
     refreshSetup: async () => {
       const result = await request<SecuritySetup>('/v1/me/security-setup');

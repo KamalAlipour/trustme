@@ -13,6 +13,7 @@ export default function Index() {
   if (setup === null) return <LoadingScreen />;
   const route = getSetupRoute(setup);
   if (route === 'verify-email') return <Redirect href={{ pathname: '/(auth)/verify-email', params: { email: member.email ?? '' } }} />;
+  if (route === 'create-pin') return <Redirect href="/(auth)/create-pin" />;
   if (route === 'security-setup') return <Redirect href="/(auth)/security-setup" />;
   return <Redirect href="/(tabs)" />;
 }

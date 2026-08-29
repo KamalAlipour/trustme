@@ -143,9 +143,14 @@ enum AidRequestStatus {
   REJECTED
 }
 
+enum IdentityProvider {
+  GOOGLE
+  APPLE
+}
+
 model User {
   id                   String              @id @default(uuid()) @db.Uuid
-  phoneNumber          String              @unique
+  phoneNumber          String?             @unique
   barcodeId            String              @unique
   aliasName            String?
   displayName          String?
@@ -184,9 +189,23 @@ model User {
   mediaAssets          MediaAsset[]
   buyerRefunds         RefundRequest[]     @relation("RefundBuyer")
   sellerRefunds        RefundRequest[]     @relation("RefundSeller")
+  identities           UserIdentity[]
 
   @@index([pinResetQuarantineUntil])
   @@index([isDemo])
+}
+
+model UserIdentity {
+  id        String           @id @default(uuid()) @db.Uuid
+  userId    String           @db.Uuid
+  provider  IdentityProvider
+  subject   String
+  email     String?
+  createdAt DateTime         @default(now())
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, subject])
+  @@index([userId])
 }
 
 model MemberDevice {

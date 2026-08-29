@@ -34,4 +34,7 @@ export const styles = StyleSheet.create({
   row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 },
   pill: { borderRadius: 99, backgroundColor: '#E5F2F5', paddingHorizontal: 10, paddingVertical: 5 },
   divider: { height: 1, backgroundColor: colors.border },
+  socialAuthContainer: { gap: 12 },
+  socialAuthAppleButton: { height: 50 },
+  socialAuthAppleButtonBusy: { height: 50, opacity: 0.5 },
 });

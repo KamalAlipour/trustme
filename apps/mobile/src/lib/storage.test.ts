@@ -3,14 +3,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const secureStore = vi.hoisted(() => ({
   WHEN_UNLOCKED_THIS_DEVICE_ONLY: 'when-unlocked',
   setItemAsync: vi.fn(async () => undefined),
-  getItemAsync: vi.fn(async (): Promise<string | null> => 'refresh'),
+  getItemAsync: vi.fn<(key: string) => Promise<string | null>>(async () => 'refresh'),
   deleteItemAsync: vi.fn(async () => undefined),
 }));
 const platform = vi.hoisted(() => ({ OS: 'ios' as string }));
 vi.mock('expo-secure-store', () => secureStore);
 vi.mock('react-native', () => ({ Platform: platform }));
 
-import { clearCredentials, hasSeenManifesto, hasStoredCredentials, markManifestoSeen, readPin, readRefreshToken, saveCredentials, saveRefreshToken } from './storage';
+import { clearCredentials, hasSeenManifesto, hasStoredCredentials, markManifestoSeen, readPin, readRefreshToken, saveCredentials, saveCredentialsWithoutPin, saveRefreshToken } from './storage';
 
 describe('secure credential storage', () => {
   beforeEach(() => {
@@ -35,6 +35,19 @@ describe('secure credential storage', () => {
     secureStore.getItemAsync.mockResolvedValueOnce('1');
     expect(await hasStoredCredentials()).toBe(true);
     expect(secureStore.getItemAsync).toHaveBeenCalledWith('trustcoupon.session');
+  });
+  it('stores a social session without creating an empty PIN', async () => {
+    secureStore.getItemAsync.mockImplementation(async (key: string) => key === 'trustcoupon.pin' ? null : '1');
+    await saveCredentialsWithoutPin('social-refresh');
+    expect(secureStore.setItemAsync).toHaveBeenNthCalledWith(1, 'trustcoupon.refreshToken', 'social-refresh', expect.objectContaining({ requireAuthentication: true }));
+    expect(secureStore.setItemAsync).toHaveBeenNthCalledWith(2, 'trustcoupon.session', '1');
+    expect(secureStore.setItemAsync).not.toHaveBeenCalledWith('trustcoupon.pin', expect.anything(), expect.anything());
+    expect(await hasStoredCredentials()).toBe(true);
+    expect(await readPin()).toBeNull();
+  });
+  it('treats a legacy empty PIN as unavailable', async () => {
+    secureStore.getItemAsync.mockImplementation(async (key: string) => key === 'trustcoupon.pin' ? '' : null);
+    expect(await readPin()).toBeNull();
   });
   it('persists the manifesto flag without protected storage options', async () => {
     secureStore.getItemAsync.mockResolvedValueOnce(null);

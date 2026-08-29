@@ -32,6 +32,16 @@ export async function saveCredentials(refreshToken: string, pin: string): Promis
   await SecureStore.setItemAsync(SESSION_MARKER_KEY, '1');
 }
 
+export async function saveCredentialsWithoutPin(refreshToken: string): Promise<void> {
+  if (isWebPlatform()) {
+    webRefreshToken = refreshToken;
+    webSessionMarker = true;
+    return;
+  }
+  await SecureStore.setItemAsync(REFRESH_TOKEN_KEY, refreshToken, options);
+  await SecureStore.setItemAsync(SESSION_MARKER_KEY, '1');
+}
+
 export async function saveRefreshToken(refreshToken: string): Promise<void> {
   if (isWebPlatform()) {
     webRefreshToken = refreshToken;
@@ -40,14 +50,22 @@ export async function saveRefreshToken(refreshToken: string): Promise<void> {
   await SecureStore.setItemAsync(REFRESH_TOKEN_KEY, refreshToken, options);
 }
 
+export async function savePin(pin: string): Promise<void> {
+  if (isWebPlatform()) {
+    webPin = pin;
+    return;
+  }
+  await SecureStore.setItemAsync(PIN_KEY, pin, options);
+}
+
 export async function readRefreshToken(): Promise<string | null> {
   if (isWebPlatform()) return webRefreshToken;
   return SecureStore.getItemAsync(REFRESH_TOKEN_KEY, options);
 }
 
 export async function readPin(): Promise<string | null> {
-  if (isWebPlatform()) return webPin;
-  return SecureStore.getItemAsync(PIN_KEY, options);
+  const pin = isWebPlatform() ? webPin : await SecureStore.getItemAsync(PIN_KEY, options);
+  return pin === '' ? null : pin;
 }
 
 export async function clearCredentials(): Promise<void> {
