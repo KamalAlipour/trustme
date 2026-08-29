@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hasAllIdentityCaptureSteps, IDENTITY_CAPTURE_STEPS, parseIdentityCaptureSession } from './identity-capture';
+import { hasAllIdentityCaptureSteps, IDENTITY_CAPTURE_STEPS, isIdentityCaptureSessionUnavailable, parseIdentityCaptureSession } from './identity-capture';
 
 describe('identity capture steps', () => {
   it('requires exactly one frame for each server-required step', () => {
@@ -18,5 +18,20 @@ describe('identity capture steps', () => {
     expect(parseIdentityCaptureSession(payload)).toEqual(payload);
     expect(parseIdentityCaptureSession({ ...payload, challengeCode: '123' })).toBeNull();
     expect(parseIdentityCaptureSession({ ...payload, steps: payload.steps.slice(1) })).toBeNull();
+  });
+
+  it('identifies an expired or consumed capture session response', () => {
+    expect(isIdentityCaptureSessionUnavailable({
+      status: 409,
+      message: 'identity capture session is expired or already used',
+    })).toBe(true);
+    expect(isIdentityCaptureSessionUnavailable({
+      status: 409,
+      message: 'identity review already pending',
+    })).toBe(false);
+    expect(isIdentityCaptureSessionUnavailable({
+      status: 400,
+      message: 'identity capture session is expired or already used',
+    })).toBe(false);
   });
 });

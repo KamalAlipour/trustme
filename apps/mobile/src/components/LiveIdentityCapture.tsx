@@ -1,11 +1,11 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { ApiError, request } from '../api/client';
 import { uploadMedia } from '../api/media';
 import { useTranslation } from '../i18n';
 import { styles } from '../styles';
-import { IDENTITY_CAPTURE_STEPS, parseIdentityCaptureSession, type IdentityCaptureSession, type IdentityCaptureStep } from '../lib/identity-capture';
+import { IDENTITY_CAPTURE_STEPS, isIdentityCaptureSessionUnavailable, parseIdentityCaptureSession, type IdentityCaptureSession, type IdentityCaptureStep } from '../lib/identity-capture';
 
 type Props = { onSubmitted: () => Promise<void> };
 
@@ -22,26 +22,36 @@ export function LiveIdentityCapture({ onSubmitted }: Props) {
   const camera = useRef<CameraView>(null);
   const [session, setSession] = useState<IdentityCaptureSession | null>(null);
   const [stepIndex, setStepIndex] = useState(0);
+  const [starting, setStarting] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [captured, setCaptured] = useState<Set<IdentityCaptureStep>>(new Set());
 
-  useEffect(() => {
-    let active = true;
-    void request('/v1/me/identity/live-capture-session', { method: 'POST' })
-      .then((value) => {
-        const parsed = parseIdentityCaptureSession(value);
-        if (parsed === null) throw new Error('invalid identity capture session');
-        if (active) setSession(parsed);
-      })
-      .catch((cause: unknown) => {
-        if (active) setError(cause instanceof ApiError ? cause.message : t.identityCaptureError);
-      });
-    return () => { active = false; };
-  }, [t.identityCaptureError]);
-
   const currentStep = session?.steps[stepIndex];
+  const startSession = async () => {
+    setStarting(true);
+    setSession(null);
+    setStepIndex(0);
+    setCaptured(new Set());
+    setError('');
+    try {
+      const value = await request('/v1/me/identity/live-capture-session', { method: 'POST' });
+      const parsed = parseIdentityCaptureSession(value);
+      if (parsed === null) throw new Error('invalid identity capture session');
+      setSession(parsed);
+    } catch (cause: unknown) {
+      setError(cause instanceof ApiError ? cause.message : t.identityCaptureError);
+    } finally {
+      setStarting(false);
+    }
+  };
+  const resetExpiredSession = () => {
+    setSession(null);
+    setStepIndex(0);
+    setCaptured(new Set());
+    setError(t.identityCaptureSessionExpired);
+  };
   const capture = async () => {
     if (session === null || currentStep === undefined || camera.current === null) return;
     setError('');
@@ -53,7 +63,11 @@ export function LiveIdentityCapture({ onSubmitted }: Props) {
       setCaptured((previous) => new Set(previous).add(currentStep));
       setStepIndex((index) => index + 1);
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : t.uploadFailed);
+      if (isIdentityCaptureSessionUnavailable(cause)) {
+        resetExpiredSession();
+      } else {
+        setError(cause instanceof ApiError ? cause.message : t.uploadFailed);
+      }
     } finally {
       setCapturing(false);
     }
@@ -66,12 +80,23 @@ export function LiveIdentityCapture({ onSubmitted }: Props) {
       await request('/v1/me/identity/manual-review', { method: 'POST', body: { captureSessionId: session.id } });
       await onSubmitted();
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : t.unknownError);
+      if (isIdentityCaptureSessionUnavailable(cause)) {
+        resetExpiredSession();
+      } else {
+        setError(cause instanceof ApiError ? cause.message : t.unknownError);
+      }
     } finally {
       setSubmitting(false);
     }
   };
-  if (session === null) return <Text style={error ? styles.danger : styles.muted}>{error || t.identityCaptureStarting}</Text>;
+  if (session === null) return <View style={styles.card}>
+    <Text style={styles.heading}>{t.identityCaptureTitle}</Text>
+    <Text style={styles.text}>{t.identityCaptureDescription}</Text>
+    {error ? <Text style={styles.danger}>{error}</Text> : null}
+    <Pressable disabled={starting} onPress={() => void startSession()} style={styles.secondaryButton}>
+      <Text style={styles.secondaryButtonText}>{starting ? t.identityCaptureStarting : error ? t.identityCaptureRestart : t.identityCaptureStart}</Text>
+    </Pressable>
+  </View>;
   if (!permission?.granted) {
     return <View style={styles.card}>
       <Text style={styles.text}>{t.identityCaptureCameraRequired}</Text>

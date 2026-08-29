@@ -8,6 +8,13 @@ export type IdentityCaptureSession = {
   steps: IdentityCaptureStep[];
 };
 
+export function isIdentityCaptureSessionUnavailable(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as { status?: unknown; message?: unknown };
+  return candidate.status === 409
+    && candidate.message === 'identity capture session is expired or already used';
+}
+
 export function hasAllIdentityCaptureSteps(steps: readonly IdentityCaptureStep[]): boolean {
   return IDENTITY_CAPTURE_STEPS.every((step) => steps.includes(step)) && steps.length === IDENTITY_CAPTURE_STEPS.length;
 }

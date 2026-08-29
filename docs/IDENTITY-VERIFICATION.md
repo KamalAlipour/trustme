@@ -97,7 +97,8 @@ Manual identity review uses one server-issued five-minute live camera session.
 Gallery images and ordinary media uploads are refused as identity evidence. The
 session presents a shuffled sequence of a document-front frame, neutral selfie,
 turned-head selfie, and selfie holding the document with a four-digit challenge
-code visible. Reviewers see the code and capture timestamps; there is no
+code written on paper (or shown on another screen) beside the face and ID.
+Reviewers see the code and capture timestamps; there is no
 automated face match or deepfake detector. Anti-replay relies on the challenge
 code, head-turn prompt, and same-session capture window. All captured frames are
 purged when an administrator approves or rejects the review, while the decision
