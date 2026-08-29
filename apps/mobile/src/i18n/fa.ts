@@ -112,6 +112,7 @@ export const fa: Translations = {
   cameraPermission: 'دسترسی دوربین لازم است.',
   allow: 'اجازه',
   accountExists: 'حساب دارید؟ ورود',
+  noAccountRegister: 'حساب ندارید؟ ثبت‌نام',
   pinMismatch: 'رمزها یکسان نیستند.',
   weakPin: 'رمز تکراری یا دنباله‌دار قابل استفاده نیست.',
   sixDigitCode: 'کد شش رقمی',
