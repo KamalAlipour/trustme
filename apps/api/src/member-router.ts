@@ -431,7 +431,9 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
         response.json({ status: current.identityVerificationStatus, verifiedAt: current.identityVerifiedAt });
         return;
       }
-      if (current.identityCheckCount >= 10) throw new HttpError(429, 'identity verification limit reached');
+      const identityWindowStart = new Date(Date.now() - 24 * 60 * 60_000);
+      const recentIdentityChecks = await prisma.identityCheck.count({ where: { userId, createdAt: { gte: identityWindowStart } } });
+      if (recentIdentityChecks >= 10) throw new HttpError(429, 'identity verification limit reached');
       const check = dependencies.checkShahkarMatch ?? checkShahkarMatch;
       const outcome = await check(
         { nationalCode: body.nationalCode, mobile: mobile.data },
@@ -440,8 +442,11 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       const updated = await prisma.$transaction(async (tx) => {
         await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${userId}::uuid FOR UPDATE`;
         const locked = await tx.user.findUniqueOrThrow({ where: { id: userId } });
-        if (locked.identityCheckCount >= 10) throw new HttpError(429, 'identity verification limit reached');
         const now = new Date();
+        const recentChecks = await tx.identityCheck.count({
+          where: { userId, createdAt: { gte: new Date(now.getTime() - 24 * 60 * 60_000) } },
+        });
+        if (recentChecks >= 10) throw new HttpError(429, 'identity verification limit reached');
         const identityStatus = outcome.status === 'MATCH'
           ? IdentityVerificationStatus.VERIFIED
           : outcome.status === 'MISMATCH'
@@ -457,8 +462,12 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
           data.nationalIdHash = nationalIdHash;
           if (locked.kycStatus === KycStatus.UNVERIFIED) data.kycStatus = KycStatus.VERIFIED;
         } else if (outcome.status === 'MISMATCH') {
-          data.identityVerifiedAt = null;
-          data.nationalIdHash = null;
+          if (locked.identityVerificationStatus === IdentityVerificationStatus.VERIFIED) {
+            data.identityVerificationStatus = IdentityVerificationStatus.VERIFIED;
+          } else {
+            data.identityVerifiedAt = null;
+            data.nationalIdHash = null;
+          }
         } else if (locked.identityVerificationStatus === IdentityVerificationStatus.VERIFIED) {
           data.identityVerificationStatus = IdentityVerificationStatus.VERIFIED;
         }

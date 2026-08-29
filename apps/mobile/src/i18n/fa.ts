@@ -96,7 +96,6 @@ export const fa: Translations = {
   devices: 'دستگاه‌ها',
   withdrawal: 'برداشت',
   depositAddress: 'آدرس واریز',
-  kycLater: 'احراز هویت شاهکار در نسخه بعدی اضافه می‌شود.',
   identityVerification: 'احراز هویت',
   identityUnverified: 'اختیاری: بررسی کنید شماره موبایل ایرانی شما به کد ملی‌تان ثبت شده است.',
   identityVerified: 'هویت شما تأیید شده است.',

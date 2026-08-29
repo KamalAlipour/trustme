@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { checkShahkarMatch } from '../src/shahkar.js';
 
 const input = { nationalCode: '3141592659', mobile: '09000000000' };
@@ -20,7 +20,12 @@ describe('Shahkar provider client', () => {
     expect(result).toEqual(expected);
   });
 
-  it.each([401, 403, 429, 500])('maps HTTP %s to inconclusive', async (status) => {
+  it.each([
+    [401, 1],
+    [403, 1],
+    [429, 1],
+    [500, 2],
+  ])('maps HTTP %s to inconclusive without retrying terminal statuses', async (status, expectedCalls) => {
     let calls = 0;
     const result = await checkShahkarMatch(input, {
       ...dependencies,
@@ -30,7 +35,7 @@ describe('Shahkar provider client', () => {
       },
     });
     expect(result).toEqual({ status: 'INCONCLUSIVE', providerCode: status });
-    expect(calls).toBe(2);
+    expect(calls).toBe(expectedCalls);
   });
 
   it('retries an inconclusive result exactly once and returns the final result', async () => {
@@ -63,5 +68,26 @@ describe('Shahkar provider client', () => {
     });
     expect(timedOut.status).toBe('INCONCLUSIVE');
     expect(calls).toBe(2);
+  });
+
+  it('warns with only safe provider failure metadata', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await checkShahkarMatch(input, {
+        ...dependencies,
+        token: 'secret-token',
+        fetchImpl: async () => response({ data: false, success: false, code: 401 }, 401),
+      });
+      expect(warn).toHaveBeenCalledWith('Shahkar identity check inconclusive', {
+        status: 401,
+        error: 'HttpError',
+        providerCode: 401,
+      });
+      expect(warn.mock.calls.flat()).not.toContain('secret-token');
+      expect(warn.mock.calls.flat()).not.toContain(input.nationalCode);
+      expect(warn.mock.calls.flat()).not.toContain(input.mobile);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

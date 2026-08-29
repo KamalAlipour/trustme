@@ -160,6 +160,7 @@ afterAll(async () => {
 
 describe('member API', () => {
   const nationalCode = '3141592659';
+  const mismatchingNationalCode = '2718281820';
   const identityConfig = { shahkarApiToken: 'test-shahkar-token', identityHashPepper: 'identity-test-pepper-that-is-at-least-32-characters' };
 
   it('returns 503 when identity verification is not configured', async () => {
@@ -252,7 +253,31 @@ describe('member API', () => {
     expect((await prisma.user.findUniqueOrThrow({ where: { id: verified.id } })).identityCheckCount).toBe(0);
   });
 
-  it('rejects non-Iranian stored phones and enforces the hard provider-call cap', async () => {
+  it('preserves a verified identity after a later mismatching check', async () => {
+    let calls = 0;
+    const { app } = appFixture(undefined, undefined, identityConfig, true, {
+      checkShahkarMatch: async () => {
+        calls += 1;
+        return calls === 1 ? { status: 'MATCH', providerCode: 0 } : { status: 'MISMATCH', providerCode: 1 };
+      },
+    });
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '09000000011', barcodeId: 'identity-mismatch-verified' });
+    const accessToken = await memberToken(app, '09000000011');
+    const first = await request(app).post('/v1/me/identity').set('Authorization', `Bearer ${accessToken}`).send({ nationalCode });
+    expect(first.body.status).toBe('VERIFIED');
+    const verified = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '09000000011' } });
+    const verifiedAt = verified.identityVerifiedAt;
+    const nationalIdHash = verified.nationalIdHash;
+    const second = await request(app).post('/v1/me/identity').set('Authorization', `Bearer ${accessToken}`).send({ nationalCode: mismatchingNationalCode });
+    expect(second.body.status).toBe('VERIFIED');
+    const afterMismatch = await prisma.user.findUniqueOrThrow({ where: { id: verified.id } });
+    expect(afterMismatch.identityVerificationStatus).toBe('VERIFIED');
+    expect(afterMismatch.identityVerifiedAt).toEqual(verifiedAt);
+    expect(afterMismatch.nationalIdHash).toBe(nationalIdHash);
+    expect(await prisma.identityCheck.count({ where: { userId: verified.id, status: 'MISMATCH' } })).toBe(1);
+  });
+
+  it('rejects non-Iranian stored phones and enforces the rolling 24-hour provider-call cap', async () => {
     let calls = 0;
     const { app } = appFixture(undefined, undefined, identityConfig, true, {
       checkShahkarMatch: async () => {
@@ -268,7 +293,15 @@ describe('member API', () => {
 
     await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '09000000009', barcodeId: 'identity-cap' });
     const capped = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '09000000009' } });
-    await prisma.user.update({ where: { id: capped.id }, data: { identityCheckCount: 10 } });
+    await prisma.identityCheck.createMany({
+      data: Array.from({ length: 10 }, (_, index) => ({
+        userId: capped.id,
+        status: 'MISMATCH' as const,
+        nationalIdHash: `cap-national-hash-${index}`,
+        mobileHash: `cap-mobile-hash-${index}`,
+        createdAt: new Date(),
+      })),
+    });
     const cappedToken = await memberToken(app, '09000000009');
     const cappedResult = await request(app).post('/v1/me/identity').set('Authorization', `Bearer ${cappedToken}`).send({ nationalCode });
     expect(cappedResult.status).toBe(429);

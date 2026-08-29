@@ -94,7 +94,6 @@ export const en = {
   devices: 'Devices',
   withdrawal: 'Withdrawal',
   depositAddress: 'Deposit address',
-  kycLater: 'Identity verification will be added in a later version.',
   identityVerification: 'Identity verification',
   identityUnverified: 'Optional: verify that your Iranian mobile number is registered to your national ID.',
   identityVerified: 'Your identity is verified.',

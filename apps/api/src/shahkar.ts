@@ -25,11 +25,24 @@ const responseSchema = z.object({
   message: z.string().optional(),
 });
 
-function inconclusive(providerCode: number | null = null): IdentityCheckOutcome {
-  return { status: 'INCONCLUSIVE', providerCode };
+type CheckOnceResult = {
+  outcome: IdentityCheckOutcome;
+  retryable: boolean;
+};
+
+function inconclusive(providerCode: number | null = null, retryable = true): CheckOnceResult {
+  return { outcome: { status: 'INCONCLUSIVE', providerCode }, retryable };
 }
 
-async function checkOnce(input: ShahkarCheckInput, dependencies: ShahkarCheckDependencies): Promise<IdentityCheckOutcome> {
+function errorName(error: unknown): string {
+  return error instanceof Error ? error.name : 'UnknownError';
+}
+
+function warnInconclusive(status: number | null, error: string, providerCode: number | null): void {
+  console.warn('Shahkar identity check inconclusive', { status, error, providerCode });
+}
+
+async function checkOnce(input: ShahkarCheckInput, dependencies: ShahkarCheckDependencies): Promise<CheckOnceResult> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), dependencies.timeoutMs ?? 15_000);
   try {
@@ -45,17 +58,26 @@ async function checkOnce(input: ShahkarCheckInput, dependencies: ShahkarCheckDep
     let parsed: unknown;
     try {
       parsed = await response.json();
-    } catch {
-      return inconclusive();
+    } catch (error) {
+      if (!response.ok) warnInconclusive(response.status, errorName(error), null);
+      return inconclusive(null, response.ok || ![401, 403, 429].includes(response.status));
     }
     const body = responseSchema.safeParse(parsed);
-    if (!body.success) return inconclusive();
+    if (!body.success) {
+      if (!response.ok) warnInconclusive(response.status, 'InvalidResponse', null);
+      return inconclusive(null, response.ok || ![401, 403, 429].includes(response.status));
+    }
     const providerCode = body.data.code ?? null;
-    if (!response.ok || body.data.success !== true) return inconclusive(providerCode);
-    if (body.data.data === true) return { status: 'MATCH', providerCode };
-    if ((body.data.message ?? '').trim().length > 0) return { status: 'MISMATCH', providerCode };
+    if (!response.ok) {
+      warnInconclusive(response.status, 'HttpError', providerCode);
+      return inconclusive(providerCode, ![401, 403, 429].includes(response.status));
+    }
+    if (body.data.success !== true) return inconclusive(providerCode);
+    if (body.data.data === true) return { outcome: { status: 'MATCH', providerCode }, retryable: false };
+    if ((body.data.message ?? '').trim().length > 0) return { outcome: { status: 'MISMATCH', providerCode }, retryable: false };
     return inconclusive(providerCode);
-  } catch {
+  } catch (error) {
+    warnInconclusive(null, errorName(error), null);
     return inconclusive();
   } finally {
     clearTimeout(timeout);
@@ -71,7 +93,7 @@ export async function checkShahkarMatch(
   dependencies: ShahkarCheckDependencies,
 ): Promise<IdentityCheckOutcome> {
   const first = await checkOnce(input, dependencies);
-  if (first.status !== 'INCONCLUSIVE') return first;
+  if (first.outcome.status !== 'INCONCLUSIVE' || !first.retryable) return first.outcome;
   await delay(dependencies.retryDelayMs ?? 2_000);
-  return checkOnce(input, dependencies);
+  return (await checkOnce(input, dependencies)).outcome;
 }
