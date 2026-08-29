@@ -29,6 +29,7 @@ import {
   iranMobileSchema,
   nationalCodeSchema,
   microUsdtFromDecimal,
+  phoneNumberSchema,
   readWithdrawalAvailability,
   releaseEscrow,
   repayLoan,
@@ -125,6 +126,12 @@ function forbidden(): never {
 function pathId(value: string): string {
   if (!idSchema.safeParse(value).success) throw new HttpError(404, 'resource not found');
   return value;
+}
+
+function isPhoneUniqueViolation(error: unknown): boolean {
+  if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') return false;
+  const target = error.meta?.target;
+  return Array.isArray(target) ? target.includes('phoneNumber') || target.includes('User_phoneNumber_key') : target === 'phoneNumber' || target === 'User_phoneNumber_key';
 }
 
 async function member(prisma: PrismaClient, userId: string) {
@@ -663,6 +670,30 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       const updated = await prisma.user.update({ where: { id: user.id }, data: { country: body.country } });
       response.json(memberPolicy(updated));
     } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/phone', identityLimiter, async (request, response, next) => {
+    try {
+      const body = z.object({ phone: phoneNumberSchema, pin: fourDigitCodeSchema }).strict().parse(request.body);
+      const userId = memberClaims(request).sub;
+      await verifyMemberPin(prisma, userId, body.pin);
+      const current = await member(prisma, userId);
+      if (current.phoneNumber === body.phone) {
+        response.json(memberPolicy(current));
+        return;
+      }
+      if (current.identityVerificationStatus === IdentityVerificationStatus.VERIFIED) {
+        throw new HttpError(409, 'phone cannot be changed after identity verification');
+      }
+      const updated = await prisma.user.update({ where: { id: userId }, data: { phoneNumber: body.phone } });
+      response.json(memberPolicy(updated));
+    } catch (error) {
+      if (isPhoneUniqueViolation(error)) {
+        next(new HttpError(409, 'phone already registered'));
+        return;
+      }
       next(error);
     }
   });

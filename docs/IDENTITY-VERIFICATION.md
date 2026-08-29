@@ -95,6 +95,10 @@ The ShahkarLite check verifies that the account holder's Iranian national ID
 and mobile number are registered together. Iranian banking counterparties
 require the payout beneficiary to own the registered mobile number used for the
 account, so a successful match is a precondition for bank payout.
+Iranian identity verification requires a mobile number on the account, which a
+member can set themselves from the profile after authorizing the change with
+their PIN. That number is self-declared until Shahkar matches it to the
+member's national code; setting it does not itself create a verified identity.
 
 An `INCONCLUSIVE` provider answer means that the registry did not provide a
 usable answer. It must never be treated as a mismatch or as grounds to block a

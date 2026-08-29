@@ -56,6 +56,7 @@ export const openapiDocument = {
     '/v1/me/disclosures': { get: { responses: { '200': { description: 'Pending balance disclosure requests for the member' } } } },
     '/v1/me/disclosures/{id}/deny': { post: { responses: { '204': { description: 'Disclosure request denied' }, '404': { description: 'Disclosure request not found' }, '409': { description: 'Disclosure request is no longer pending' } } } },
     '/v1/me/country': { put: { responses: { '200': { description: 'Updated account country' }, '409': { description: 'Country cannot change after verification' } } } },
+    '/v1/me/phone': { post: { responses: { '200': { description: 'Updated member profile with masked phone number' }, '400': { description: 'Invalid phone number or PIN' }, '409': { description: 'Phone is already registered or identity verification is complete' }, '423': { description: 'PIN temporarily locked' } } } },
     '/v1/me/barcodes': { get: { responses: { '200': { description: 'Member barcode search results' } } } },
     '/v1/me/barcodes/{barcodeId}': { get: { responses: { '200': { description: 'Member barcode details' }, '404': { description: 'Member not found' } } } },
     '/v1/me/pin': { post: { responses: { '204': { description: 'PIN changed' } } } },

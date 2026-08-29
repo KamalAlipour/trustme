@@ -26,6 +26,7 @@ export const styles = StyleSheet.create({
   buttonText: { color: '#FFFFFF', fontSize: 18, fontWeight: '700' },
   secondaryButton: { borderColor: colors.primary, borderWidth: 1, borderRadius: 12, padding: 14, alignItems: 'center' },
   secondaryButtonText: { color: colors.primary, fontSize: 18, fontWeight: '700' },
+  buttonDisabled: { opacity: 0.45 },
   languageRow: { flexDirection: 'row', justifyContent: 'center', gap: 10 },
   languageButton: { borderColor: colors.border, borderWidth: 1, borderRadius: 12, padding: 10 },
   languageActive: { borderColor: colors.primary, borderWidth: 2, borderRadius: 12, padding: 9 },
