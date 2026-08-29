@@ -17,6 +17,7 @@ import {
   activateGuarantee,
   approveGuarantee,
   barcodeIdSchema,
+  countrySchema,
   cancelEscrow,
   cancelGuarantee,
   createEscrowHold,
@@ -42,6 +43,7 @@ import {
   rejectAidRequest,
   requestAidDocuments,
   donateToCharity,
+  identityPolicyFor,
 } from '@trustme/core';
 import { DomainError } from '@trustme/core';
 import type { QueueLike } from './app.js';
@@ -51,6 +53,7 @@ import type { ApiConfig } from './config.js';
 import { deleteMediaFile, mediaPath, uploadMedia } from './media.js';
 import { hashIdentityValue } from './identity.js';
 import { checkShahkarMatch } from './shahkar.js';
+import { requireIdentityForWithdrawal } from './withdrawal-settings.js';
 
 export type MemberRouterDependencies = {
   config: ApiConfig;
@@ -100,6 +103,12 @@ const aidApprovalSchema = z.object({ approvedCoupons: couponsSchema.optional(), 
 const noteSchema = z.object({ note: z.string().trim().min(1) });
 const idSchema = z.string().uuid();
 
+function shahkarAccess(config: ApiConfig): { shahkar: boolean } {
+  return {
+    shahkar: config.shahkarApiToken !== undefined && config.identityHashPepper !== undefined,
+  };
+}
+
 function parseCoupons(value: string): bigint {
   return BigInt(value);
 }
@@ -139,7 +148,7 @@ async function systemAccount(prisma: PrismaClient, type: AccountType, asset: Ass
 
 async function withdrawalSettings(prisma: PrismaClient) {
   const values = await prisma.systemSetting.findMany({
-    where: { key: { in: ['WITHDRAWAL_BASE_FEE_BPS', 'WITHDRAWAL_MIN_FEE_USDT', 'MIN_WITHDRAWAL_USDT', 'AUTO_APPROVAL_LIMIT_USDT', 'WITHDRAWAL_COOLDOWN_HOURS'] } },
+    where: { key: { in: ['WITHDRAWAL_BASE_FEE_BPS', 'WITHDRAWAL_MIN_FEE_USDT', 'MIN_WITHDRAWAL_USDT', 'AUTO_APPROVAL_LIMIT_USDT', 'WITHDRAWAL_COOLDOWN_HOURS', 'REQUIRE_IDENTITY_FOR_WITHDRAWAL'] } },
   });
   const settings = new Map(values.map((setting) => [setting.key, setting.value]));
   return {
@@ -148,6 +157,7 @@ async function withdrawalSettings(prisma: PrismaClient) {
     minimumWithdrawalMicroUsdt: microUsdtFromDecimal(settings.get('MIN_WITHDRAWAL_USDT') ?? (() => { throw new Error('missing minimum setting'); })()),
     autoApprovalLimitMicroUsdt: microUsdtFromDecimal(settings.get('AUTO_APPROVAL_LIMIT_USDT') ?? '0'),
     cooldownHours: Number(settings.get('WITHDRAWAL_COOLDOWN_HOURS') ?? '168'),
+    requireIdentityVerification: requireIdentityForWithdrawal(settings.get('REQUIRE_IDENTITY_FOR_WITHDRAWAL')),
   };
 }
 
@@ -352,6 +362,20 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
   const mediaLimiter = rateLimit({ windowMs: 60 * 60_000, limit: 20, keyGenerator: (request) => memberClaims(request).sub });
   const identityLimiter = rateLimit({ windowMs: 60 * 60_000, limit: 5, keyGenerator: (request) => memberClaims(request).sub });
   const setupAllowedPaths = new Set(['/security-setup', '/email', '/email/verify', '/logout']);
+  const memberPolicy = (user: Awaited<ReturnType<typeof member>>) => {
+    const policy = user.country === null
+      ? null
+      : identityPolicyFor(user.country, shahkarAccess(dependencies.config));
+    const serialized = serializeMember(user);
+    return {
+      ...serialized,
+      identityVerification: {
+        ...serialized.identityVerification,
+        mode: policy?.mode ?? null,
+        provider: policy?.provider ?? null,
+      },
+    };
+  };
   router.use((request, response, next) => {
     if (setupAllowedPaths.has(request.path)) {
       next();
@@ -407,7 +431,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
 
   router.get('/', async (request, response, next) => {
     try {
-      response.json(serializeMember(await member(prisma, memberClaims(request).sub)));
+      response.json(memberPolicy(await member(prisma, memberClaims(request).sub)));
     } catch (error) {
       next(error);
     }
@@ -419,10 +443,15 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       if (config.shahkarApiToken === undefined || config.identityHashPepper === undefined) {
         throw new HttpError(503, 'identity verification is not configured');
       }
+      const current = await member(prisma, memberClaims(request).sub);
+      if (current.country === null) throw new HttpError(400, 'account country is required');
+      const policy = identityPolicyFor(current.country, shahkarAccess(config));
+      if (policy.mode !== 'AUTOMATED' || policy.provider !== 'SHAHKAR') {
+        throw new HttpError(409, 'shahkar is not the active identity path for this account');
+      }
       const identityHashPepper = config.identityHashPepper;
       const body = z.object({ nationalCode: nationalCodeSchema }).parse(request.body);
       const userId = memberClaims(request).sub;
-      const current = await member(prisma, userId);
       if (current.phoneNumber === null) throw new HttpError(400, 'identity verification requires a phone number');
       const mobile = iranMobileSchema.safeParse(current.phoneNumber);
       if (!mobile.success) throw new HttpError(400, 'phone number must be a valid Iranian mobile number');
@@ -488,11 +517,46 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
     }
   });
 
+  router.get('/identity', async (request, response, next) => {
+    try {
+      const user = await member(prisma, memberClaims(request).sub);
+      const setting = await prisma.systemSetting.findUnique({ where: { key: 'REQUIRE_IDENTITY_FOR_WITHDRAWAL' } });
+      const requireIdentityForWithdrawalValue = requireIdentityForWithdrawal(setting?.value);
+      const policy = user.country === null ? null : identityPolicyFor(user.country, shahkarAccess(dependencies.config));
+      response.json({
+        country: user.country,
+        mode: policy?.mode ?? null,
+        provider: policy?.provider ?? null,
+        providerLabel: policy?.providerLabel ?? null,
+        plannedProviderLabel: policy?.plannedProviderLabel ?? null,
+        status: user.identityVerificationStatus,
+        verifiedAt: user.identityVerifiedAt,
+        requiredForWithdrawal: requireIdentityForWithdrawalValue,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.put('/country', async (request, response, next) => {
+    try {
+      const body = z.object({ country: countrySchema }).strict().parse(request.body);
+      const user = await member(prisma, memberClaims(request).sub);
+      if (user.identityVerificationStatus === IdentityVerificationStatus.VERIFIED) {
+        throw new HttpError(409, 'country cannot be changed after identity verification');
+      }
+      const updated = await prisma.user.update({ where: { id: user.id }, data: { country: body.country } });
+      response.json(memberPolicy(updated));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.patch('/', async (request, response, next) => {
     try {
       const body = z.object({ displayName: displayNameSchema }).parse(request.body);
       const updated = await prisma.user.update({ where: { id: memberClaims(request).sub }, data: { displayName: body.displayName } });
-      response.json(serializeMember(updated));
+      response.json(memberPolicy(updated));
     } catch (error) {
       next(error);
     }
@@ -533,7 +597,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
     try {
       const body = emailCodeSchema.parse(request.body);
       const updated = await verifyAndSetEmail(prisma, memberClaims(request).sub, body.code, dependencies.config.requireEmailVerification);
-      response.json(serializeMember(updated));
+      response.json(memberPolicy(updated));
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         next(new HttpError(409, 'email already in use'));
@@ -587,7 +651,8 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
 
   router.get('/withdrawal-availability', async (request, response, next) => {
     try {
-      const availability = await readWithdrawalAvailability(prisma, memberClaims(request).sub);
+      const settings = await withdrawalSettings(prisma);
+      const availability = await readWithdrawalAvailability(prisma, memberClaims(request).sub, { requireIdentityVerification: settings.requireIdentityVerification });
       response.json({
         balanceCoupons: availability.balanceCoupons.toString(),
         lockedGuaranteeCoupons: availability.lockedGuaranteeCoupons.toString(),
@@ -827,6 +892,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
         minimumWithdrawalMicroUsdt: settings.minimumWithdrawalMicroUsdt,
         autoApprovalLimitMicroUsdt: settings.autoApprovalLimitMicroUsdt,
         cooldownHours: settings.cooldownHours,
+        requireIdentityVerification: settings.requireIdentityVerification,
         vaultAccountId: (await systemAccount(prisma, AccountType.SYSTEM_VAULT_USDT, Asset.USDT)).id,
         feeAccountId: (await systemAccount(prisma, AccountType.SYSTEM_FEE_COLLECTION, Asset.USDT)).id,
         pendingAccountId: (await systemAccount(prisma, AccountType.SYSTEM_WITHDRAWAL_PENDING, Asset.USDT)).id,

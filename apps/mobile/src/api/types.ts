@@ -2,6 +2,7 @@ export type Member = {
   id: string;
   displayName: string | null;
   barcodeId: string;
+  country: string | null;
   phone: string | null;
   email: string | null;
   emailVerified: boolean;
@@ -11,6 +12,8 @@ export type Member = {
   identityVerification: {
     status: 'UNVERIFIED' | 'VERIFIED' | 'MISMATCH' | 'INCONCLUSIVE';
     verifiedAt: string | null;
+    mode?: 'AUTOMATED' | 'MANUAL' | null;
+    provider?: string | null;
   };
 };
 
@@ -89,6 +92,8 @@ export type WithdrawalAvailability = {
   availableToWithdrawCoupons: string;
   blockers: string[];
 };
+export type Country = { code: string; name: string };
+export type IdentityInfo = { country: string | null; mode: 'AUTOMATED' | 'MANUAL' | null; provider: string | null; providerLabel: string | null; plannedProviderLabel: string | null; status: string; verifiedAt: string | null; requiredForWithdrawal: boolean };
 export type Withdrawal = { id: string; status: string; couponsGross: string; grossUsdt: string; feeUsdt: string; netUsdt: string; chainTxHash: string | null; eligibleAt: string };
 export type WithdrawalQuote = {
   grossMicroUsdt: string;

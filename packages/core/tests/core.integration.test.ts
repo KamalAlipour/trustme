@@ -30,7 +30,7 @@ async function fixture(userCount = 2): Promise<Accounts & { users: string[] }> {
   const userAccounts: string[] = [];
   const escrowAccounts: string[] = [];
   for (let index = 0; index < userCount; index += 1) {
-    const user = await prisma.user.create({ data: { phoneNumber: `+1555000${index}`, barcodeId: `bc-${index}` } });
+    const user = await prisma.user.create({ data: { phoneNumber: `+1555000${index}`, barcodeId: `bc-${index}`, identityVerificationStatus: 'VERIFIED', identityVerifiedAt: new Date() } });
     users.push(user.id);
     userAccounts.push((await account(AccountType.USER_COUPON, Asset.COUPON, user.id)).id);
     escrowAccounts.push((await account(AccountType.ESCROW, Asset.COUPON, user.id)).id);

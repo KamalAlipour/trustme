@@ -34,6 +34,7 @@ export const openapiDocument = {
       patch: { responses: { '200': { description: 'Updated member profile' } } },
     },
     '/v1/me/identity': {
+      get: { responses: { '200': { description: 'Country-aware identity policy and status' } } },
       post: {
         description: 'Check the authenticated member’s Iranian national ID against the mobile number stored on the account. Provider messages are not exposed.',
         requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['nationalCode'], properties: { nationalCode: { type: 'string', pattern: '^\\d{10}$' } } } } } },
@@ -45,6 +46,7 @@ export const openapiDocument = {
         },
       },
     },
+    '/v1/me/country': { put: { responses: { '200': { description: 'Updated account country' }, '409': { description: 'Country cannot change after verification' } } } },
     '/v1/me/barcodes': { get: { responses: { '200': { description: 'Member barcode search results' } } } },
     '/v1/me/barcodes/{barcodeId}': { get: { responses: { '200': { description: 'Member barcode details' }, '404': { description: 'Member not found' } } } },
     '/v1/me/pin': { post: { responses: { '204': { description: 'PIN changed' } } } },

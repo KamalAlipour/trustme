@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { getAddress } from 'ethers';
 import { z } from 'zod';
+import { ISO_ALPHA2_CODES } from './countries.js';
 
 export const evmAddressSchema = z.string().refine((value) => {
   try {
@@ -32,6 +33,7 @@ export const iranMobileSchema = z.string()
     if (value.startsWith('0098')) return `0${value.slice(4)}`;
     return `0${value.slice(2)}`;
   });
+export const countrySchema = z.string().trim().transform((value) => value.toUpperCase()).refine((value) => ISO_ALPHA2_CODES.has(value), 'country must be an ISO 3166-1 alpha-2 code');
 export const barcodeIdSchema = z.string().min(1).max(128);
 export const fourDigitCodeSchema = z.string().regex(/^\d{4}$/, 'code must be exactly four digits');
 

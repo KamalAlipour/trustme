@@ -6,6 +6,7 @@ export * from './config.js';
 export * from './openapi.js';
 export * from './app.js';
 export * from './startup-guard.js';
+export * from './withdrawal-settings.js';
 
 export async function startApi(): Promise<void> {
   const config = loadApiConfig();

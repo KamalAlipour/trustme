@@ -7,6 +7,7 @@ type Settings = {
   minimumFeeMicroUsdt: string;
   minimumWithdrawalMicroUsdt: string;
   autoApprovalLimitMicroUsdt: string;
+  requireIdentityForWithdrawal: boolean;
 };
 
 export function SettingsForm({ settings, errorField, errorMessage }: Readonly<{ settings: Settings; errorField?: string | undefined; errorMessage?: string | undefined }>) {
@@ -17,6 +18,10 @@ export function SettingsForm({ settings, errorField, errorMessage }: Readonly<{ 
         <span className="mb-1 block text-sm font-medium">{labels.withdrawalBaseFeeBps}</span>
         <div className="flex items-center gap-3"><input className="w-full" name="withdrawalBaseFeeBps" defaultValue={settings.withdrawalBaseFeeBps} inputMode="numeric" /><span className="whitespace-nowrap text-sm text-slate-500">{settings.withdrawalBaseFeeBps} {labels.feeEquivalent} {bpsToPercent(settings.withdrawalBaseFeeBps)}</span></div>
         {fieldError('withdrawalBaseFeeBps') ? <span className="mt-1 block text-sm text-red-700">{fieldError('withdrawalBaseFeeBps')}</span> : null}
+      </label>
+      <label className="flex items-center gap-3">
+        <input type="checkbox" name="requireIdentityForWithdrawal" defaultChecked={settings.requireIdentityForWithdrawal} />
+        <span className="text-sm font-medium">{labels.requireIdentityForWithdrawal}</span>
       </label>
       <label className="block">
         <span className="mb-1 block text-sm font-medium">{labels.minimumFeeMicroUsdt}</span>

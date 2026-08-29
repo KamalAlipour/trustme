@@ -21,7 +21,7 @@ const lockedGuaranteeStatuses = [GuaranteeStatus.CONFIRMATION_PENDING, Guarantee
 export type LoanInstallmentInput = { dueAt: Date; amountCoupons: bigint };
 export type LoanGuarantorInput = { guarantorId: string; amountCoupons: bigint };
 
-export type WithdrawalBlocker = 'restricted' | 'pending_code' | 'unresolved_claim' | 'pin_reset_quarantine';
+export type WithdrawalBlocker = 'restricted' | 'pending_code' | 'unresolved_claim' | 'pin_reset_quarantine' | 'identity_unverified';
 export type WithdrawalAvailability = {
   balanceCoupons: bigint;
   lockedGuaranteeCoupons: bigint;
@@ -72,7 +72,7 @@ async function guaranteeLockAccount(tx: Prisma.TransactionClient, accountId?: st
   return account;
 }
 
-async function readAvailability(tx: Prisma.TransactionClient | PrismaClient, userId: string): Promise<WithdrawalAvailability> {
+async function readAvailability(tx: Prisma.TransactionClient | PrismaClient, userId: string, options: { requireIdentityVerification: boolean } = { requireIdentityVerification: true }): Promise<WithdrawalAvailability> {
   const account = await tx.ledgerAccount.findFirstOrThrow({ where: { userId, type: AccountType.USER_COUPON, asset: Asset.COUPON } });
   const locked = await tx.guarantee.aggregate({
     where: { guarantorId: userId, status: { in: lockedGuaranteeStatuses } },
@@ -86,13 +86,14 @@ async function readAvailability(tx: Prisma.TransactionClient | PrismaClient, use
     tx.escrowHold.count({ where: { senderId: userId, status: { in: ['ACTIVE', 'LOCKED'] } } }),
     tx.guarantee.count({ where: { guarantorId: userId, status: { in: [GuaranteeStatus.CONFIRMATION_PENDING, GuaranteeStatus.CODE_LOCKED] } } }),
     tx.loan.count({ where: { borrowerId: userId, status: LoanStatus.DEFAULTED, outstandingCoupons: { gt: 0n } } }),
-    tx.user.findUniqueOrThrow({ where: { id: userId }, select: { activeGuaranteeCount: true, pinResetQuarantineUntil: true } }),
+    tx.user.findUniqueOrThrow({ where: { id: userId }, select: { activeGuaranteeCount: true, pinResetQuarantineUntil: true, identityVerificationStatus: true } }),
   ]);
   const blockers: WithdrawalBlocker[] = [];
   if (user.activeGuaranteeCount > 0) blockers.push('restricted');
   if (pendingEscrow > 0 || pendingGuarantee > 0) blockers.push('pending_code');
   if (unresolvedClaim > 0) blockers.push('unresolved_claim');
   if (user.pinResetQuarantineUntil !== null && user.pinResetQuarantineUntil > new Date()) blockers.push('pin_reset_quarantine');
+  if (options.requireIdentityVerification && user.identityVerificationStatus !== 'VERIFIED') blockers.push('identity_unverified');
   const balanceCoupons = account.balance;
   const lockedGuaranteeCoupons = locked._sum.amountCoupons ?? 0n;
   const outstandingDebtCoupons = debt._sum.outstandingCoupons ?? 0n;
@@ -110,15 +111,16 @@ async function readAvailability(tx: Prisma.TransactionClient | PrismaClient, use
   };
 }
 
-export function readWithdrawalAvailability(prisma: PrismaClient, userId: string): Promise<WithdrawalAvailability> {
-  return readAvailability(prisma, userId);
+export function readWithdrawalAvailability(prisma: PrismaClient, userId: string, options?: { requireIdentityVerification?: boolean }): Promise<WithdrawalAvailability> {
+  return readAvailability(prisma, userId, { requireIdentityVerification: options?.requireIdentityVerification ?? true });
 }
 
 export function readWithdrawalAvailabilityInTransaction(
   tx: Prisma.TransactionClient,
   userId: string,
+  options?: { requireIdentityVerification?: boolean },
 ): Promise<WithdrawalAvailability> {
-  return readAvailability(tx, userId);
+  return readAvailability(tx, userId, { requireIdentityVerification: options?.requireIdentityVerification ?? true });
 }
 
 export async function createLoanRequest(

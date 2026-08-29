@@ -237,6 +237,7 @@ export async function requestWithdrawal(
     pendingAccountId: string;
     issuanceAccountId: string;
     cooldownHours: number;
+    requireIdentityVerification: boolean;
   },
 ) {
   evmAddressSchema.parse(input.destinationAddress);
@@ -254,10 +255,11 @@ export async function requestWithdrawal(
     await assertNotRestricted(tx, input.userId);
     await assertNoPinResetQuarantine(tx, input.userId);
     await assertNotDemoAccount(tx, input.userId);
-    const availability = await readWithdrawalAvailabilityInTransaction(tx, input.userId);
+    const availability = await readWithdrawalAvailabilityInTransaction(tx, input.userId, { requireIdentityVerification: input.requireIdentityVerification });
     if (availability.blockers.includes('pending_code')) throw new DomainError('withdrawal blocked by pending code');
     if (availability.blockers.includes('unresolved_claim')) throw new DomainError('withdrawal blocked by unresolved claim');
     if (availability.blockers.includes('pin_reset_quarantine')) throw new DomainError('withdrawal blocked by PIN reset quarantine');
+    if (availability.blockers.includes('identity_unverified')) throw new DomainError('withdrawal blocked by identity verification');
     if (input.couponsGross > availability.availableToWithdrawCoupons) throw new DomainError('withdrawal exceeds available balance');
     if (input.cooldownHours < 0) throw new DomainError('withdrawal cooldown must be non-negative');
     const eligibleAt = new Date(Date.now() + input.cooldownHours * 60 * 60 * 1000);

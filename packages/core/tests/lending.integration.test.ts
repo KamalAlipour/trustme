@@ -17,7 +17,7 @@ import {
 const prisma = new PrismaClient();
 
 async function user(barcodeId: string, isDemo = false) {
-  const created = await prisma.user.create({ data: { phoneNumber: `+1555${barcodeId}`, barcodeId, isDemo } });
+  const created = await prisma.user.create({ data: { phoneNumber: `+1555${barcodeId}`, barcodeId, isDemo, identityVerificationStatus: 'VERIFIED', identityVerifiedAt: new Date() } });
   const account = await prisma.ledgerAccount.create({ data: { userId: created.id, type: AccountType.USER_COUPON, asset: Asset.COUPON } });
   const escrowAccount = await prisma.ledgerAccount.create({ data: { userId: created.id, type: AccountType.ESCROW, asset: Asset.COUPON } });
   return { ...created, account, escrowAccount };
@@ -78,6 +78,7 @@ function withdrawalInput(fixture: Awaited<ReturnType<typeof setup>>, member: Awa
     pendingAccountId: fixture.pending.id,
     issuanceAccountId: fixture.issuance.id,
     cooldownHours: 168,
+    requireIdentityVerification: true,
   };
 }
 
@@ -362,5 +363,21 @@ describe('lending domain', () => {
       availableToWithdrawCoupons: 9_700n,
       blockers: ['restricted', 'pending_code'],
     });
+  });
+
+  it('gates withdrawals on identity when enabled and permits them when disabled', async () => {
+    const fixture = await setup();
+    await prisma.user.update({
+      where: { id: fixture.borrower.id },
+      data: { identityVerificationStatus: 'UNVERIFIED', identityVerifiedAt: null },
+    });
+    await expect(readWithdrawalAvailability(prisma, fixture.borrower.id)).resolves.toMatchObject({
+      blockers: ['identity_unverified'],
+    });
+    await expect(readWithdrawalAvailability(prisma, fixture.borrower.id, { requireIdentityVerification: false })).resolves.toMatchObject({
+      blockers: [],
+    });
+    await expect(requestWithdrawal(prisma, withdrawalInput(fixture, fixture.borrower))).rejects.toThrow('withdrawal blocked by identity verification');
+    await expect(requestWithdrawal(prisma, { ...withdrawalInput(fixture, fixture.borrower), requireIdentityVerification: false })).resolves.toBeDefined();
   });
 });
