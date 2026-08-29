@@ -14,6 +14,7 @@ export function Shell({ children, session }: Readonly<{ children: React.ReactNod
           <nav className="flex items-center gap-4 text-sm">
             <Link href="/">{labels.overview}</Link>
             <Link href="/withdrawals">{labels.withdrawals}</Link>
+            <Link href="/identity-reviews">{labels.identityReviews}</Link>
             <Link href="/ledger">{labels.ledger}</Link>
             {session.role === 'ADMIN' ? <Link href="/settings">{labels.settings}</Link> : null}
             <span className="text-slate-500">{session.username} ({session.role})</span>

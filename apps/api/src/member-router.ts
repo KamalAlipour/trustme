@@ -102,6 +102,10 @@ const charityQuerySchema = z.object({ status: z.enum(['PENDING', 'DOCUMENTS_REQU
 const aidApprovalSchema = z.object({ approvedCoupons: couponsSchema.optional(), note: z.string().trim().optional(), pin: fourDigitCodeSchema });
 const noteSchema = z.object({ note: z.string().trim().min(1) });
 const idSchema = z.string().uuid();
+const manualReviewSchema = z.object({
+  documentAssetId: idSchema,
+  selfieAssetId: idSchema,
+}).strict().refine((value) => value.documentAssetId !== value.selfieAssetId, 'document and selfie assets must differ');
 
 function shahkarAccess(config: ApiConfig): { shahkar: boolean } {
   return {
@@ -180,6 +184,22 @@ function serializeWithdrawal(withdrawal: {
     netUsdt: decimalFromMicroUsdt(withdrawal.netMicroUsdt),
     chainTxHash: withdrawal.chainTxHash,
     eligibleAt: withdrawal.eligibleAt,
+  };
+}
+
+function serializeIdentityReview(review: {
+  id: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  createdAt: Date;
+  decidedAt: Date | null;
+  decisionNote: string | null;
+}) {
+  return {
+    id: review.id,
+    status: review.status,
+    submittedAt: review.createdAt,
+    decidedAt: review.decidedAt,
+    decisionNote: review.decisionNote,
   };
 }
 
@@ -519,7 +539,15 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
 
   router.get('/identity', async (request, response, next) => {
     try {
-      const user = await member(prisma, memberClaims(request).sub);
+      const user = await prisma.user.findUniqueOrThrow({
+        where: { id: memberClaims(request).sub },
+        include: {
+          identityReviews: {
+            orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+            take: 1,
+          },
+        },
+      });
       const setting = await prisma.systemSetting.findUnique({ where: { key: 'REQUIRE_IDENTITY_FOR_WITHDRAWAL' } });
       const requireIdentityForWithdrawalValue = requireIdentityForWithdrawal(setting?.value);
       const policy = user.country === null ? null : identityPolicyFor(user.country, shahkarAccess(dependencies.config));
@@ -532,7 +560,57 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
         status: user.identityVerificationStatus,
         verifiedAt: user.identityVerifiedAt,
         requiredForWithdrawal: requireIdentityForWithdrawalValue,
+        review: user.identityReviews[0] === undefined ? null : serializeIdentityReview(user.identityReviews[0]),
       });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/identity/manual-review', identityLimiter, async (request, response, next) => {
+    try {
+      const current = await member(prisma, memberClaims(request).sub);
+      if (current.country === null) throw new HttpError(400, 'account country is required');
+      const policy = identityPolicyFor(current.country, shahkarAccess(dependencies.config));
+      if (policy.mode !== 'MANUAL') throw new HttpError(409, 'manual identity review is not the active identity path for this account');
+      if (current.identityVerificationStatus === IdentityVerificationStatus.VERIFIED) {
+        throw new HttpError(409, 'identity is already verified');
+      }
+      const pending = await prisma.identityReview.findFirst({
+        where: { userId: current.id, status: 'PENDING' },
+      });
+      if (pending !== null) throw new HttpError(409, 'identity review already pending');
+      const body = manualReviewSchema.parse(request.body);
+      const [document, selfie] = await Promise.all([
+        prisma.mediaAsset.findUnique({
+          where: { id: body.documentAssetId },
+          include: { identityReviewDocuments: { select: { id: true } }, identityReviewSelfies: { select: { id: true } } },
+        }),
+        prisma.mediaAsset.findUnique({
+          where: { id: body.selfieAssetId },
+          include: { identityReviewDocuments: { select: { id: true } }, identityReviewSelfies: { select: { id: true } } },
+        }),
+      ]);
+      if (
+        document === null || selfie === null
+        || document.ownerId !== current.id || selfie.ownerId !== current.id
+      ) throw new HttpError(403, 'forbidden');
+      if (
+        document.kind !== 'IMAGE' || selfie.kind !== 'IMAGE'
+        || document.refundRequestId !== null || document.aidRequestId !== null
+        || document.identityReviewDocuments.length > 0 || document.identityReviewSelfies.length > 0
+        || selfie.refundRequestId !== null || selfie.aidRequestId !== null
+        || selfie.identityReviewDocuments.length > 0 || selfie.identityReviewSelfies.length > 0
+      ) throw new HttpError(403, 'forbidden');
+      const review = await prisma.identityReview.create({
+        data: {
+          userId: current.id,
+          country: current.country,
+          documentAssetId: document.id,
+          selfieAssetId: selfie.id,
+        },
+      });
+      response.status(201).json(serializeIdentityReview(review));
     } catch (error) {
       next(error);
     }
