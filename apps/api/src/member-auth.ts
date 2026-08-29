@@ -204,8 +204,6 @@ export function serializeMember(user: {
     identityVerification: {
       status: user.identityVerificationStatus,
       verifiedAt: user.identityVerifiedAt,
-      mode: null,
-      provider: null,
     },
   };
 }

@@ -12,8 +12,8 @@ export type Member = {
   identityVerification: {
     status: 'UNVERIFIED' | 'VERIFIED' | 'MISMATCH' | 'INCONCLUSIVE';
     verifiedAt: string | null;
-    mode: 'AUTOMATED' | 'MANUAL' | null;
-    provider: string | null;
+    mode?: 'AUTOMATED' | 'MANUAL' | null;
+    provider?: string | null;
   };
 };
 

@@ -10,7 +10,7 @@ import { Page, LoadingScreen } from '../../src/components/Screen';
 import { formatCoupons, formatDate, formatMicroUsdt } from '../../src/lib/format';
 import { useTranslation } from '../../src/i18n';
 import { styles } from '../../src/styles';
-import { ISO_ALPHA2_COUNTRIES } from '../../../../packages/core/src/countries.js';
+import { ISO_ALPHA2_COUNTRIES } from '../../src/lib/countries';
 
 export default function Profile() {
   const { t, language, setLanguage } = useTranslation();

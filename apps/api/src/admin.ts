@@ -29,6 +29,7 @@ import type { QueueLike } from './app.js';
 import { adminClaims, createAdminJwt, requireAdmin, requireRole, verifyAdminPassword } from './admin-auth.js';
 import type { ApiConfig } from './config.js';
 import { HttpError } from './http-error.js';
+import { requireIdentityForWithdrawal } from './withdrawal-settings.js';
 
 export type AdminChainProvider = {
   getBlockNumber(): Promise<number>;
@@ -153,7 +154,7 @@ async function readAdminSettings(prisma: PrismaClient) {
     minimumFeeMicroUsdt: microUsdtFromDecimal(values.get('WITHDRAWAL_MIN_FEE_USDT') ?? '0').toString(),
     minimumWithdrawalMicroUsdt: microUsdtFromDecimal(values.get('MIN_WITHDRAWAL_USDT') ?? '0').toString(),
     autoApprovalLimitMicroUsdt: microUsdtFromDecimal(values.get('AUTO_APPROVAL_LIMIT_USDT') ?? '0').toString(),
-    requireIdentityForWithdrawal: (values.get('REQUIRE_IDENTITY_FOR_WITHDRAWAL') ?? 'true') === 'true',
+    requireIdentityForWithdrawal: requireIdentityForWithdrawal(values.get('REQUIRE_IDENTITY_FOR_WITHDRAWAL')),
   };
 }
 

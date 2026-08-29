@@ -53,5 +53,3 @@ const isoAlpha2CountryRows: readonly (readonly [string, string])[] = [
 
 export const ISO_ALPHA2_COUNTRIES: readonly { code: string; name: string }[] =
   isoAlpha2CountryRows.map(([code, name]) => ({ code, name }));
-
-export const ISO_ALPHA2_CODES: ReadonlySet<string> = new Set(ISO_ALPHA2_COUNTRIES.map(({ code }) => code));

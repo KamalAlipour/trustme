@@ -53,6 +53,7 @@ import type { ApiConfig } from './config.js';
 import { deleteMediaFile, mediaPath, uploadMedia } from './media.js';
 import { hashIdentityValue } from './identity.js';
 import { checkShahkarMatch } from './shahkar.js';
+import { requireIdentityForWithdrawal } from './withdrawal-settings.js';
 
 export type MemberRouterDependencies = {
   config: ApiConfig;
@@ -102,6 +103,12 @@ const aidApprovalSchema = z.object({ approvedCoupons: couponsSchema.optional(), 
 const noteSchema = z.object({ note: z.string().trim().min(1) });
 const idSchema = z.string().uuid();
 
+function shahkarAccess(config: ApiConfig): { shahkar: boolean } {
+  return {
+    shahkar: config.shahkarApiToken !== undefined && config.identityHashPepper !== undefined,
+  };
+}
+
 function parseCoupons(value: string): bigint {
   return BigInt(value);
 }
@@ -150,7 +157,7 @@ async function withdrawalSettings(prisma: PrismaClient) {
     minimumWithdrawalMicroUsdt: microUsdtFromDecimal(settings.get('MIN_WITHDRAWAL_USDT') ?? (() => { throw new Error('missing minimum setting'); })()),
     autoApprovalLimitMicroUsdt: microUsdtFromDecimal(settings.get('AUTO_APPROVAL_LIMIT_USDT') ?? '0'),
     cooldownHours: Number(settings.get('WITHDRAWAL_COOLDOWN_HOURS') ?? '168'),
-    requireIdentityVerification: (settings.get('REQUIRE_IDENTITY_FOR_WITHDRAWAL') ?? 'true') === 'true',
+    requireIdentityVerification: requireIdentityForWithdrawal(settings.get('REQUIRE_IDENTITY_FOR_WITHDRAWAL')),
   };
 }
 
@@ -358,9 +365,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
   const memberPolicy = (user: Awaited<ReturnType<typeof member>>) => {
     const policy = user.country === null
       ? null
-      : identityPolicyFor(user.country, {
-        shahkar: dependencies.config.shahkarApiToken !== undefined && dependencies.config.identityHashPepper !== undefined,
-      });
+      : identityPolicyFor(user.country, shahkarAccess(dependencies.config));
     const serialized = serializeMember(user);
     return {
       ...serialized,
@@ -440,7 +445,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       }
       const current = await member(prisma, memberClaims(request).sub);
       if (current.country === null) throw new HttpError(400, 'account country is required');
-      const policy = identityPolicyFor(current.country, { shahkar: true });
+      const policy = identityPolicyFor(current.country, shahkarAccess(config));
       if (policy.mode !== 'AUTOMATED' || policy.provider !== 'SHAHKAR') {
         throw new HttpError(409, 'shahkar is not the active identity path for this account');
       }
@@ -515,10 +520,9 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
   router.get('/identity', async (request, response, next) => {
     try {
       const user = await member(prisma, memberClaims(request).sub);
-      const requireIdentityForWithdrawal = (await prisma.systemSetting.findUnique({ where: { key: 'REQUIRE_IDENTITY_FOR_WITHDRAWAL' } }))?.value !== 'false';
-      const policy = user.country === null ? null : identityPolicyFor(user.country, {
-        shahkar: dependencies.config.shahkarApiToken !== undefined && dependencies.config.identityHashPepper !== undefined,
-      });
+      const setting = await prisma.systemSetting.findUnique({ where: { key: 'REQUIRE_IDENTITY_FOR_WITHDRAWAL' } });
+      const requireIdentityForWithdrawalValue = requireIdentityForWithdrawal(setting?.value);
+      const policy = user.country === null ? null : identityPolicyFor(user.country, shahkarAccess(dependencies.config));
       response.json({
         country: user.country,
         mode: policy?.mode ?? null,
@@ -527,7 +531,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
         plannedProviderLabel: policy?.plannedProviderLabel ?? null,
         status: user.identityVerificationStatus,
         verifiedAt: user.identityVerifiedAt,
-        requiredForWithdrawal: requireIdentityForWithdrawal,
+        requiredForWithdrawal: requireIdentityForWithdrawalValue,
       });
     } catch (error) {
       next(error);
