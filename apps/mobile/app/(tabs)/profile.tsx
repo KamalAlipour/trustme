@@ -11,8 +11,8 @@ import { formatCoupons, formatDate, formatMicroUsdt } from '../../src/lib/format
 import { useTranslation } from '../../src/i18n';
 import { styles } from '../../src/styles';
 import { ISO_ALPHA2_COUNTRIES } from '../../src/lib/countries';
-import { IdentityReviewPicker } from '../../src/components/IdentityReviewPicker';
 import { isValidEmail, isValidEmailCode, submitEmailAction } from '../../src/lib/email-validation';
+import { LiveIdentityCapture } from '../../src/components/LiveIdentityCapture';
 
 export default function Profile() {
   const { t, language, setLanguage } = useTranslation();
@@ -31,8 +31,6 @@ export default function Profile() {
   const [currentPin, setCurrentPin] = useState('');
   const [newPin, setNewPin] = useState('');
   const [nationalCode, setNationalCode] = useState('');
-  const [documentAssetId, setDocumentAssetId] = useState<string | null>(null);
-  const [selfieAssetId, setSelfieAssetId] = useState<string | null>(null);
   const [country, setCountry] = useState('');
   const [countryLoading, setCountryLoading] = useState(false);
   const [countryPickerOpen, setCountryPickerOpen] = useState(false);
@@ -174,24 +172,6 @@ export default function Profile() {
       setCountryLoading(false);
     }
   };
-  const submitManualReview = async () => {
-    if (documentAssetId === null || selfieAssetId === null) {
-      setError(t.manualReviewPhotosRequired);
-      return;
-    }
-    setError(''); setNotice(''); setIdentityLoading(true);
-    try {
-      await request('/v1/me/identity/manual-review', { method: 'POST', body: { documentAssetId, selfieAssetId } });
-      setDocumentAssetId(null);
-      setSelfieAssetId(null);
-      setNotice(t.manualReviewSubmitted);
-      await invalidate();
-    } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : t.unknownError);
-    } finally {
-      setIdentityLoading(false);
-    }
-  };
   const current = member.data;
   const selectedCountry = country || current?.country || '';
   const filteredCountries = ISO_ALPHA2_COUNTRIES.filter(({ code, name }) => {
@@ -309,13 +289,7 @@ export default function Profile() {
         <Text style={styles.heading}>{t.identityVerification}</Text>
         <Text style={styles.text}>{identityCopy}</Text>
         {current?.country && identity.data?.mode === 'MANUAL' && identity.data.review?.status !== 'PENDING' && identityStatus !== 'VERIFIED' ? <>
-          <IdentityReviewPicker
-            documentAssetId={documentAssetId}
-            selfieAssetId={selfieAssetId}
-            onDocumentChange={setDocumentAssetId}
-            onSelfieChange={setSelfieAssetId}
-          />
-          <Pressable disabled={identityLoading || documentAssetId === null || selfieAssetId === null} onPress={() => void submitManualReview()} style={styles.button}><Text style={styles.buttonText}>{t.submitManualReview}</Text></Pressable>
+          <LiveIdentityCapture onSubmitted={async () => { setNotice(t.manualReviewSubmitted); await invalidate(); }} />
         </> : null}
         {current?.country && identity.data?.mode === 'AUTOMATED' && identityStatus !== 'VERIFIED' ? <>
           <TextInput

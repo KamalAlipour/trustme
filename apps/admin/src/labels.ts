@@ -77,6 +77,8 @@ export const labels = {
   decidedAt: 'Decided',
   document: 'Government ID',
   selfie: 'Selfie',
+  challengeCode: 'Challenge code',
+  frames: 'Capture frames',
   rejectionNote: 'Rejection note',
   apiUnavailable: 'The API is unavailable. Please try again.',
   notAuthorized: 'You are not authorized to perform this action.',

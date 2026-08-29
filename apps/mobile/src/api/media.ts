@@ -21,11 +21,14 @@ export async function uploadMedia(input: {
   uri: string;
   kind: MediaKind;
   mimeType: string;
+  captureSessionId?: string;
+  step?: string;
 }, t: Translations = en): Promise<UploadedMedia> {
-  if (isWebPlatform()) throw new BrowserFileSystemUnavailableError();
-  const info = await FileSystem.getInfoAsync(input.uri, { size: true });
-  if (info.exists && info.size !== undefined && info.size > (input.kind === 'VIDEO' ? MAX_VIDEO_BYTES : MAX_NON_VIDEO_BYTES)) {
-    throw new Error(t[input.kind === 'VIDEO' ? 'fileTooLargeVideo' : 'fileTooLarge']);
+  if (!isWebPlatform()) {
+    const info = await FileSystem.getInfoAsync(input.uri, { size: true });
+    if (info.exists && info.size !== undefined && info.size > (input.kind === 'VIDEO' ? MAX_VIDEO_BYTES : MAX_NON_VIDEO_BYTES)) {
+      throw new Error(t[input.kind === 'VIDEO' ? 'fileTooLargeVideo' : 'fileTooLarge']);
+    }
   }
   const opaqueName = input.kind === 'VIDEO'
     ? 'evidence.mp4'
@@ -36,6 +39,17 @@ export async function uploadMedia(input: {
         : input.mimeType === 'image/png' ? 'evidence.png' : 'evidence.jpg';
   const form = new FormData();
   form.append('kind', input.kind);
-  form.append('file', { uri: input.uri, name: opaqueName, type: input.mimeType } as unknown as Blob);
+  if (isWebPlatform()) {
+    const response = await fetch(input.uri);
+    const blob = await response.blob();
+    if (blob.size > (input.kind === 'VIDEO' ? MAX_VIDEO_BYTES : MAX_NON_VIDEO_BYTES)) {
+      throw new Error(t[input.kind === 'VIDEO' ? 'fileTooLargeVideo' : 'fileTooLarge']);
+    }
+    form.append('file', new File([blob], opaqueName, { type: input.mimeType }));
+  } else {
+    form.append('file', { uri: input.uri, name: opaqueName, type: input.mimeType } as unknown as Blob);
+  }
+  if (input.captureSessionId !== undefined) form.append('captureSessionId', input.captureSessionId);
+  if (input.step !== undefined) form.append('step', input.step);
   return request<UploadedMedia>('/v1/me/media', { method: 'POST', body: form });
 }
