@@ -113,6 +113,11 @@ async function memberToken(app: ReturnType<typeof appFixture>['app'], phone: str
   return login.body.tokens.accessToken as string;
 }
 
+async function memberTokenForUser(userId: string) {
+  const device = await prisma.memberDevice.create({ data: { userId, label: 'test', refreshTokenHash: `${userId}-token`, expiresAt: new Date(Date.now() + 60_000) } });
+  return createMemberJwt(userId, device.id, config.memberJwtSecret, 900);
+}
+
 async function completeMemberSetup(phone: string) {
   const user = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: phone } });
   await prisma.user.update({ where: { id: user.id }, data: { biometricEnrolledAt: new Date(), securitySetupCompletedAt: new Date() } });
@@ -383,6 +388,70 @@ describe('member API', () => {
     const accessToken = await memberToken(app, '+1555000021');
     const result = await request(app).put('/v1/me/country').set('Authorization', `Bearer ${accessToken}`).send({ country: 'ZZ' });
     expect(result.status).toBe(400);
+  });
+
+  it('requires a valid PIN to set an account phone number', async () => {
+    const { app } = appFixture();
+    const user = await prisma.user.create({
+      data: {
+        phoneNumber: null,
+        barcodeId: 'phone-pin',
+        pinHash: await bcrypt.hash('2468', 12),
+        biometricEnrolledAt: new Date(),
+        securitySetupCompletedAt: new Date(),
+      },
+    });
+    const accessToken = await memberTokenForUser(user.id);
+    const missingPin = await request(app).post('/v1/me/phone').set('Authorization', `Bearer ${accessToken}`).send({ phone: '+15550000901' });
+    expect(missingPin.status).toBe(400);
+    const wrongPin = await request(app).post('/v1/me/phone').set('Authorization', `Bearer ${accessToken}`).send({ phone: '+15550000901', pin: '1357' });
+    expect(wrongPin.status).toBe(401);
+  });
+
+  it('rejects duplicate phone numbers and changing a verified identity phone', async () => {
+    const { app } = appFixture();
+    const target = await prisma.user.create({
+      data: {
+        phoneNumber: null,
+        barcodeId: 'phone-duplicate-target',
+        pinHash: await bcrypt.hash('2468', 12),
+        biometricEnrolledAt: new Date(),
+        securitySetupCompletedAt: new Date(),
+      },
+    });
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+15550000902', barcodeId: 'phone-duplicate-owner' });
+    const accessToken = await memberTokenForUser(target.id);
+    const duplicate = await request(app).post('/v1/me/phone').set('Authorization', `Bearer ${accessToken}`).send({ phone: '+15550000902', pin: '2468' });
+    expect(duplicate.status).toBe(409);
+    expect(duplicate.body).toEqual({ error: 'phone already registered' });
+
+    await prisma.user.update({ where: { id: target.id }, data: { identityVerificationStatus: 'VERIFIED' } });
+    const locked = await request(app).post('/v1/me/phone').set('Authorization', `Bearer ${accessToken}`).send({ phone: '+15550000903', pin: '2468' });
+    expect(locked.status).toBe(409);
+    expect(locked.body).toEqual({ error: 'phone cannot be changed after identity verification' });
+  });
+
+  it('sets an account phone number idempotently and returns the member policy', async () => {
+    const { app } = appFixture();
+    const user = await prisma.user.create({
+      data: {
+        phoneNumber: null,
+        barcodeId: 'phone-success',
+        pinHash: await bcrypt.hash('2468', 12),
+        biometricEnrolledAt: new Date(),
+        securitySetupCompletedAt: new Date(),
+      },
+    });
+    const accessToken = await memberTokenForUser(user.id);
+    const body = { phone: '+15550000904', pin: '2468' };
+    const updated = await request(app).post('/v1/me/phone').set('Authorization', `Bearer ${accessToken}`).send(body);
+    expect(updated.status).toBe(200);
+    expect(updated.body).toMatchObject({ id: user.id, phone: '*-*-0904', identityVerification: { status: 'UNVERIFIED' } });
+    expect(await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).toMatchObject({ phoneNumber: body.phone });
+
+    const repeated = await request(app).post('/v1/me/phone').set('Authorization', `Bearer ${accessToken}`).send(body);
+    expect(repeated.status).toBe(200);
+    expect(repeated.body).toMatchObject({ id: user.id, phone: '*-*-0904' });
   });
 
   it('does not call Shahkar for a country whose active path is not Shahkar', async () => {

@@ -8,6 +8,7 @@ import { useSession } from '../../src/auth/session';
 import { useAvailability, useBalance, useIdentity, useInvalidateMoney, useMember } from '../../src/hooks';
 import { Page, LoadingScreen } from '../../src/components/Screen';
 import { formatCoupons, formatDate, formatMicroUsdt } from '../../src/lib/format';
+import { isPlausiblePhoneNumber } from '../../src/lib/phone-validation';
 import { useTranslation } from '../../src/i18n';
 import { styles } from '../../src/styles';
 import { ISO_ALPHA2_COUNTRIES } from '../../src/lib/countries';
@@ -28,6 +29,11 @@ export default function Profile() {
   const [pin, setPin] = useState('');
   const [email, setEmail] = useState('');
   const [emailCode, setEmailCode] = useState('');
+  const [newPhone, setNewPhone] = useState('');
+  const [phonePin, setPhonePin] = useState('');
+  const [phoneBusy, setPhoneBusy] = useState(false);
+  const [phoneFeedback, setPhoneFeedback] = useState('');
+  const [phoneError, setPhoneError] = useState('');
   const [currentPin, setCurrentPin] = useState('');
   const [newPin, setNewPin] = useState('');
   const [nationalCode, setNationalCode] = useState('');
@@ -42,6 +48,7 @@ export default function Profile() {
   const [withdrawalQuoteLoading, setWithdrawalQuoteLoading] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const phoneIsValid = isPlausiblePhoneNumber(newPhone);
   const [emailFeedback, setEmailFeedback] = useState('');
   const [emailError, setEmailError] = useState('');
   const [emailBusy, setEmailBusy] = useState<'send' | 'verify' | null>(null);
@@ -117,6 +124,21 @@ export default function Profile() {
       }, t);
       if (message !== null) setEmailFeedback(message);
     } catch (cause) { setEmailError(cause instanceof ApiError ? cause.message : t.unknownError); } finally { setEmailBusy(null); }
+  };
+  const savePhone = async () => {
+    if (!phoneIsValid || phonePin.length !== 4 || phoneBusy) return;
+    setPhoneFeedback(''); setPhoneError(''); setPhoneBusy(true);
+    try {
+      await request('/v1/me/phone', { method: 'POST', body: { phone: newPhone.trim(), pin: phonePin } });
+      setNewPhone('');
+      setPhonePin('');
+      setPhoneFeedback(t.phoneSaved);
+      await invalidate();
+    } catch (cause) {
+      setPhoneError(cause instanceof ApiError ? cause.message : t.unknownError);
+    } finally {
+      setPhoneBusy(false);
+    }
   };
   const verifyEmail = async () => {
     if (!emailCodeIsValid || emailBusy !== null) return;
@@ -229,7 +251,34 @@ export default function Profile() {
       </View> : null}
       <View style={styles.card}>
         <Text style={styles.heading}>{current?.displayName ?? t.member}</Text>
-        <Text style={styles.text}>{t.phoneLabel}: {current?.phone ? `••••${current.phone.slice(-4)}` : t.phoneUnavailable}</Text>
+        <Text style={styles.text}>{t.phoneLabel}: {current?.phone ?? t.phoneUnavailable}</Text>
+        <TextInput
+          value={newPhone}
+          onChangeText={(value) => { setNewPhone(value); setPhoneFeedback(''); setPhoneError(''); }}
+          placeholder={t.phone}
+          style={styles.input}
+          keyboardType="phone-pad"
+          textContentType="telephoneNumber"
+          autoComplete="tel"
+        />
+        <TextInput
+          value={phonePin}
+          onChangeText={(value) => setPhonePin(value.replace(/\D/g, '').slice(0, 4))}
+          placeholder={t.pin}
+          style={styles.input}
+          keyboardType="number-pad"
+          secureTextEntry
+        />
+        {!phoneIsValid && newPhone.trim().length > 0 ? <Text style={styles.danger}>{t.invalidPhone}</Text> : null}
+        <Pressable
+          disabled={!phoneIsValid || phonePin.length !== 4 || phoneBusy}
+          onPress={() => void savePhone()}
+          style={[styles.secondaryButton, !phoneIsValid || phonePin.length !== 4 || phoneBusy ? styles.buttonDisabled : null]}
+        >
+          <Text style={styles.secondaryButtonText}>{phoneBusy ? t.savingPhone : t.savePhone}</Text>
+        </Pressable>
+        {phoneFeedback ? <Text style={styles.notice}>{phoneFeedback}</Text> : null}
+        {phoneError ? <Text style={styles.danger}>{phoneError}</Text> : null}
         <Text style={styles.text}>{t.emailLabel}: {current?.email ?? t.notRegistered}</Text>
         <Text style={styles.muted}>KYC: {current?.kycStatus}</Text>
         <TextInput value={displayName} onChangeText={setDisplayName} placeholder={t.displayName} style={styles.input} />
