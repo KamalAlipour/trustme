@@ -37,7 +37,7 @@ export default function Register() {
         onGoogleToken={async (idToken) => { await signInWithSocial('google', idToken); router.replace('/'); }}
         onAppleToken={async (idToken, displayName) => { await signInWithSocial('apple', idToken, displayName); router.replace('/'); }}
       />
-      <TextInput value={phone} onChangeText={setPhone} placeholder={t.phone} style={styles.input} keyboardType="phone-pad" />
+      <TextInput value={phone} onChangeText={setPhone} placeholder={t.phone} style={styles.input} keyboardType="phone-pad" textContentType="telephoneNumber" autoComplete="tel" />
       <TextInput value={displayName} onChangeText={setDisplayName} placeholder={t.displayName} style={styles.input} />
       <TextInput value={email} onChangeText={setEmail} placeholder={t.email} style={styles.input} keyboardType="email-address" autoCapitalize="none" />
       <TextInput value={pin} onChangeText={(value) => setPin(value.replace(/\D/g, '').slice(0, 4))} placeholder={t.pin} style={styles.input} keyboardType="number-pad" secureTextEntry />
