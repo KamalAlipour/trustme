@@ -35,6 +35,11 @@ export const styles = StyleSheet.create({
   pill: { borderRadius: 99, backgroundColor: '#E5F2F5', paddingHorizontal: 10, paddingVertical: 5 },
   divider: { height: 1, backgroundColor: colors.border },
   socialAuthContainer: { gap: 12 },
-  socialAuthAppleButton: { height: 50 },
-  socialAuthAppleButtonBusy: { height: 50, opacity: 0.5 },
+  socialAuthRow: { flexDirection: 'row', gap: 12 },
+  socialAuthButton: { flex: 1, height: 50, borderRadius: 12, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, paddingHorizontal: 8 },
+  socialAuthButtonBusy: { opacity: 0.5 },
+  socialAuthGoogleButton: { backgroundColor: '#FFFFFF', borderColor: '#DADCE0', borderWidth: 1 },
+  socialAuthGoogleText: { color: '#1F1F1F', fontSize: 14, fontWeight: '700' },
+  socialAuthAppleButton: { backgroundColor: '#000000' },
+  socialAuthAppleText: { color: '#FFFFFF', fontSize: 14, fontWeight: '700' },
 });
