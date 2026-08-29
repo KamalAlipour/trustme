@@ -95,6 +95,7 @@ export type WithdrawalAvailability = {
 export type Country = { code: string; name: string };
 export type IdentityReview = { status: 'PENDING' | 'APPROVED' | 'REJECTED'; submittedAt: string; decidedAt: string | null; decisionNote: string | null };
 export type IdentityInfo = { country: string | null; mode: 'AUTOMATED' | 'MANUAL' | null; provider: string | null; providerLabel: string | null; plannedProviderLabel: string | null; status: string; verifiedAt: string | null; requiredForWithdrawal: boolean; review: IdentityReview | null };
+export type BalanceDisclosure = { id: string; code: string; requestedAt: string; expiresAt: string };
 export type Withdrawal = { id: string; status: string; couponsGross: string; grossUsdt: string; feeUsdt: string; netUsdt: string; chainTxHash: string | null; eligibleAt: string };
 export type WithdrawalQuote = {
   grossMicroUsdt: string;

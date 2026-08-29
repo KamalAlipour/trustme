@@ -120,6 +120,13 @@ enum IdentityVerificationStatus {
   INCONCLUSIVE
 }
 
+enum BalanceDisclosureStatus {
+  PENDING
+  CONSUMED
+  DENIED
+  EXPIRED
+}
+
 enum IdentityReviewStatus {
   PENDING
   APPROVED
@@ -211,6 +218,7 @@ model User {
   identities           UserIdentity[]
   identityChecks       IdentityCheck[]
   identityReviews      IdentityReview[]
+  balanceDisclosureRequests BalanceDisclosureRequest[]
 
   @@index([pinResetQuarantineUntil])
   @@index([isDemo])
@@ -228,6 +236,21 @@ model IdentityCheck {
   user          User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+}
+
+model BalanceDisclosureRequest {
+  id         String                  @id @default(uuid()) @db.Uuid
+  userId     String                  @db.Uuid
+  code       String?
+  status     BalanceDisclosureStatus @default(PENDING)
+  attempts   Int                     @default(0)
+  expiresAt  DateTime
+  createdAt  DateTime                @default(now())
+  resolvedAt DateTime?
+  user       User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([status, expiresAt])
 }
 
 model IdentityReview {

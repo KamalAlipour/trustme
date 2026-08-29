@@ -6,6 +6,7 @@ import { z } from 'zod';
 import {
   AccountType,
   Asset,
+  BalanceDisclosureStatus,
   EmailVerificationPurpose,
   IdentityVerificationStatus,
   KycStatus,
@@ -562,6 +563,42 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
         requiredForWithdrawal: requireIdentityForWithdrawalValue,
         review: user.identityReviews[0] === undefined ? null : serializeIdentityReview(user.identityReviews[0]),
       });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/disclosures', async (request, response, next) => {
+    try {
+      const now = new Date();
+      await prisma.balanceDisclosureRequest.updateMany({
+        where: { userId: memberClaims(request).sub, status: BalanceDisclosureStatus.PENDING, expiresAt: { lte: now } },
+        data: { status: BalanceDisclosureStatus.EXPIRED, code: null, resolvedAt: now },
+      });
+      const rows = await prisma.balanceDisclosureRequest.findMany({
+        where: { userId: memberClaims(request).sub, status: BalanceDisclosureStatus.PENDING, expiresAt: { gt: now } },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      });
+      response.json({
+        items: rows.flatMap((row) => row.code === null ? [] : [{ id: row.id, code: row.code, requestedAt: row.createdAt, expiresAt: row.expiresAt }]),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/disclosures/:id/deny', async (request, response, next) => {
+    try {
+      const id = pathId(request.params.id);
+      const userId = memberClaims(request).sub;
+      const row = await prisma.balanceDisclosureRequest.findUnique({ where: { id } });
+      if (row === null || row.userId !== userId) throw new HttpError(404, 'disclosure request not found');
+      if (row.status !== BalanceDisclosureStatus.PENDING || row.expiresAt <= new Date()) {
+        if (row.status === BalanceDisclosureStatus.PENDING) await prisma.balanceDisclosureRequest.update({ where: { id }, data: { status: BalanceDisclosureStatus.EXPIRED, code: null, resolvedAt: new Date() } });
+        throw new HttpError(409, 'disclosure request is no longer pending');
+      }
+      await prisma.balanceDisclosureRequest.update({ where: { id }, data: { status: BalanceDisclosureStatus.DENIED, code: null, resolvedAt: new Date() } });
+      response.status(204).send();
     } catch (error) {
       next(error);
     }
