@@ -314,6 +314,22 @@ executed against the servers yet, and production installation, replication,
 promotion, DNS, TLS, and failback remain unverified until an authorized
 operator runs them.
 
+## Browser origins
+
+The API answers browser requests only for origins listed in
+`API_ALLOWED_ORIGINS` (comma-separated, scheme included), for example
+`https://app-trustcoupon.komasi.as,https://komasi.as`. Without it the API sends
+no `Access-Control-Allow-Origin` header, so the browser drops every API call
+from the web app — including the social sign-in token exchange, which then
+returns the user to the login screen with no server-side error to inspect.
+Verify after deployment:
+
+```
+curl -si -X OPTIONS https://<api-host>/v1/auth/google \
+  -H 'Origin: https://<web-host>' \
+  -H 'Access-Control-Request-Method: POST' | grep -i access-control-allow-origin
+```
+
 ## Web Apple sign-in
 
 Web Apple sign-in requires the Services ID to be set as
