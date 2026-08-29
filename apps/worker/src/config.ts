@@ -30,6 +30,10 @@ export const workerConfigSchema = z.object({
   sweepMaxAttempts: positiveInteger.default(5),
   failoverMarkerPath: z.string().default('/etc/trustme/FAILED_OVER'),
   mediaStorageDir: z.string().default('/var/lib/trustme/media'),
+  allowDemoData: z.boolean().default(false),
+  demoChurnIntervalMs: positiveInteger.default(30_000),
+  demoChurnTransfersPerTick: positiveInteger.default(3),
+  demoChurnMaxCoupons: positiveInteger.default(50),
 });
 
 export type WorkerConfig = z.infer<typeof workerConfigSchema>;
@@ -61,5 +65,9 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
     sweepMaxAttempts: env.SWEEP_MAX_ATTEMPTS,
     failoverMarkerPath: env.FAILOVER_MARKER_PATH,
     mediaStorageDir: env.MEDIA_STORAGE_DIR,
+    allowDemoData: env.ALLOW_DEMO_DATA === 'true',
+    demoChurnIntervalMs: env.DEMO_CHURN_INTERVAL_MS,
+    demoChurnTransfersPerTick: env.DEMO_CHURN_TRANSFERS_PER_TICK,
+    demoChurnMaxCoupons: env.DEMO_CHURN_MAX_COUPONS,
   });
 }

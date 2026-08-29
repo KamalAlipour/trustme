@@ -10,6 +10,7 @@ import { ingestOnce } from './ingest.js';
 import { confirmWithdrawal, dispatchWithdrawal } from './dispatch.js';
 import { cleanupUnattachedMedia } from './media-cleanup.js';
 import { expireBalanceDisclosures } from './disclosure-cleanup.js';
+import { churnDemoCoupons } from './demo-churn.js';
 import { fundSweepGas, sweepDepositAddress } from './sweep.js';
 import { CONFIRMATION_QUEUE, createQueues, DISPATCH_QUEUE, INGEST_QUEUE, SWEEP_QUEUE, type WorkerQueues } from './queues.js';
 
@@ -81,6 +82,13 @@ export async function startWorker(config: WorkerConfig = loadWorkerConfig()): Pr
       if (job.name === 'media-cleanup') {
         await expireBalanceDisclosures(prisma);
         return cleanupUnattachedMedia(prisma, config.mediaStorageDir);
+      }
+      if (job.name === 'demo-churn') {
+        return churnDemoCoupons(prisma, {
+          enabled: config.allowDemoData,
+          transfersPerTick: config.demoChurnTransfersPerTick,
+          maxCouponsPerTransfer: config.demoChurnMaxCoupons,
+        }, logger);
       }
       const result = await ingestOnce(prisma, provider, config, logger);
       await Promise.all(result.sweepDepositAddressIds.map((depositAddressId) => queues.sweep.add(
@@ -159,6 +167,13 @@ export async function startWorker(config: WorkerConfig = loadWorkerConfig()): Pr
   const workers = [ingestWorker, dispatchWorker, confirmationWorker, sweepWorker];
   await queues.ingest.add('scan', {}, { jobId: 'chain-ingest-repeat', repeat: { every: 15_000 } });
   await queues.ingest.add('media-cleanup', {}, { jobId: 'media-cleanup-repeat', repeat: { every: 60 * 60_000 } });
+  const demoChurnSchedules = await queues.ingest.getRepeatableJobs();
+  await Promise.all(demoChurnSchedules
+    .filter((job) => job.name === 'demo-churn' && job.id === 'demo-churn-repeat')
+    .map((job) => queues.ingest.removeRepeatableByKey(job.key)));
+  if (config.allowDemoData) {
+    await queues.ingest.add('demo-churn', {}, { jobId: 'demo-churn-repeat', repeat: { every: config.demoChurnIntervalMs } });
+  }
   await queues.sweep.add('sweep-scan', {}, { jobId: 'sweep-scan-repeat', repeat: { every: config.sweepScanIntervalMs } });
   const inFlight = await prisma.withdrawal.findMany({
     where: { status: WithdrawalStatus.PROCESSING, chainTxHash: { not: null } },

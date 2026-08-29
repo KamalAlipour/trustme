@@ -1205,10 +1205,10 @@ describe('public reserves and balance disclosure API', () => {
     const demoIssuance = await account(AccountType.SYSTEM_DEMO_ISSUANCE, Asset.COUPON);
     await prisma.ledgerAccount.update({ where: { id: demoIssuance.id }, data: { balance: -99n } });
     const realTransaction = await prisma.transaction.create({
-      data: { type: TransactionType.TRANSFER, status: 'COMPLETED', amountCoupons: 25n, amountMicroUsdt: 250_000n, externalRef: 'public-real-transfer', userId: real.id },
+      data: { type: TransactionType.TRANSFER, status: 'CONFIRMED', amountCoupons: 25n, amountMicroUsdt: 250_000n, externalRef: 'public-real-transfer', userId: real.id },
     });
     await prisma.transaction.create({
-      data: { type: TransactionType.DEMO_ISSUE, status: 'COMPLETED', amountCoupons: 99n, externalRef: 'public-demo-issue', userId: demo.id },
+      data: { type: TransactionType.DEMO_ISSUE, status: 'CONFIRMED', amountCoupons: 99n, externalRef: 'public-demo-issue', userId: demo.id },
     });
     const realAccount = await prisma.ledgerAccount.findFirstOrThrow({ where: { userId: real.id, type: AccountType.USER_COUPON, asset: Asset.COUPON } });
     await prisma.ledgerAccount.update({ where: { id: realAccount.id }, data: { balance: 25n } });

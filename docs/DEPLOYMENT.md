@@ -259,15 +259,15 @@ explicit operator decision.
 Every mutating command requires the explicit safety gate:
 
 ```text
-ALLOW_DEMO_DATA=true npm run demo-barcodes --workspace @trustme/db -- generate --count 5000
-ALLOW_DEMO_DATA=true npm run demo-barcodes --workspace @trustme/db -- purge --count 500
-ALLOW_DEMO_DATA=true npm run demo-barcodes --workspace @trustme/db -- purge --all
+ALLOW_DEMO_DATA=true npm run demo-barcodes --workspace @trustme/api -- generate --count 5000
+ALLOW_DEMO_DATA=true npm run demo-barcodes --workspace @trustme/api -- purge --count 500
+ALLOW_DEMO_DATA=true npm run demo-barcodes --workspace @trustme/api -- purge --all
 ```
 
 The read-only statistics command is:
 
 ```text
-npm run demo-barcodes --workspace @trustme/db -- stats
+npm run demo-barcodes --workspace @trustme/api -- stats
 ```
 
 Generation accepts `--min-coupons`, `--max-coupons`, and `--batch` (default
@@ -278,6 +278,29 @@ Administrative overview displays demo circulation and user count in a separate
 block from real circulation and solvency. If a member is quarantined after a
 PIN reset, the admin member/withdrawal view shows the quarantine timestamp and
 the `pin_reset_quarantine` blocker.
+
+The exact production generation invocation, from the TrustMe release directory,
+is:
+
+```text
+cd /opt/trustme/current
+ALLOW_DEMO_DATA=true npm run demo-barcodes --workspace @trustme/api -- generate --count 5000 --min-coupons 1 --max-coupons 10 --batch 500
+```
+
+The worker's optional demo circulation job is controlled by these environment
+variables:
+
+```text
+ALLOW_DEMO_DATA=false
+DEMO_CHURN_INTERVAL_MS=30000
+DEMO_CHURN_TRANSFERS_PER_TICK=3
+DEMO_CHURN_MAX_COUPONS=50
+```
+
+When `ALLOW_DEMO_DATA=true`, the worker transfers bounded amounts only between
+funded demo users. Demo coupons are issued from `SYSTEM_DEMO_ISSUANCE`, never
+affect real reserves or solvency, and are always labelled `Demo / Testdata` in
+public output. Turning the flag off removes the scheduled demo churn job.
 
 * distinct TrustMe API and admin hostnames;
 * TLS certificates and certbot policy;
