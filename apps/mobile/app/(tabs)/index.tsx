@@ -7,7 +7,6 @@ import { useSession } from '../../src/auth/session';
 import { Page, LoadingScreen } from '../../src/components/Screen';
 import { useBalance, useDisclosures, useInvalidateMoney, useMember } from '../../src/hooks';
 import { useTranslation } from '../../src/i18n';
-import { getBarcodeQrValue } from '../../src/lib/barcode-payload';
 import { randomFourDigitCode } from '../../src/lib/code';
 import { formatCoupons } from '../../src/lib/format';
 import { colors, styles } from '../../src/styles';
@@ -105,7 +104,7 @@ export default function Home() {
         <Text style={styles.heading}>{t.myBarcode}</Text>
         <Text style={styles.muted}>{t.myBarcodeInstructions}</Text>
         <View style={styles.barcodeQr}>
-          <QRCode value={getBarcodeQrValue(ownBarcodeId)} size={220} color={colors.ink} backgroundColor={colors.card} />
+          <QRCode value={ownBarcodeId} size={220} color={colors.ink} backgroundColor={colors.card} />
           <Text selectable style={{ ...styles.title, textAlign: 'center', letterSpacing: 2 }}>{ownBarcodeId}</Text>
         </View>
         <Pressable onPress={() => void shareBarcode()} style={styles.secondaryButton}>
