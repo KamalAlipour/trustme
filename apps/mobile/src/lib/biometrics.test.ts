@@ -5,7 +5,10 @@ const localAuth = vi.hoisted(() => ({
   isEnrolledAsync: vi.fn(async () => false),
   authenticateAsync: vi.fn(async () => ({ success: true })),
 }));
-const storage = vi.hoisted(() => ({ readPin: vi.fn(async () => '2580'), readRefreshToken: vi.fn(async () => 'refresh') }));
+const storage = vi.hoisted(() => ({
+  readPin: vi.fn<() => Promise<string | null>>(async () => '2580'),
+  readRefreshToken: vi.fn<() => Promise<string | null>>(async () => 'refresh'),
+}));
 vi.mock('expo-local-authentication', () => localAuth);
 vi.mock('./storage', () => storage);
 
@@ -20,5 +23,11 @@ describe('biometric fallback', () => {
     expect(await biometricAvailable()).toBe(false);
     expect(await unlockPin()).toBeNull();
     expect(localAuth.authenticateAsync).not.toHaveBeenCalled();
+  });
+  it('returns no step-up PIN when the protected PIN is absent', async () => {
+    localAuth.isEnrolledAsync.mockResolvedValue(true);
+    storage.readPin.mockResolvedValue(null);
+    expect(await unlockPin()).toBeNull();
+    expect(localAuth.authenticateAsync).toHaveBeenCalled();
   });
 });

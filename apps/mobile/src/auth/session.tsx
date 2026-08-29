@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { authenticate, forgetSession, logout, refresh, request, setAccessToken, setSessionExpiredHandler } from '../api/client';
 import type { AuthResponse, Member, SecuritySetup } from '../api/types';
-import { hasStoredCredentials, saveCredentials } from '../lib/storage';
+import { hasStoredCredentials, saveCredentials, saveCredentialsWithoutPin } from '../lib/storage';
 import { biometricAvailable, unlockPin } from '../lib/biometrics';
 
 type SessionContextValue = {
@@ -86,7 +86,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         idToken,
         ...(displayName === undefined ? {} : { displayName }),
       });
-      await saveCredentials(result.tokens.refreshToken, '');
+      await saveCredentialsWithoutPin(result.tokens.refreshToken);
       setMember(result.member);
       setSetup(await request<SecuritySetup>('/v1/me/security-setup'));
     },

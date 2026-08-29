@@ -28,6 +28,12 @@ export function isBarcodeUniqueViolation(error: unknown): boolean {
   return Array.isArray(target) ? target.includes('barcodeId') : target === 'barcodeId';
 }
 
+export function isEmailUniqueViolation(error: unknown): boolean {
+  if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') return false;
+  const target = error.meta?.target;
+  return Array.isArray(target) ? target.includes('email') : target === 'email' || target === 'User_email_key';
+}
+
 export async function createUserWithAccounts(
   tx: Prisma.TransactionClient,
   config: UserProvisioningConfig,

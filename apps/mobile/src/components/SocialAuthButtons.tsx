@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import { AppleAuthenticationButtonStyle, AppleAuthenticationButtonType } from 'expo-apple-authentication';
+import { ResponseType } from 'expo-auth-session';
 import * as Google from 'expo-auth-session/providers/google';
 import * as WebBrowser from 'expo-web-browser';
 import { useTranslation } from '../i18n';
@@ -25,6 +26,7 @@ export function SocialAuthButtons({
     ...(socialClientIds.web === undefined ? {} : { webClientId: socialClientIds.web }),
     ...(socialClientIds.ios === undefined ? {} : { iosClientId: socialClientIds.ios }),
     ...(socialClientIds.android === undefined ? {} : { androidClientId: socialClientIds.android }),
+    responseType: ResponseType.IdToken,
     selectAccount: true,
   });
   const [busy, setBusy] = useState(false);
@@ -33,7 +35,7 @@ export function SocialAuthButtons({
   useEffect(() => {
     if (googleResponse === null || googleResponse === processedGoogleResponse.current || googleResponse.type !== 'success') return;
     processedGoogleResponse.current = googleResponse;
-    const idToken = googleResponse.authentication?.idToken ?? googleResponse.params?.id_token;
+    const idToken = googleResponse.params?.id_token;
     if (typeof idToken !== 'string') {
       onError(t.socialSignInUnavailable);
       return;
@@ -67,11 +69,11 @@ export function SocialAuthButtons({
 
   if (!googleAvailable && !isAppleSignInAvailable()) return null;
   return (
-    <View style={{ gap: 12 }}>
+    <View style={styles.socialAuthContainer}>
       <View style={styles.divider} />
       <Text style={styles.muted}>{t.or}</Text>
       {googleAvailable ? <Pressable disabled={googleRequest === null || busy} onPress={() => void promptGoogle()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.signInWithGoogle}</Text></Pressable> : null}
-      {isAppleSignInAvailable() ? <AppleAuthentication.AppleAuthenticationButton buttonType={AppleAuthenticationButtonType.SIGN_IN} buttonStyle={AppleAuthenticationButtonStyle.BLACK} cornerRadius={12} style={{ height: 50, opacity: busy ? 0.5 : 1 }} onPress={() => { if (!busy) void signInWithApple(); }} /> : null}
+      {isAppleSignInAvailable() ? <AppleAuthentication.AppleAuthenticationButton buttonType={AppleAuthenticationButtonType.SIGN_IN} buttonStyle={AppleAuthenticationButtonStyle.BLACK} cornerRadius={12} style={busy ? styles.socialAuthAppleButtonBusy : styles.socialAuthAppleButton} onPress={() => { if (!busy) void signInWithApple(); }} /> : null}
     </View>
   );
 }

@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { EmailVerificationPurpose, IdentityProvider, Prisma, PrismaClient } from '@trustme/db';
 import { generateBarcodeId, phoneNumberSchema, fourDigitCodeSchema, withSerializableRetry } from '@trustme/core';
 import { HttpError } from './http-error.js';
-import { createUserWithAccounts, isBarcodeUniqueViolation, provisionUser } from './user-provisioning.js';
+import { createUserWithAccounts, isBarcodeUniqueViolation, isEmailUniqueViolation, provisionUser } from './user-provisioning.js';
 import type { ApiConfig } from './config.js';
 import { verifyAppleIdToken, verifyGoogleIdToken, type VerifiedSocialClaims } from './social-auth.js';
 
@@ -233,6 +233,7 @@ async function socialTokenResponse(
     },
   });
   if (existing) return tokenResponse(prisma, config, existing.userId, label);
+  let omitEmail = false;
   for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
       const user = await withSerializableRetry(prisma, async (tx) => {
@@ -241,7 +242,7 @@ async function socialTokenResponse(
         const created = await createUserWithAccounts(tx, config, {
           phoneNumber: null,
           ...(displayName === undefined ? {} : { displayName }),
-          ...(claims.email === null || emailTaken ? {} : { email: claims.email }),
+          ...(claims.email === null || emailTaken || omitEmail ? {} : { email: claims.email }),
           barcodeId: generateBarcodeId(),
         });
         await tx.userIdentity.create({
@@ -256,6 +257,10 @@ async function socialTokenResponse(
       });
       return tokenResponse(prisma, config, user.id, label);
     } catch (error) {
+      if (isEmailUniqueViolation(error) && claims.email !== null && !omitEmail) {
+        omitEmail = true;
+        continue;
+      }
       if (!isBarcodeUniqueViolation(error) || attempt === 4) throw error;
     }
   }
