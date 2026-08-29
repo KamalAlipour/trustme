@@ -230,7 +230,25 @@ passwords are argon2 hashes, and approval actions are written to an append-only
   member barcode, consumption history, computed fee, destination, explorer link.
 - **Ledger logs**: every transaction and entry, searchable by barcode or id.
 
-## 8. Deployment (isolated, S1 primary + S2 replica)
+## 8. Public reserves and balance disclosure
+
+The unauthenticated `/v1/public/reserves` and `/v1/public/ledger` endpoints
+publish only ledger-derived, anonymized figures and completed transaction
+summaries. Real circulation and demo circulation are separate fields and are
+never added together. The reserves endpoint reuses the existing solvency,
+system-account, and demo-circulation helpers; it does not call the chain.
+
+`/v1/public/barcodes/:barcodeId` exposes only whether a known barcode is active
+or restricted. A stranger must request a one-time disclosure and the owner
+must approve it in the app. The owner sees the six-digit code at
+`/v1/me/disclosures` and may deny a pending request. Confirmation returns the
+owner's balance and anonymized coupon history once only. Disclosure codes are
+stored only as HMAC-SHA256 hashes using `IDENTITY_HASH_PEPPER`; the code and
+any identity, contact, transaction, or address identifiers are never included
+in public responses or logs. The endpoints use expiry, attempt, per-IP, and
+per-barcode limits.
+
+## 9. Deployment (isolated, S1 primary + S2 replica)
 
 | | Server 1 — primary | Server 2 — standby |
 |---|---|---|

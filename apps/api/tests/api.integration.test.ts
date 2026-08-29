@@ -3,7 +3,7 @@ import request from 'supertest';
 import { getAddress, HDNodeWallet } from 'ethers';
 import { Redis } from 'ioredis';
 import bcrypt from 'bcryptjs';
-import { AccountType, AdminRole, Asset, PrismaClient, WithdrawalStatus } from '@trustme/db';
+import { AccountType, AdminRole, Asset, BalanceDisclosureStatus, PrismaClient, TransactionType, WithdrawalStatus } from '@trustme/db';
 import { createLoanRequest, postDeposit } from '@trustme/core';
 import { createApp, type ApiDependencies } from '../src/app.js';
 import { HttpError } from '../src/http-error.js';
@@ -12,6 +12,7 @@ import { createMemberJwt } from '../src/member-auth.js';
 import { createAdminJwt } from '../src/admin-auth.js';
 import type { AdminChainProvider } from '../src/admin.js';
 import { hashIdentityValue } from '../src/identity.js';
+import { disclosureCodeHash } from '../src/balance-disclosure.js';
 
 const prisma = new PrismaClient();
 const token = 'test-service-token';
@@ -159,7 +160,7 @@ beforeAll(async () => {
   await prisma.$connect();
 });
 beforeEach(async () => {
-  await prisma.$executeRawUnsafe('TRUNCATE TABLE "MediaAsset", "RefundRequest", "AidRequest", "CharityAgent", "Charity", "AdminAuditLog", "AdminUser", "Withdrawal", "EscrowHold", "EmailVerification", "MemberDevice", "Contact", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User", "ChainCursor", "SystemSetting" CASCADE');
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "BalanceDisclosureRequest", "MediaAsset", "RefundRequest", "AidRequest", "CharityAgent", "Charity", "AdminAuditLog", "AdminUser", "Withdrawal", "EscrowHold", "EmailVerification", "MemberDevice", "Contact", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User", "ChainCursor", "SystemSetting" CASCADE');
   await prisma.systemSetting.createMany({ data: [
     { key: 'WITHDRAWAL_BASE_FEE_BPS', value: '100' },
     { key: 'WITHDRAWAL_MIN_FEE_USDT', value: '0.20' },
@@ -1188,6 +1189,105 @@ describe('member API', () => {
     expect(paged.body.items).toHaveLength(1);
     expect(paged.body.nextCursor).toBeNull();
     expect((await request(app).get('/v1/me/refunds?role=buyer').set('Authorization', `Bearer ${unrelated.body.tokens.accessToken}`)).body.items).toHaveLength(0);
+  });
+});
+
+describe('public reserves and balance disclosure API', () => {
+  const pepper = 'public-disclosure-test-pepper-that-is-at-least-32-characters';
+
+  async function createPublicUser(phone: string, barcodeId: string) {
+    return provisionUser(prisma, { depositXpub: config.depositXpub }, { phoneNumber: phone, barcodeId });
+  }
+
+  it('publishes separate ledger-derived real and demo reserves and anonymized newest-first feed', async () => {
+    const { app } = appFixture(undefined, undefined, { identityHashPepper: pepper });
+    const systems = await addSystemAccounts();
+    const real = await createPublicUser('+15550003001', 'public-real');
+    const demo = await createPublicUser('+15550003002', 'public-demo');
+    await prisma.user.update({ where: { id: demo.id }, data: { isDemo: true } });
+    const demoIssuance = await account(AccountType.SYSTEM_DEMO_ISSUANCE, Asset.COUPON);
+    await prisma.ledgerAccount.update({ where: { id: demoIssuance.id }, data: { balance: -99n } });
+    const realTransaction = await prisma.transaction.create({
+      data: { type: TransactionType.TRANSFER, status: 'COMPLETED', amountCoupons: 25n, amountMicroUsdt: 250_000n, externalRef: 'public-real-transfer', userId: real.id },
+    });
+    await prisma.transaction.create({
+      data: { type: TransactionType.DEMO_ISSUE, status: 'COMPLETED', amountCoupons: 99n, externalRef: 'public-demo-issue', userId: demo.id },
+    });
+    const realAccount = await prisma.ledgerAccount.findFirstOrThrow({ where: { userId: real.id, type: AccountType.USER_COUPON, asset: Asset.COUPON } });
+    await prisma.ledgerAccount.update({ where: { id: realAccount.id }, data: { balance: 25n } });
+    await prisma.ledgerEntry.create({ data: { transactionId: realTransaction.id, fromAccountId: systems.issuance.id, toAccountId: realAccount.id, amount: 25n, asset: Asset.COUPON } });
+    const reserves = await request(app).get('/v1/public/reserves');
+    expect(reserves.status).toBe(200);
+    expect(reserves.body.real.couponsInCirculation).toBe('0');
+    expect(reserves.body.demo.couponsInCirculation).toBe('99');
+    expect(reserves.body.demo.userCount).toBe(1);
+    const feed = await request(app).get('/v1/public/ledger?limit=1');
+    expect(feed.status).toBe(200);
+    expect(feed.body.items).toHaveLength(1);
+    expect(feed.body.items[0]).toMatchObject({ type: 'TRANSFER', amountCoupons: '25', amountUsdt: '0.250000', isDemo: false });
+    expect(feed.body.items[0]).not.toHaveProperty('userId');
+    expect(feed.body.items[0]).not.toHaveProperty('transactionId');
+  });
+
+  it('returns barcode status only and enforces one-time disclosure confirmation', async () => {
+    const { app } = appFixture(undefined, undefined, { identityHashPepper: pepper });
+    await createPublicUser('+15550003003', 'public-owner');
+    const status = await request(app).get('/v1/public/barcodes/public-owner');
+    expect(status.status).toBe(200);
+    expect(status.body).toEqual({ barcodeId: 'public-owner', isDemo: false, status: 'ACTIVE' });
+    expect(status.body).not.toHaveProperty('balance');
+    const missing = await request(app).get('/v1/public/barcodes/unknown-public');
+    expect(missing.status).toBe(404);
+    const created = await request(app).post('/v1/public/barcodes/public-owner/disclosure');
+    expect(created.status).toBe(201);
+    expect(created.body).toHaveProperty('requestId');
+    expect(created.body).not.toHaveProperty('code');
+    const duplicate = await request(app).post('/v1/public/barcodes/public-owner/disclosure');
+    expect(duplicate.status).toBe(409);
+    const direct = await prisma.balanceDisclosureRequest.create({
+      data: { userId: (await createPublicUser('+15550003006', 'public-owner-two')).id, codeHash: disclosureCodeHash('000001', pepper), expiresAt: new Date(Date.now() + 600_000) },
+    });
+    const ownerToken = await memberToken(app, '+15550003006');
+    const disclosures = await request(app).get('/v1/me/disclosures').set('Authorization', `Bearer ${ownerToken}`);
+    expect(disclosures.status).toBe(200);
+    expect(disclosures.body.items).toEqual([expect.objectContaining({ id: direct.id, code: '000001' })]);
+    await createPublicUser('+15550003004', 'public-stranger');
+    const strangerToken = await memberToken(app, '+15550003004');
+    const denied = await request(app).post(`/v1/me/disclosures/${direct.id}/deny`).set('Authorization', `Bearer ${strangerToken}`);
+    expect(denied.status).toBe(404);
+    const wrong = await request(app).post(`/v1/public/disclosures/${direct.id}/confirm`).send({ code: '999999' });
+    expect(wrong.status).toBe(401);
+    await prisma.balanceDisclosureRequest.update({ where: { id: direct.id }, data: { attempts: 4 } });
+    const fifth = await request(app).post(`/v1/public/disclosures/${direct.id}/confirm`).send({ code: '999999' });
+    expect(fifth.status).toBe(401);
+    expect((await prisma.balanceDisclosureRequest.findUniqueOrThrow({ where: { id: direct.id } })).status).toBe(BalanceDisclosureStatus.DENIED);
+  });
+
+  it('expires requests, denies pending owner requests, and returns confirmation history once', async () => {
+    const { app } = appFixture(undefined, undefined, { identityHashPepper: pepper });
+    const systems = await addSystemAccounts();
+    const owner = await createPublicUser('+15550003005', 'public-history');
+    const ownerAccount = await prisma.ledgerAccount.findFirstOrThrow({ where: { userId: owner.id, type: AccountType.USER_COUPON, asset: Asset.COUPON } });
+    await prisma.ledgerAccount.update({ where: { id: ownerAccount.id }, data: { balance: 75n } });
+    const oldestTransaction = await prisma.transaction.create({ data: { type: TransactionType.TRANSFER, status: 'COMPLETED', amountCoupons: 25n, externalRef: 'public-history-oldest', createdAt: new Date(Date.now() - 60_000) } });
+    const newestTransaction = await prisma.transaction.create({ data: { type: TransactionType.TRANSFER, status: 'COMPLETED', amountCoupons: 50n, externalRef: 'public-history-newest' } });
+    await prisma.ledgerEntry.create({ data: { transactionId: oldestTransaction.id, fromAccountId: systems.issuance.id, toAccountId: ownerAccount.id, amount: 25n, asset: Asset.COUPON } });
+    await prisma.ledgerEntry.create({ data: { transactionId: newestTransaction.id, fromAccountId: systems.issuance.id, toAccountId: ownerAccount.id, amount: 50n, asset: Asset.COUPON } });
+    const expired = await prisma.balanceDisclosureRequest.create({ data: { userId: owner.id, codeHash: disclosureCodeHash('000002', pepper), expiresAt: new Date(Date.now() - 1_000) } });
+    const expiredResponse = await request(app).post(`/v1/public/disclosures/${expired.id}/confirm`).send({ code: '000002' });
+    expect(expiredResponse.status).toBe(410);
+    const pending = await prisma.balanceDisclosureRequest.create({ data: { userId: owner.id, codeHash: disclosureCodeHash('000003', pepper), expiresAt: new Date(Date.now() + 600_000) } });
+    const ownerToken = await memberToken(app, '+15550003005');
+    const denied = await request(app).post(`/v1/me/disclosures/${pending.id}/deny`).set('Authorization', `Bearer ${ownerToken}`);
+    expect(denied.status).toBe(204);
+    const success = await prisma.balanceDisclosureRequest.create({ data: { userId: owner.id, codeHash: disclosureCodeHash('000004', pepper), expiresAt: new Date(Date.now() + 600_000) } });
+    const confirmed = await request(app).post(`/v1/public/disclosures/${success.id}/confirm`).send({ code: '000004' });
+    expect(confirmed.status).toBe(200);
+    expect(confirmed.body).toMatchObject({ barcodeId: 'public-history', balanceCoupons: '75', totalReceivedCoupons: '75' });
+    expect(confirmed.body.transactions[0]).toMatchObject({ amountCoupons: '50', balanceAfterCoupons: '75' });
+    expect(confirmed.body.transactions[1]).toMatchObject({ amountCoupons: '25', balanceAfterCoupons: '25' });
+    const reused = await request(app).post(`/v1/public/disclosures/${success.id}/confirm`).send({ code: '000004' });
+    expect(reused.status).toBe(410);
   });
 });
 

@@ -9,6 +9,7 @@ import { loadWorkerConfig, type WorkerConfig } from './config.js';
 import { ingestOnce } from './ingest.js';
 import { confirmWithdrawal, dispatchWithdrawal } from './dispatch.js';
 import { cleanupUnattachedMedia } from './media-cleanup.js';
+import { expireBalanceDisclosures } from './disclosure-cleanup.js';
 import { fundSweepGas, sweepDepositAddress } from './sweep.js';
 import { CONFIRMATION_QUEUE, createQueues, DISPATCH_QUEUE, INGEST_QUEUE, SWEEP_QUEUE, type WorkerQueues } from './queues.js';
 
@@ -77,7 +78,10 @@ export async function startWorker(config: WorkerConfig = loadWorkerConfig()): Pr
   const ingestWorker = new BullWorker(
     INGEST_QUEUE,
     async (job) => {
-      if (job.name === 'media-cleanup') return cleanupUnattachedMedia(prisma, config.mediaStorageDir);
+      if (job.name === 'media-cleanup') {
+        await expireBalanceDisclosures(prisma);
+        return cleanupUnattachedMedia(prisma, config.mediaStorageDir);
+      }
       const result = await ingestOnce(prisma, provider, config, logger);
       await Promise.all(result.sweepDepositAddressIds.map((depositAddressId) => queues.sweep.add(
         'sweep',
