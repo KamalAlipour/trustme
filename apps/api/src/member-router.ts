@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import express from 'express';
 import rateLimit from 'express-rate-limit';
 import bcrypt from 'bcryptjs';
@@ -8,6 +8,7 @@ import {
   Asset,
   BalanceDisclosureStatus,
   EmailVerificationPurpose,
+  IdentityCaptureStep,
   IdentityVerificationStatus,
   KycStatus,
   Prisma,
@@ -105,9 +106,25 @@ const aidApprovalSchema = z.object({ approvedCoupons: couponsSchema.optional(), 
 const noteSchema = z.object({ note: z.string().trim().min(1) });
 const idSchema = z.string().uuid();
 const manualReviewSchema = z.object({
-  documentAssetId: idSchema,
-  selfieAssetId: idSchema,
-}).strict().refine((value) => value.documentAssetId !== value.selfieAssetId, 'document and selfie assets must differ');
+  captureSessionId: idSchema,
+}).strict();
+const captureSessionSteps = [
+  IdentityCaptureStep.DOCUMENT_FRONT,
+  IdentityCaptureStep.SELFIE_NEUTRAL,
+  IdentityCaptureStep.SELFIE_TURNED,
+  IdentityCaptureStep.SELFIE_WITH_DOCUMENT,
+] as const;
+
+function shuffledCaptureSteps(): IdentityCaptureStep[] {
+  const steps = [...captureSessionSteps];
+  for (let index = steps.length - 1; index > 0; index -= 1) {
+    const swapIndex = randomInt(index + 1);
+    const current = steps[index]!;
+    steps[index] = steps[swapIndex]!;
+    steps[swapIndex] = current;
+  }
+  return steps;
+}
 
 function shahkarAccess(config: ApiConfig): { shahkar: boolean } {
   return {
@@ -575,6 +592,32 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
     }
   });
 
+  router.post('/identity/live-capture-session', identityLimiter, async (request, response, next) => {
+    try {
+      const current = await member(prisma, memberClaims(request).sub);
+      if (current.country === null) throw new HttpError(400, 'account country is required');
+      const policy = identityPolicyFor(current.country, shahkarAccess(dependencies.config));
+      if (policy.mode !== 'MANUAL') throw new HttpError(409, 'live identity capture is not the active identity path for this account');
+      if (current.identityVerificationStatus === IdentityVerificationStatus.VERIFIED) {
+        throw new HttpError(409, 'identity is already verified');
+      }
+      const pending = await prisma.identityReview.findFirst({ where: { userId: current.id, status: 'PENDING' } });
+      if (pending !== null) throw new HttpError(409, 'identity review already pending');
+      const expiresAt = new Date(Date.now() + 5 * 60_000);
+      const session = await prisma.identityCaptureSession.create({
+        data: {
+          userId: current.id,
+          challengeCode: randomInt(1000, 10000).toString(),
+          steps: shuffledCaptureSteps(),
+          expiresAt,
+        },
+      });
+      response.status(201).json({ id: session.id, challengeCode: session.challengeCode, expiresAt: session.expiresAt, steps: session.steps });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get('/disclosures', async (request, response, next) => {
     try {
       const now = new Date();
@@ -620,39 +663,64 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       if (current.identityVerificationStatus === IdentityVerificationStatus.VERIFIED) {
         throw new HttpError(409, 'identity is already verified');
       }
-      const pending = await prisma.identityReview.findFirst({
-        where: { userId: current.id, status: 'PENDING' },
-      });
-      if (pending !== null) throw new HttpError(409, 'identity review already pending');
       const body = manualReviewSchema.parse(request.body);
-      const [document, selfie] = await Promise.all([
-        prisma.mediaAsset.findUnique({
-          where: { id: body.documentAssetId },
-          include: { identityReviewDocuments: { select: { id: true } }, identityReviewSelfies: { select: { id: true } } },
-        }),
-        prisma.mediaAsset.findUnique({
-          where: { id: body.selfieAssetId },
-          include: { identityReviewDocuments: { select: { id: true } }, identityReviewSelfies: { select: { id: true } } },
-        }),
-      ]);
-      if (
-        document === null || selfie === null
-        || document.ownerId !== current.id || selfie.ownerId !== current.id
-      ) throw new HttpError(403, 'forbidden');
-      if (
-        document.kind !== 'IMAGE' || selfie.kind !== 'IMAGE'
-        || document.refundRequestId !== null || document.aidRequestId !== null
-        || document.identityReviewDocuments.length > 0 || document.identityReviewSelfies.length > 0
-        || selfie.refundRequestId !== null || selfie.aidRequestId !== null
-        || selfie.identityReviewDocuments.length > 0 || selfie.identityReviewSelfies.length > 0
-      ) throw new HttpError(403, 'forbidden');
-      const review = await prisma.identityReview.create({
-        data: {
-          userId: current.id,
-          country: current.country,
-          documentAssetId: document.id,
-          selfieAssetId: selfie.id,
-        },
+      const review = await prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT "id" FROM "IdentityCaptureSession" WHERE "id" = ${body.captureSessionId}::uuid FOR UPDATE`;
+        const session = await tx.identityCaptureSession.findUnique({
+          where: { id: body.captureSessionId },
+          include: {
+            mediaAssets: {
+              include: {
+                identityReviewDocuments: { select: { id: true } },
+                identityReviewSelfies: { select: { id: true } },
+              },
+            },
+          },
+        });
+        if (session === null || session.userId !== current.id) throw new HttpError(403, 'forbidden');
+        if (session.consumedAt !== null || session.expiresAt <= new Date()) throw new HttpError(409, 'identity capture session is expired or already used');
+        const pending = await tx.identityReview.findFirst({ where: { userId: current.id, status: 'PENDING' } });
+        if (pending !== null) throw new HttpError(409, 'identity review already pending');
+        const expectedSteps = new Set(session.steps);
+        const assetsByStep = new Map<IdentityCaptureStep, typeof session.mediaAssets[number]>();
+        for (const asset of session.mediaAssets) {
+          if (
+            asset.ownerId !== current.id
+            || asset.kind !== 'IMAGE'
+            || asset.refundRequestId !== null
+            || asset.aidRequestId !== null
+            || asset.captureSessionId !== session.id
+            || asset.captureStep === null
+            || !expectedSteps.has(asset.captureStep)
+            || asset.identityReviewDocuments.length > 0
+            || asset.identityReviewSelfies.length > 0
+          ) throw new HttpError(403, 'forbidden');
+          if (assetsByStep.has(asset.captureStep)) throw new HttpError(400, 'identity capture requires exactly one frame per step');
+          assetsByStep.set(asset.captureStep, asset);
+        }
+        if (expectedSteps.size !== captureSessionSteps.length || assetsByStep.size !== captureSessionSteps.length || captureSessionSteps.some((step) => !assetsByStep.has(step))) {
+          throw new HttpError(400, 'identity capture requires exactly one frame per step');
+        }
+        const document = assetsByStep.get(IdentityCaptureStep.DOCUMENT_FRONT)!;
+        const selfie = assetsByStep.get(IdentityCaptureStep.SELFIE_NEUTRAL)!;
+        const turned = assetsByStep.get(IdentityCaptureStep.SELFIE_TURNED)!;
+        const withDocument = assetsByStep.get(IdentityCaptureStep.SELFIE_WITH_DOCUMENT)!;
+        const review = await tx.identityReview.create({
+          data: {
+            userId: current.id,
+            country: current.country!,
+            captureSessionId: session.id,
+            challengeCode: session.challengeCode,
+            documentAssetId: document.id,
+            selfieAssetId: selfie.id,
+            documentFrontCapturedAt: document.createdAt,
+            selfieNeutralCapturedAt: selfie.createdAt,
+            selfieTurnedCapturedAt: turned.createdAt,
+            selfieWithDocumentCapturedAt: withDocument.createdAt,
+          },
+        });
+        await tx.identityCaptureSession.update({ where: { id: session.id }, data: { consumedAt: new Date() } });
+        return review;
       });
       response.status(201).json(serializeIdentityReview(review));
     } catch (error) {
@@ -1241,20 +1309,54 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
     let uploaded: Awaited<ReturnType<typeof uploadMedia>> | undefined;
     try {
       uploaded = await uploadMedia(request, dependencies.config.mediaStorageDir);
-      const asset = await prisma.mediaAsset.create({
-        data: {
-          ownerId: memberClaims(request).sub,
-          kind: uploaded.kind,
-          mimeType: uploaded.mimeType,
-          byteSize: uploaded.byteSize,
-          sha256: uploaded.sha256,
-          storageKey: uploaded.storageKey,
-        },
-      });
+      const userId = memberClaims(request).sub;
+      if ((uploaded.captureSessionId === undefined) !== (uploaded.captureStep === undefined)) {
+        throw new HttpError(400, 'capture session and step are required together');
+      }
+      if (uploaded.captureSessionId !== undefined && uploaded.captureStep !== undefined && uploaded.kind !== 'IMAGE') {
+        throw new HttpError(400, 'identity capture frames must be images');
+      }
+      const asset = uploaded.captureSessionId === undefined || uploaded.captureStep === undefined
+        ? await prisma.mediaAsset.create({
+          data: {
+            ownerId: userId,
+            kind: uploaded.kind,
+            mimeType: uploaded.mimeType,
+            byteSize: uploaded.byteSize,
+            sha256: uploaded.sha256,
+            storageKey: uploaded.storageKey,
+          },
+        })
+        : await prisma.$transaction(async (tx) => {
+          const captureSessionId = uploaded!.captureSessionId;
+          const captureStep = uploaded!.captureStep;
+          if (captureSessionId === undefined || captureStep === undefined || !idSchema.safeParse(captureSessionId).success) throw new HttpError(400, 'invalid capture session');
+          await tx.$queryRaw`SELECT "id" FROM "IdentityCaptureSession" WHERE "id" = ${captureSessionId}::uuid FOR UPDATE`;
+          const session = await tx.identityCaptureSession.findUnique({ where: { id: captureSessionId } });
+          if (session === null || session.userId !== userId) throw new HttpError(403, 'forbidden');
+          if (session.consumedAt !== null || session.expiresAt <= new Date()) throw new HttpError(409, 'identity capture session is expired or already used');
+          if (!session.steps.includes(captureStep)) throw new HttpError(400, 'capture step is not required for this session');
+          return tx.mediaAsset.create({
+            data: {
+              ownerId: userId,
+              kind: uploaded!.kind,
+              mimeType: uploaded!.mimeType,
+              byteSize: uploaded!.byteSize,
+              sha256: uploaded!.sha256,
+              storageKey: uploaded!.storageKey,
+              captureSessionId: session.id,
+              captureStep,
+            },
+          });
+        });
       response.status(201).json({ id: asset.id, kind: asset.kind, mimeType: asset.mimeType, byteSize: asset.byteSize });
     } catch (error) {
       if (uploaded !== undefined) {
         await deleteMediaFile(dependencies.config.mediaStorageDir, uploaded.storageKey);
+      }
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        next(new HttpError(409, 'capture step already uploaded'));
+        return;
       }
       next(error);
     }

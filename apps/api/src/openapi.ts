@@ -46,11 +46,17 @@ export const openapiDocument = {
         },
       },
     },
+    '/v1/me/identity/live-capture-session': {
+      post: {
+        description: 'Create a five-minute server-issued live identity capture session with a shuffled frame order and challenge code.',
+        responses: { '201': { description: 'Live capture session' }, '400': { description: 'Country is required' }, '409': { description: 'Manual path is unavailable, review is pending, or identity is verified' } },
+      },
+    },
     '/v1/me/identity/manual-review': {
       post: {
-        description: 'Submit government ID and selfie media for manual identity review.',
-        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['documentAssetId', 'selfieAssetId'], properties: { documentAssetId: { type: 'string', format: 'uuid' }, selfieAssetId: { type: 'string', format: 'uuid' } } } } } },
-        responses: { '201': { description: 'Manual identity review submitted' }, '400': { description: 'Country is required' }, '403': { description: 'Media asset is not owned by the member' }, '409': { description: 'Manual review is unavailable, already pending, or identity is verified' } },
+        description: 'Submit all four frames captured in a live identity session for manual review.',
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['captureSessionId'], properties: { captureSessionId: { type: 'string', format: 'uuid' } } } } } },
+        responses: { '201': { description: 'Manual identity review submitted' }, '400': { description: 'Country or required capture frame is missing' }, '403': { description: 'Capture session or frame is not owned by the member' }, '409': { description: 'Manual review is unavailable, expired, already pending, or identity is verified' } },
       },
     },
     '/v1/me/disclosures': { get: { responses: { '200': { description: 'Pending balance disclosure requests for the member' } } } },

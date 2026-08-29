@@ -133,6 +133,13 @@ enum IdentityReviewStatus {
   REJECTED
 }
 
+enum IdentityCaptureStep {
+  DOCUMENT_FRONT
+  SELFIE_NEUTRAL
+  SELFIE_TURNED
+  SELFIE_WITH_DOCUMENT
+}
+
 enum EmailVerificationPurpose {
   VERIFY_EMAIL
   PIN_RESET
@@ -218,6 +225,7 @@ model User {
   identities           UserIdentity[]
   identityChecks       IdentityCheck[]
   identityReviews      IdentityReview[]
+  identityCaptureSessions IdentityCaptureSession[]
   balanceDisclosureRequests BalanceDisclosureRequest[]
 
   @@index([pinResetQuarantineUntil])
@@ -260,6 +268,12 @@ model IdentityReview {
   status           IdentityReviewStatus @default(PENDING)
   documentAssetId  String?              @unique @db.Uuid
   selfieAssetId    String?              @unique @db.Uuid
+  captureSessionId String?              @unique @db.Uuid
+  challengeCode    String?
+  documentFrontCapturedAt DateTime?
+  selfieNeutralCapturedAt DateTime?
+  selfieTurnedCapturedAt DateTime?
+  selfieWithDocumentCapturedAt DateTime?
   decisionNote     String?
   decidedByAdminId String?              @db.Uuid
   decidedAt        DateTime?
@@ -267,10 +281,27 @@ model IdentityReview {
   user             User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
   documentAsset    MediaAsset?          @relation("IdentityReviewDocument", fields: [documentAssetId], references: [id], onDelete: SetNull)
   selfieAsset      MediaAsset?          @relation("IdentityReviewSelfie", fields: [selfieAssetId], references: [id], onDelete: SetNull)
+  captureSession   IdentityCaptureSession? @relation(fields: [captureSessionId], references: [id], onDelete: SetNull)
   decidedByAdmin   AdminUser?           @relation("IdentityReviewDecider", fields: [decidedByAdminId], references: [id], onDelete: SetNull)
 
   @@index([status, createdAt])
   @@index([userId])
+}
+
+model IdentityCaptureSession {
+  id            String               @id @default(uuid()) @db.Uuid
+  userId        String               @db.Uuid
+  challengeCode String
+  steps         IdentityCaptureStep[]
+  expiresAt     DateTime
+  consumedAt    DateTime?
+  createdAt     DateTime              @default(now())
+  user          User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mediaAssets   MediaAsset[]
+  review        IdentityReview?
+
+  @@index([userId, createdAt])
+  @@index([expiresAt, consumedAt])
 }
 model UserIdentity {
   id        String           @id @default(uuid()) @db.Uuid
@@ -534,16 +565,21 @@ model MediaAsset {
   storageKey      String         @unique
   refundRequestId String?        @db.Uuid
   aidRequestId    String?        @db.Uuid
+  captureSessionId String?        @db.Uuid
+  captureStep     IdentityCaptureStep?
   createdAt       DateTime       @default(now())
   owner           User           @relation(fields: [ownerId], references: [id])
   refundRequest   RefundRequest? @relation(fields: [refundRequestId], references: [id])
   aidRequest      AidRequest?    @relation(fields: [aidRequestId], references: [id])
+  captureSession  IdentityCaptureSession? @relation(fields: [captureSessionId], references: [id], onDelete: SetNull)
   identityReviewDocuments IdentityReview[] @relation("IdentityReviewDocument")
   identityReviewSelfies   IdentityReview[] @relation("IdentityReviewSelfie")
 
   @@index([ownerId, createdAt])
   @@index([refundRequestId])
   @@index([aidRequestId])
+  @@index([captureSessionId, captureStep])
+  @@unique([captureSessionId, captureStep])
 }
 
 model RefundRequest {
