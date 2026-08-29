@@ -13,6 +13,8 @@ export type IdentityReviewRow = {
   decisionNote: string | null;
   documentUrl: string | null;
   selfieUrl: string | null;
+  challengeCode: string | null;
+  frames: Array<{ step: string; assetId: string; capturedAt: string; url: string }>;
 };
 
 export function IdentityReviewTable({ rows, role }: Readonly<{ rows: IdentityReviewRow[]; role: AdminRole }>) {
@@ -20,7 +22,7 @@ export function IdentityReviewTable({ rows, role }: Readonly<{ rows: IdentityRev
     <div className="overflow-x-auto rounded-lg border bg-white shadow-sm">
       <table className="min-w-full text-left text-sm">
         <thead className="bg-slate-50">
-          <tr>{[labels.barcode, labels.country, labels.submittedAt, labels.decidedAt, labels.document, labels.selfie, labels.status, labels.actions].map((label) => <th className="whitespace-nowrap px-4 py-3 font-medium" key={label}>{label}</th>)}</tr>
+          <tr>{[labels.barcode, labels.country, labels.submittedAt, labels.decidedAt, labels.challengeCode, labels.frames, labels.status, labels.actions].map((label) => <th className="whitespace-nowrap px-4 py-3 font-medium" key={label}>{label}</th>)}</tr>
         </thead>
         <tbody className="divide-y">
           {rows.map((row) => (
@@ -29,8 +31,8 @@ export function IdentityReviewTable({ rows, role }: Readonly<{ rows: IdentityRev
               <td className="px-4 py-3">{row.country}</td>
               <td className="whitespace-nowrap px-4 py-3">{formatCompactDate(row.submittedAt)}</td>
               <td className="whitespace-nowrap px-4 py-3">{row.decidedAt ? formatCompactDate(row.decidedAt) : '—'}</td>
-              <td className="px-4 py-3">{row.documentUrl ? <img className="max-h-32 max-w-32 object-contain" src={`/api${row.documentUrl}`} alt={labels.document} /> : '—'}</td>
-              <td className="px-4 py-3">{row.selfieUrl ? <img className="max-h-32 max-w-32 object-contain" src={`/api${row.selfieUrl}`} alt={labels.selfie} /> : '—'}</td>
+              <td className="px-4 py-3">{row.challengeCode ?? '—'}</td>
+              <td className="px-4 py-3"><div className="flex gap-3">{row.frames.length > 0 ? row.frames.map((frame) => <figure key={frame.assetId} className="w-32"><img className="h-32 w-32 object-contain" src={`/api${frame.url}`} alt={frame.step} /><figcaption className="text-xs">{frame.step}<br />{formatCompactDate(frame.capturedAt)}</figcaption></figure>) : <>{row.documentUrl ? <img className="max-h-32 max-w-32 object-contain" src={`/api${row.documentUrl}`} alt={labels.document} /> : '—'}{row.selfieUrl ? <img className="max-h-32 max-w-32 object-contain" src={`/api${row.selfieUrl}`} alt={labels.selfie} /> : null}</>}</div></td>
               <td className="px-4 py-3">{row.status}{row.decisionNote ? ` — ${row.decisionNote}` : ''}</td>
               <td className="px-4 py-3">
                 {canManageWithdrawals(role) && row.status === 'PENDING' ? (
