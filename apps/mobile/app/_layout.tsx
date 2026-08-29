@@ -21,12 +21,14 @@ function WebRedirectHandler() {
     const callbackState = readSocialCallbackStateFromUrl(window.location.href);
     handledRedirect.current = true;
     const cleanUrl = new URL(window.location.href);
-    cleanUrl.searchParams.delete('id_token');
-    const hashParams = new URLSearchParams(cleanUrl.hash.replace(/^#/, ''));
-    if (hashParams.has('id_token')) {
-      hashParams.delete('id_token');
-      cleanUrl.hash = hashParams.toString() === '' ? '' : `#${hashParams.toString()}`;
+    for (const parameter of ['id_token', 'code', 'state']) {
+      cleanUrl.searchParams.delete(parameter);
     }
+    const hashParams = new URLSearchParams(cleanUrl.hash.replace(/^#/, ''));
+    for (const parameter of ['id_token', 'code', 'state']) {
+      hashParams.delete(parameter);
+    }
+    cleanUrl.hash = hashParams.toString() === '' ? '' : `#${hashParams.toString()}`;
     window.history.replaceState(null, document.title, `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
     let stateValid = true;
     if (callback.provider === 'apple') {

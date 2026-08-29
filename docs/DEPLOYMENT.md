@@ -240,13 +240,6 @@ being managed separately, operators re-arm it by setting its pending marker;
 the security quarantine itself expires automatically according to the configured
 duration.
 
-## Web Apple sign-in
-
-Web Apple sign-in requires the Apple Services ID in
-`EXPO_PUBLIC_APPLE_WEB_CLIENT_ID` at web build time and appended to the API's
-`APPLE_OAUTH_AUDIENCES`. Apple also requires the domain-association file at
-`/.well-known/` for the configured web domain.
-
 The user must still provide and authorize:
 
 ## Demo barcode data
@@ -286,6 +279,13 @@ the `pin_reset_quarantine` blocker.
   admin JWT secret, database/Redis/replication passwords;
 * SSH keys and authorization for deployment, fencing, and replication;
 * a reviewed git repository ref and DNS access.
+
+## Web Apple sign-in
+
+Web Apple sign-in requires the Services ID to be set as
+`EXPO_PUBLIC_APPLE_WEB_CLIENT_ID` at web export time and appended to the API's
+`APPLE_OAUTH_AUDIENCES`. The web origin must also be registered as the domain
+and return URL for the Services ID in the Apple Developer portal.
 
 No real credentials belong in this repository. These scripts have not been
 executed against the servers yet, and production installation, replication,
