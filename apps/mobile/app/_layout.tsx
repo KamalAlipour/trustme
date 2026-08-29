@@ -19,6 +19,7 @@ I18nManager.allowRTL(true);
 function WebRedirectHandler() {
   const { member, signInWithSocial } = useSession();
   const handledRedirect = useRef(false);
+  const scheduledRedirect = useRef(false);
   useEffect(() => {
     if (Platform.OS !== 'web' || member !== null || handledRedirect.current) return;
     const callback = readSocialCallbackFromUrl(window.location.href);
@@ -57,8 +58,11 @@ function WebRedirectHandler() {
         .catch(() => router.replace({ pathname: '/(auth)/login', params: { error: 'social' } }));
     };
     if (handlingMode === 'deferred') {
-      const timer = setTimeout(handleRedirect, WEB_REDIRECT_DEFER_MS);
-      return () => clearTimeout(timer);
+      if (!scheduledRedirect.current) {
+        scheduledRedirect.current = true;
+        setTimeout(handleRedirect, WEB_REDIRECT_DEFER_MS);
+      }
+      return undefined;
     }
     handleRedirect();
     return undefined;
