@@ -284,3 +284,10 @@ No real credentials belong in this repository. These scripts have not been
 executed against the servers yet, and production installation, replication,
 promotion, DNS, TLS, and failback remain unverified until an authorized
 operator runs them.
+
+## Web Apple sign-in
+
+Web Apple sign-in requires the Services ID to be set as
+`EXPO_PUBLIC_APPLE_WEB_CLIENT_ID` at web export time and appended to the API's
+`APPLE_OAUTH_AUDIENCES`. The web origin must also be registered as the domain
+and return URL for the Services ID in the Apple Developer portal.

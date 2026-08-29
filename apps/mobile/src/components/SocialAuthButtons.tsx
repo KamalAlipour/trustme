@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Platform, Pressable, Text, View } from 'react-native';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import { AppleAuthenticationButtonStyle, AppleAuthenticationButtonType } from 'expo-apple-authentication';
 import { ResponseType } from 'expo-auth-session';
@@ -7,6 +7,7 @@ import * as Google from 'expo-auth-session/providers/google';
 import * as WebBrowser from 'expo-web-browser';
 import { useTranslation } from '../i18n';
 import { isAppleSignInAvailable, isGoogleSignInAvailable, socialClientIds } from '../auth/social';
+import { appleWebClientId, appleWebStateKey, buildAppleAuthorizeUrl, isAppleWebSignInAvailable } from '../auth/apple-web';
 import { styles } from '../styles';
 
 WebBrowser.maybeCompleteAuthSession();
@@ -67,13 +68,41 @@ export function SocialAuthButtons({
     }
   };
 
-  if (!googleAvailable && !isAppleSignInAvailable()) return null;
+  const appleWebAvailable = isAppleWebSignInAvailable(Platform.OS, appleWebClientId);
+  const appleNativeAvailable = isAppleSignInAvailable();
+  const signInWithAppleWeb = () => {
+    try {
+      if (!appleWebAvailable || typeof window === 'undefined' || window.crypto === undefined) {
+        onError(t.socialSignInUnavailable);
+        return;
+      }
+      const randomBytes = (length: number) => {
+        const bytes = new Uint8Array(length);
+        window.crypto.getRandomValues(bytes);
+        return Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('');
+      };
+      const state = `apple:${randomBytes(16)}`;
+      const nonce = randomBytes(16);
+      window.sessionStorage.setItem(appleWebStateKey, state);
+      window.location.assign(buildAppleAuthorizeUrl({
+        clientId: appleWebClientId as string,
+        redirectUri: window.location.origin,
+        state,
+        nonce,
+      }));
+    } catch {
+      onError(t.socialSignInUnavailable);
+    }
+  };
+
+  if (!googleAvailable && !appleNativeAvailable && !appleWebAvailable) return null;
   return (
     <View style={styles.socialAuthContainer}>
       <View style={styles.divider} />
       <Text style={styles.muted}>{t.or}</Text>
       {googleAvailable ? <Pressable disabled={googleRequest === null || busy} onPress={() => void promptGoogle()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.signInWithGoogle}</Text></Pressable> : null}
-      {isAppleSignInAvailable() ? <AppleAuthentication.AppleAuthenticationButton buttonType={AppleAuthenticationButtonType.SIGN_IN} buttonStyle={AppleAuthenticationButtonStyle.BLACK} cornerRadius={12} style={busy ? styles.socialAuthAppleButtonBusy : styles.socialAuthAppleButton} onPress={() => { if (!busy) void signInWithApple(); }} /> : null}
+      {appleWebAvailable ? <Pressable disabled={busy} onPress={signInWithAppleWeb} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.signInWithApple}</Text></Pressable> : null}
+      {appleNativeAvailable ? <AppleAuthentication.AppleAuthenticationButton buttonType={AppleAuthenticationButtonType.SIGN_IN} buttonStyle={AppleAuthenticationButtonStyle.BLACK} cornerRadius={12} style={busy ? styles.socialAuthAppleButtonBusy : styles.socialAuthAppleButton} onPress={() => { if (!busy) void signInWithApple(); }} /> : null}
     </View>
   );
 }
