@@ -30,8 +30,20 @@ export const openapiDocument = {
     '/v1/auth/pin-reset/request': { post: { responses: { '202': { description: 'Reset requested' }, '503': { description: 'Email delivery unavailable' } } } },
     '/v1/auth/pin-reset/confirm': { post: { responses: { '200': { description: 'Reset PIN and tokens' }, '401': { description: 'Invalid code' } } } },
     '/v1/me': {
-      get: { responses: { '200': { description: 'Member profile' }, '401': { description: 'Unauthorized' } } },
+      get: { responses: { '200': { description: 'Member profile, including identityVerification status and verifiedAt' }, '401': { description: 'Unauthorized' } } },
       patch: { responses: { '200': { description: 'Updated member profile' } } },
+    },
+    '/v1/me/identity': {
+      post: {
+        description: 'Check the authenticated member’s Iranian national ID against the mobile number stored on the account. Provider messages are not exposed.',
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['nationalCode'], properties: { nationalCode: { type: 'string', pattern: '^\\d{10}$' } } } } } },
+        responses: {
+          '200': { description: 'Identity verification result: VERIFIED, MISMATCH, or INCONCLUSIVE' },
+          '400': { description: 'Invalid national code, missing phone number, or invalid Iranian mobile number' },
+          '429': { description: 'Rate limit or identity-check cap reached' },
+          '503': { description: 'Identity verification is not configured' },
+        },
+      },
     },
     '/v1/me/barcodes': { get: { responses: { '200': { description: 'Member barcode search results' } } } },
     '/v1/me/barcodes/{barcodeId}': { get: { responses: { '200': { description: 'Member barcode details' }, '404': { description: 'Member not found' } } } },

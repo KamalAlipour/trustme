@@ -8,6 +8,10 @@ export type Member = {
   kycStatus: string;
   activeGuaranteeCount: number;
   isRestricted: boolean;
+  identityVerification: {
+    status: 'UNVERIFIED' | 'VERIFIED' | 'MISMATCH' | 'INCONCLUSIVE';
+    verifiedAt: string | null;
+  };
 };
 
 export type Tokens = {

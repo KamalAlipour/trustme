@@ -240,6 +240,12 @@ being managed separately, operators re-arm it by setting its pending marker;
 the security quarantine itself expires automatically according to the configured
 duration.
 
+Shahkar identity verification is configured with `SHAHKAR_API_TOKEN` and
+`IDENTITY_HASH_PEPPER` in the API environment. The check is available only when
+both values are present; `SHAHKAR_BASE_URL` may override the default Shahkar
+endpoint. The pepper must be at least 32 characters and these values must be
+provided through the deployment secret-management process, not committed here.
+
 The user must still provide and authorize:
 
 ## Demo barcode data

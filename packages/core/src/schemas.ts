@@ -12,6 +12,26 @@ export const evmAddressSchema = z.string().refine((value) => {
 
 export const positiveBigIntSchema = z.bigint().positive();
 export const phoneNumberSchema = z.string().min(1).max(32);
+function hasValidIranianNationalCode(value: string): boolean {
+  if (/^(\d)\1{9}$/.test(value)) return false;
+  const sum = value.slice(0, 9).split('').reduce((total, digit, index) => total + Number(digit) * (10 - index), 0);
+  const remainder = sum % 11;
+  const expected = remainder < 2 ? remainder : 11 - remainder;
+  return Number(value[9]) === expected;
+}
+
+export const nationalCodeSchema = z.string()
+  .regex(/^\d{10}$/, 'national code must be exactly 10 digits')
+  .refine(hasValidIranianNationalCode, 'national code checksum is invalid');
+
+export const iranMobileSchema = z.string()
+  .refine((value) => /^09\d{9}$/.test(value) || /^\+989\d{9}$/.test(value) || /^00989\d{9}$/.test(value) || /^989\d{9}$/.test(value), 'mobile must be a valid Iranian mobile number')
+  .transform((value) => {
+    if (value.startsWith('09')) return value;
+    if (value.startsWith('+98')) return `0${value.slice(3)}`;
+    if (value.startsWith('0098')) return `0${value.slice(4)}`;
+    return `0${value.slice(2)}`;
+  });
 export const barcodeIdSchema = z.string().min(1).max(128);
 export const fourDigitCodeSchema = z.string().regex(/^\d{4}$/, 'code must be exactly four digits');
 

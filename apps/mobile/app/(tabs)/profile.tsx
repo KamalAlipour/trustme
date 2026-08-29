@@ -26,6 +26,8 @@ export default function Profile() {
   const [emailCode, setEmailCode] = useState('');
   const [currentPin, setCurrentPin] = useState('');
   const [newPin, setNewPin] = useState('');
+  const [nationalCode, setNationalCode] = useState('');
+  const [identityLoading, setIdentityLoading] = useState(false);
   const [eligibleAt, setEligibleAt] = useState<string | null>(null);
   const [withdrawalQuote, setWithdrawalQuote] = useState<WithdrawalQuote | null>(null);
   const [withdrawalQuoteError, setWithdrawalQuoteError] = useState('');
@@ -120,7 +122,24 @@ export default function Profile() {
       setError(cause instanceof ApiError ? cause.message : t.unknownError);
     }
   };
+  const verifyIdentity = async () => {
+    setError(''); setNotice(''); setIdentityLoading(true);
+    try {
+      await request('/v1/me/identity', { method: 'POST', body: { nationalCode } });
+      setNationalCode('');
+      setNotice(t.identityVerificationSubmitted);
+      await invalidate();
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : t.unknownError);
+    } finally {
+      setIdentityLoading(false);
+    }
+  };
   const current = member.data;
+  const identityStatus = current?.identityVerification.status ?? 'UNVERIFIED';
+  const identityCopy = identityStatus === 'VERIFIED'
+    ? `${t.identityVerified}${current?.identityVerification.verifiedAt ? ` ${t.identityVerifiedAt(formatDate(current.identityVerification.verifiedAt, language))}` : ''}`
+    : identityStatus === 'MISMATCH' ? t.identityMismatch : identityStatus === 'INCONCLUSIVE' ? t.identityInconclusive : t.identityUnverified;
   return (
     <Page>
       <Text style={styles.title}>{t.profile}</Text>
@@ -194,7 +213,21 @@ export default function Profile() {
         <Pressable disabled={withdrawalQuote === null || withdrawalQuoteLoading} onPress={() => void withdraw()} style={styles.button}><Text style={styles.buttonText}>{t.submitWithdrawal}</Text></Pressable>
         {eligibleAt ? <Text style={styles.muted}>{t.eligibleAt}: {formatDate(eligibleAt, language)}</Text> : null}
       </View>
-      <View style={styles.card}><Text style={styles.muted}>{t.kycLater}</Text></View>
+      <View style={styles.card}>
+        <Text style={styles.heading}>{t.identityVerification}</Text>
+        <Text style={styles.text}>{identityCopy}</Text>
+        {identityStatus !== 'VERIFIED' ? <>
+          <TextInput
+            value={nationalCode}
+            onChangeText={(value) => setNationalCode(value.replace(/\D/g, '').slice(0, 10))}
+            placeholder={t.nationalCode}
+            style={styles.input}
+            keyboardType="number-pad"
+            maxLength={10}
+          />
+          <Pressable disabled={identityLoading || nationalCode.length !== 10} onPress={() => void verifyIdentity()} style={styles.button}><Text style={styles.buttonText}>{t.verifyIdentity}</Text></Pressable>
+        </> : null}
+      </View>
       {notice ? <Text style={styles.notice}>{notice}</Text> : null}
       {error ? <Text style={styles.danger}>{error}</Text> : null}
       <Pressable onPress={() => void signOut()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.logout}</Text></Pressable>

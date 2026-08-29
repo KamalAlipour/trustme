@@ -113,6 +113,13 @@ enum KycStatus {
   REJECTED
 }
 
+enum IdentityVerificationStatus {
+  UNVERIFIED
+  VERIFIED
+  MISMATCH
+  INCONCLUSIVE
+}
+
 enum EmailVerificationPurpose {
   VERIFY_EMAIL
   PIN_RESET
@@ -155,6 +162,11 @@ model User {
   aliasName            String?
   displayName          String?
   kycStatus            KycStatus           @default(UNVERIFIED)
+  identityVerificationStatus IdentityVerificationStatus @default(UNVERIFIED)
+  identityVerifiedAt   DateTime?
+  nationalIdHash       String?
+  identityCheckCount   Int                 @default(0)
+  lastIdentityCheckAt  DateTime?
   email                String?             @unique
   emailVerifiedAt      DateTime?
   pinHash              String?
@@ -190,9 +202,24 @@ model User {
   buyerRefunds         RefundRequest[]     @relation("RefundBuyer")
   sellerRefunds        RefundRequest[]     @relation("RefundSeller")
   identities           UserIdentity[]
+  identityChecks       IdentityCheck[]
 
   @@index([pinResetQuarantineUntil])
   @@index([isDemo])
+}
+
+model IdentityCheck {
+  id            String                     @id @default(uuid()) @db.Uuid
+  userId        String                     @db.Uuid
+  provider      String                     @default("SHAHKAR")
+  status        IdentityVerificationStatus
+  providerCode  Int?
+  nationalIdHash String
+  mobileHash    String
+  createdAt     DateTime                   @default(now())
+  user          User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model UserIdentity {

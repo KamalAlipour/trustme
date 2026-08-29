@@ -177,8 +177,33 @@ export function maskPhone(phoneNumber: string | null): string | null {
   const digits = phoneNumber.replace(/\D/g, '');
   return `*-*-${digits.slice(-4).padStart(4, '*')}`;
 }
-export function serializeMember(user: { id: string; displayName: string | null; barcodeId: string; phoneNumber: string | null; email: string | null; emailVerifiedAt: Date | null; kycStatus: string; activeGuaranteeCount: number }) {
-  return { id: user.id, displayName: user.displayName, barcodeId: user.barcodeId, phone: maskPhone(user.phoneNumber), email: maskEmail(user.email), emailVerified: user.emailVerifiedAt !== null, kycStatus: user.kycStatus, activeGuaranteeCount: user.activeGuaranteeCount, isRestricted: user.activeGuaranteeCount > 0 };
+export function serializeMember(user: {
+  id: string;
+  displayName: string | null;
+  barcodeId: string;
+  phoneNumber: string | null;
+  email: string | null;
+  emailVerifiedAt: Date | null;
+  kycStatus: string;
+  activeGuaranteeCount: number;
+  identityVerificationStatus: string;
+  identityVerifiedAt: Date | null;
+}) {
+  return {
+    id: user.id,
+    displayName: user.displayName,
+    barcodeId: user.barcodeId,
+    phone: maskPhone(user.phoneNumber),
+    email: maskEmail(user.email),
+    emailVerified: user.emailVerifiedAt !== null,
+    kycStatus: user.kycStatus,
+    activeGuaranteeCount: user.activeGuaranteeCount,
+    isRestricted: user.activeGuaranteeCount > 0,
+    identityVerification: {
+      status: user.identityVerificationStatus,
+      verifiedAt: user.identityVerifiedAt,
+    },
+  };
 }
 
 export async function verifyMemberPin(prisma: PrismaClient, userId: string, pin: string): Promise<void> {

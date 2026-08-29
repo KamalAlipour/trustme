@@ -38,6 +38,9 @@ export const apiConfigSchema = z.object({
   mediaStorageDir: z.string().default('/var/lib/trustme/media'),
   googleOAuthClientIds: z.string().optional().transform((value) => value?.split(',').map((id) => id.trim()).filter(Boolean)),
   appleOAuthAudiences: z.string().optional().transform((value) => value?.split(',').map((id) => id.trim()).filter(Boolean)),
+  shahkarApiToken: z.string().min(1).optional(),
+  shahkarBaseUrl: z.string().url().default('https://s.api.ir/api/sw1/ShahkarLite'),
+  identityHashPepper: z.string().min(32).optional(),
   allowedOrigins: z.string().default('').transform((value) => value.split(',').map((origin) => origin.trim()).filter(Boolean)),
 });
 
@@ -75,6 +78,9 @@ export function loadApiConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     mediaStorageDir: env.MEDIA_STORAGE_DIR,
     googleOAuthClientIds: env.GOOGLE_OAUTH_CLIENT_IDS,
     appleOAuthAudiences: env.APPLE_OAUTH_AUDIENCES,
+    shahkarApiToken: env.SHAHKAR_API_TOKEN || undefined,
+    shahkarBaseUrl: env.SHAHKAR_BASE_URL,
+    identityHashPepper: env.IDENTITY_HASH_PEPPER || undefined,
     allowedOrigins: env.API_ALLOWED_ORIGINS,
   });
   if (config.nodeEnv === 'production' && config.emailDelivery === 'log') {
