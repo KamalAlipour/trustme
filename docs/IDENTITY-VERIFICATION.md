@@ -35,7 +35,9 @@ switches to an automated path.
 ## Method per country
 
 In Iran, the current method is Shahkar: the account holder's mobile number is
-checked against the national ID they claim. In other countries, Trust Coupon
+checked against the national ID they claim. The number must be present on the
+account; members can set it themselves in the profile, and it remains
+self-declared until Shahkar binds that number to a national ID. In other countries, Trust Coupon
 will use the country's official identity registry or eID service where one is
 reachable. Where no suitable registry is available, the fallback is manual
 review by an administrator against a government ID document and a
@@ -88,6 +90,18 @@ Iran today has Shahkar access provisioned, so Iran is automated and its manual
 path is closed. This per-country enable/disable mechanism is a required
 follow-up alongside the country field; the current implementation derives the
 active path from the available Shahkar access and the manual review path.
+
+## Live manual capture
+
+Manual identity review uses one server-issued five-minute live camera session.
+Gallery images and ordinary media uploads are refused as identity evidence. The
+session presents a shuffled sequence of a document-front frame, neutral selfie,
+turned-head selfie, and selfie holding the document with a four-digit challenge
+code visible. Reviewers see the code and capture timestamps; there is no
+automated face match or deepfake detector. Anti-replay relies on the challenge
+code, head-turn prompt, and same-session capture window. All captured frames are
+purged when an administrator approves or rejects the review, while the decision
+record remains.
 
 ## Iran and Shahkar
 

@@ -4,7 +4,7 @@ import { mkdir, rm, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import Busboy from 'busboy';
 import type { Request } from 'express';
-import { PrismaClient, MediaKind } from '@trustme/db';
+import { IdentityCaptureStep, PrismaClient, MediaKind } from '@trustme/db';
 import { DomainError } from '@trustme/core';
 
 const MB = 1024 * 1024;
@@ -21,6 +21,8 @@ type UploadResult = {
   byteSize: number;
   sha256: string;
   storageKey: string;
+  captureSessionId?: string;
+  captureStep?: IdentityCaptureStep;
 };
 
 function requestedKind(value: string): MediaKind {
@@ -61,6 +63,8 @@ export async function uploadMedia(request: Request, storageDir: string): Promise
     let size = 0;
     let header = Buffer.alloc(0);
     let mimeType: string | null = null;
+    let captureSessionId: string | undefined;
+    let captureStep: IdentityCaptureStep | undefined;
     let settled = false;
     const fail = (error: Error): void => {
       if (settled) return;
@@ -85,6 +89,14 @@ export async function uploadMedia(request: Request, storageDir: string): Promise
         } catch (error) {
           fail(error instanceof Error ? error : new DomainError('unsupported media kind', 415));
         }
+      }
+      if (name === 'captureSessionId') captureSessionId = value.trim();
+      if (name === 'step') {
+        if (!Object.values(IdentityCaptureStep).includes(value as IdentityCaptureStep)) {
+          fail(new DomainError('invalid capture step', 400));
+          return;
+        }
+        captureStep = value as IdentityCaptureStep;
       }
     });
     parser.on('file', (_field, stream) => {
@@ -142,7 +154,7 @@ export async function uploadMedia(request: Request, storageDir: string): Promise
       }
       await new Promise<void>((resolveOutput) => output!.once('close', resolveOutput));
       settled = true;
-      resolve({ kind, mimeType, byteSize: size, sha256: hash.digest('hex'), storageKey });
+      resolve({ kind, mimeType, byteSize: size, sha256: hash.digest('hex'), storageKey, ...(captureSessionId === undefined ? {} : { captureSessionId }), ...(captureStep === undefined ? {} : { captureStep }) });
     });
     request.pipe(parser);
   });
