@@ -13,7 +13,7 @@ import { styles } from '../../src/styles';
 
 export default function Profile() {
   const { t, language, setLanguage } = useTranslation();
-  const { signOut, getStepUpPin } = useSession();
+  const { signOut, getStepUpPin, refreshSetup, setup, biometric } = useSession();
   const member = useMember();
   const balance = useBalance();
   const availability = useAvailability();
@@ -105,6 +105,21 @@ export default function Profile() {
     setError(''); setNotice('');
     try { await request('/v1/me/pin', { method: 'POST', body: { currentPin, newPin } }); setCurrentPin(''); setNewPin(''); setNotice(t.pinChanged); } catch (cause) { setError(cause instanceof ApiError ? cause.message : t.unknownError); }
   };
+  const enableBiometric = async () => {
+    setError(''); setNotice('');
+    try {
+      const stepUp = await getStepUpPin();
+      if (!stepUp) { setError(t.biometricCancelled); return; }
+      await request('/v1/member/security/biometric', {
+        method: 'POST',
+        body: { pin: stepUp, biometricEnrolled: true },
+      });
+      await refreshSetup();
+      setNotice(t.biometricEnabled);
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : t.unknownError);
+    }
+  };
   const current = member.data;
   return (
     <Page>
@@ -119,6 +134,11 @@ export default function Profile() {
       <View style={styles.card}>
         <Pressable onPress={() => router.push('/about')} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.about}</Text></Pressable>
       </View>
+      {setup?.biometricPending && biometric ? <View style={styles.card}>
+        <Text style={styles.heading}>{t.securitySetup}</Text>
+        <Text style={styles.text}>{t.biometricQuestion}</Text>
+        <Pressable onPress={() => void enableBiometric()} style={styles.button}><Text style={styles.buttonText}>{t.enableBiometricSignIn}</Text></Pressable>
+      </View> : null}
       <View style={styles.card}>
         <Text style={styles.heading}>{current?.displayName ?? t.member}</Text>
         <Text style={styles.text}>{t.phoneLabel}: {current?.phone ? `••••${current.phone.slice(-4)}` : '••••'}</Text>

@@ -21,11 +21,15 @@ export default function SecuritySetup() {
     void biometricAvailable().then(setAvailable).catch(() => setAvailable(false));
   }, []);
 
-  const enroll = async () => {
+  const submitChoice = async (enroll: boolean) => {
     setError('');
     setBusy(true);
     try {
-      const biometricEnrolled = shouldEnrollBiometrics(Platform.OS, available);
+      const biometricEnrolled = enroll && shouldEnrollBiometrics(Platform.OS, available);
+      if (enroll && !biometricEnrolled) {
+        setError(t.biometricUnavailable);
+        return;
+      }
       if (biometricEnrolled) {
         if (!await authenticateLocally()) {
           setError(t.biometricCancelled);
@@ -42,6 +46,7 @@ export default function SecuritySetup() {
         body: { pin, biometricEnrolled },
       });
       await refreshSetup();
+      setError('');
       router.replace('/');
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : t.unknownError);
@@ -54,9 +59,11 @@ export default function SecuritySetup() {
     <Page>
       <Text style={styles.title}>{t.securitySetup}</Text>
       <Text style={styles.text}>{t.biometricInstructions}</Text>
+      <Text style={styles.heading}>{t.biometricQuestion}</Text>
       {Platform.OS === 'web' ? <Text style={styles.notice}>{t.browserBiometricNotice}</Text> : null}
       {Platform.OS !== 'web' && !available ? <Text style={styles.muted}>{t.biometricUnavailable}</Text> : null}
-      <Pressable disabled={busy} onPress={() => void enroll()} style={styles.button}><Text style={styles.buttonText}>{t.enrolBiometric}</Text></Pressable>
+      <Pressable disabled={busy || !shouldEnrollBiometrics(Platform.OS, available)} onPress={() => void submitChoice(true)} style={styles.button}><Text style={styles.buttonText}>{t.enableBiometricSignIn}</Text></Pressable>
+      <Pressable disabled={busy} onPress={() => void submitChoice(false)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.notNow}</Text></Pressable>
       {error ? <Text style={styles.danger}>{error}</Text> : null}
     </Page>
   );

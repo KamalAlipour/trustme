@@ -1,19 +1,26 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { authenticate, forgetSession, logout, refresh, request, setAccessToken, setSessionExpiredHandler } from '../api/client';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { authenticate, forgetSession, logout, refresh, request, setAccessToken, setSessionExpiredHandler, SessionExpiredError } from '../api/client';
 import type { AuthResponse, Member, SecuritySetup } from '../api/types';
 import { hasStoredCredentials, saveCredentials } from '../lib/storage';
 import { biometricAvailable, unlockPin } from '../lib/biometrics';
+import { isWebPlatform } from '../lib/platform';
+import { getUnlockDecision } from './unlock-routing';
 
 type SessionContextValue = {
   member: Member | null;
   setup: SecuritySetup | null;
   ready: boolean;
   biometric: boolean;
+  unlockRequired: boolean;
+  unlocking: boolean;
+  unlockError: boolean;
   signIn: (phone: string, pin: string) => Promise<void>;
   signUp: (phone: string, pin: string, displayName?: string, email?: string) => Promise<AuthResponse>;
   refreshSetup: () => Promise<SecuritySetup>;
   signOut: () => Promise<void>;
   getStepUpPin: () => Promise<string | null>;
+  unlock: () => Promise<void>;
+  continueWithPhoneLogin: () => Promise<void>;
 };
 
 const SessionContext = createContext<SessionContextValue | null>(null);
@@ -23,30 +30,72 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   const [setup, setSetup] = useState<SecuritySetup | null>(null);
   const [ready, setReady] = useState(false);
   const [biometric, setBiometric] = useState(false);
+  const [unlockRequired, setUnlockRequired] = useState(false);
+  const [unlocking, setUnlocking] = useState(false);
+  const [unlockError, setUnlockError] = useState(false);
+
+  const restoreSession = useCallback(async () => {
+    const tokens = await refresh();
+    if (tokens.member !== undefined) setMember(tokens.member);
+    const setupResponse = await request<SecuritySetup>('/v1/me/security-setup');
+    setSetup(setupResponse);
+    setAccessToken(tokens.accessToken);
+  }, []);
+
+  const unlock = useCallback(async () => {
+    setUnlocking(true);
+    setUnlockError(false);
+    try {
+      await restoreSession();
+      setUnlockRequired(false);
+      setReady(true);
+    } catch (cause) {
+      if (cause instanceof SessionExpiredError) {
+        setUnlockRequired(false);
+        setReady(true);
+      } else {
+        setUnlockRequired(true);
+        setUnlockError(true);
+      }
+    } finally {
+      setUnlocking(false);
+    }
+  }, [restoreSession]);
 
   useEffect(() => {
-    setSessionExpiredHandler(() => setMember(null));
+    setSessionExpiredHandler(() => {
+      setMember(null);
+      setSetup(null);
+    });
     let active = true;
     void (async () => {
       const available = await biometricAvailable().catch(() => false);
-      if (active) setBiometric(available);
+      if (!active) return;
+      setBiometric(available);
       let storedCredentials = false;
       try {
         storedCredentials = await hasStoredCredentials();
       } catch {
         storedCredentials = false;
       }
+      if (storedCredentials && !isWebPlatform()) {
+        const decision = getUnlockDecision({
+          storedSession: true,
+          platform: 'native',
+          biometricAvailable: available,
+          refreshState: 'pending',
+        });
+        if (decision.screen === 'unlock') {
+          setUnlockRequired(true);
+          setReady(true);
+          return;
+        }
+      }
       if (storedCredentials) {
         try {
-          const tokens = await refresh();
-          if (active) {
-            if (tokens.member !== undefined) setMember(tokens.member);
-            const setupResponse = await request<SecuritySetup>('/v1/me/security-setup');
-            setSetup(setupResponse);
-            setAccessToken(tokens.accessToken);
-          }
-        } catch {
-          await forgetSession().catch(() => undefined);
+          await restoreSession();
+        } catch (cause) {
+          if (!(cause instanceof SessionExpiredError)) setUnlockError(true);
         }
       }
       if (active) setReady(true);
@@ -55,18 +104,22 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       active = false;
       setSessionExpiredHandler(undefined);
     };
-  }, []);
+  }, [restoreSession]);
 
   const value = useMemo<SessionContextValue>(() => ({
     member,
     setup,
     ready,
     biometric,
+    unlockRequired,
+    unlocking,
+    unlockError,
     signIn: async (phone, pin) => {
       const result = await authenticate('/v1/auth/login', { phone, pin });
       await saveCredentials(result.tokens.refreshToken, pin);
       setMember(result.member);
       setSetup(await request<SecuritySetup>('/v1/me/security-setup'));
+      setUnlockRequired(false);
     },
     signUp: async (phone, pin, displayName, email) => {
       const result = await authenticate('/v1/auth/register', {
@@ -78,6 +131,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       await saveCredentials(result.tokens.refreshToken, pin);
       setMember(result.member);
       setSetup(await request<SecuritySetup>('/v1/me/security-setup'));
+      setUnlockRequired(false);
       return result;
     },
     refreshSetup: async () => {
@@ -88,6 +142,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     signOut: async () => {
       await logout();
       setMember(null);
+      setSetup(null);
+      setUnlockRequired(false);
     },
     getStepUpPin: async () => {
       try {
@@ -96,7 +152,21 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         return null;
       }
     },
-  }), [biometric, member, ready, setup]);
+    unlock,
+    continueWithPhoneLogin: async () => {
+      setUnlocking(true);
+      try {
+        await forgetSession();
+        setMember(null);
+        setSetup(null);
+        setUnlockRequired(false);
+        setUnlockError(false);
+        setReady(true);
+      } finally {
+        setUnlocking(false);
+      }
+    },
+  }), [biometric, member, ready, setup, unlock, unlocking, unlockError, unlockRequired]);
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }
