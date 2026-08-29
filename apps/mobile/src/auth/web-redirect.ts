@@ -7,6 +7,16 @@ type SocialCallbackDetails = SocialCallback & {
   state: string | null;
 };
 
+export type WebRedirectHandlingMode = 'immediate' | 'deferred' | null;
+
+export function getWebRedirectHandlingMode(
+  hasCallback: boolean,
+  hasOpener: boolean,
+): WebRedirectHandlingMode {
+  if (!hasCallback) return null;
+  return hasOpener ? 'deferred' : 'immediate';
+}
+
 function readSocialCallbackDetailsFromUrl(url: string): SocialCallbackDetails | null {
   try {
     const parsed = new URL(url);
