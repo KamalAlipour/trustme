@@ -37,4 +37,5 @@ export const styles = StyleSheet.create({
   socialAuthContainer: { gap: 12 },
   socialAuthAppleButton: { height: 50 },
   socialAuthAppleButtonBusy: { height: 50, opacity: 0.5 },
+  disclosureCode: { color: colors.primary, fontSize: 34, fontWeight: '700', letterSpacing: 8, textAlign: 'center' },
 });

@@ -26,6 +26,8 @@ export type SecuritySetup = {
   remaining: Array<'pin' | 'email_verification' | 'biometric_enrolment'>;
   completedAt: string | null;
 };
+export type DisclosureRequest = { id: string; createdAt: string; expiresAt: string };
+export type DisclosureApproval = { code: string; expiresAt: string };
 export type Balance = { barcodeId: string; coupons: string; dustMicroUsdt: string; depositAddress: string | null };
 export type BarcodeResult = { barcodeId: string; displayName: string | null; isDemo: boolean };
 export type BarcodeDetail = BarcodeResult & { kycStatus: string };

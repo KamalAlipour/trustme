@@ -190,6 +190,7 @@ model User {
   buyerRefunds         RefundRequest[]     @relation("RefundBuyer")
   sellerRefunds        RefundRequest[]     @relation("RefundSeller")
   identities           UserIdentity[]
+  balanceDisclosureRequests BalanceDisclosureRequest[]
 
   @@index([pinResetQuarantineUntil])
   @@index([isDemo])
@@ -206,6 +207,20 @@ model UserIdentity {
 
   @@unique([provider, subject])
   @@index([userId])
+}
+
+model BalanceDisclosureRequest {
+  id          String    @id @default(uuid()) @db.Uuid
+  userId      String    @db.Uuid
+  codeHash    String
+  attempts    Int       @default(0)
+  createdAt   DateTime  @default(now())
+  expiresAt   DateTime
+  consumedAt  DateTime?
+  deniedAt    DateTime?
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
 }
 
 model MemberDevice {

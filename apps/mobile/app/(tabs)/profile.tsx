@@ -5,11 +5,12 @@ import { useQuery } from '@tanstack/react-query';
 import { request, ApiError, LockedError } from '../../src/api/client';
 import type { WithdrawalQuote } from '../../src/api/types';
 import { useSession } from '../../src/auth/session';
-import { useAvailability, useBalance, useInvalidateMoney, useMember } from '../../src/hooks';
+import { useAvailability, useBalance, useDisclosureRequests, useInvalidateMoney, useMember } from '../../src/hooks';
 import { Page, LoadingScreen } from '../../src/components/Screen';
 import { formatCoupons, formatDate, formatMicroUsdt } from '../../src/lib/format';
 import { useTranslation } from '../../src/i18n';
 import { styles } from '../../src/styles';
+import { approvalDisplay, type DisclosureApprovalDisplay } from '../../src/lib/disclosure';
 
 export default function Profile() {
   const { t, language, setLanguage } = useTranslation();
@@ -17,6 +18,7 @@ export default function Profile() {
   const member = useMember();
   const balance = useBalance();
   const availability = useAvailability();
+  const disclosureRequests = useDisclosureRequests();
   const invalidate = useInvalidateMoney();
   const [displayName, setDisplayName] = useState('');
   const [withdrawAmount, setWithdrawAmount] = useState('');
@@ -30,6 +32,7 @@ export default function Profile() {
   const [withdrawalQuote, setWithdrawalQuote] = useState<WithdrawalQuote | null>(null);
   const [withdrawalQuoteError, setWithdrawalQuoteError] = useState('');
   const [withdrawalQuoteLoading, setWithdrawalQuoteLoading] = useState(false);
+  const [approvedDisclosure, setApprovedDisclosure] = useState<DisclosureApprovalDisplay | null>(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const previousLanguage = useRef(language);
@@ -120,6 +123,26 @@ export default function Profile() {
       setError(cause instanceof ApiError ? cause.message : t.unknownError);
     }
   };
+  const approveDisclosure = async (requestId: string) => {
+    setError(''); setNotice('');
+    try {
+      const result = await request<{ code: string; expiresAt: string }>(`/v1/me/disclosure-requests/${requestId}/approve`, { method: 'POST' });
+      setApprovedDisclosure(approvalDisplay(requestId, result.code, result.expiresAt));
+      await disclosureRequests.refetch();
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : t.unknownError);
+    }
+  };
+  const denyDisclosure = async (requestId: string) => {
+    setError(''); setNotice('');
+    try {
+      await request(`/v1/me/disclosure-requests/${requestId}/deny`, { method: 'POST' });
+      if (approvedDisclosure?.requestId === requestId) setApprovedDisclosure(null);
+      await disclosureRequests.refetch();
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : t.unknownError);
+    }
+  };
   const current = member.data;
   return (
     <Page>
@@ -139,6 +162,20 @@ export default function Profile() {
         <Text style={styles.text}>{t.biometricQuestion}</Text>
         <Pressable onPress={() => void enableBiometric()} style={styles.button}><Text style={styles.buttonText}>{t.enableBiometricSignIn}</Text></Pressable>
       </View> : null}
+      {disclosureRequests.data?.items.map((disclosure) => (
+        <View key={disclosure.id} style={styles.card}>
+          <Text style={styles.heading}>{t.balanceDisclosure}</Text>
+          <Text style={styles.text}>{t.balanceDisclosureRequest}</Text>
+          <Text style={styles.muted}>{t.expiresAt}: {formatDate(disclosure.expiresAt, language)}</Text>
+          {approvedDisclosure?.requestId === disclosure.id ? <View>
+            <Text style={styles.muted}>{t.balanceDisclosureCode}</Text>
+            <Text selectable style={styles.disclosureCode}>{approvedDisclosure.code}</Text>
+            <Text style={styles.muted}>{t.expiresAt}: {formatDate(approvedDisclosure.expiresAt, language)}</Text>
+          </View> : null}
+          {approvedDisclosure?.requestId !== disclosure.id ? <Pressable onPress={() => void approveDisclosure(disclosure.id)} style={styles.button}><Text style={styles.buttonText}>{t.approve}</Text></Pressable> : null}
+          <Pressable onPress={() => void denyDisclosure(disclosure.id)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.deny}</Text></Pressable>
+        </View>
+      ))}
       <View style={styles.card}>
         <Text style={styles.heading}>{current?.displayName ?? t.member}</Text>
         <Text style={styles.text}>{t.phoneLabel}: {current?.phone ? `••••${current.phone.slice(-4)}` : t.phoneUnavailable}</Text>

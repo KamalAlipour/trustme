@@ -4,7 +4,7 @@ import { getAddress, HDNodeWallet } from 'ethers';
 import { Redis } from 'ioredis';
 import bcrypt from 'bcryptjs';
 import { AccountType, AdminRole, Asset, PrismaClient, WithdrawalStatus } from '@trustme/db';
-import { createLoanRequest, postDeposit } from '@trustme/core';
+import { createLoanRequest, issueDemoCoupons, postDeposit } from '@trustme/core';
 import { createApp, type ApiDependencies } from '../src/app.js';
 import { HttpError } from '../src/http-error.js';
 import { provisionUser } from '../src/user-provisioning.js';
@@ -142,7 +142,7 @@ beforeAll(async () => {
   await prisma.$connect();
 });
 beforeEach(async () => {
-  await prisma.$executeRawUnsafe('TRUNCATE TABLE "MediaAsset", "RefundRequest", "AidRequest", "CharityAgent", "Charity", "AdminAuditLog", "AdminUser", "Withdrawal", "EscrowHold", "EmailVerification", "MemberDevice", "Contact", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User", "ChainCursor", "SystemSetting" CASCADE');
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "MediaAsset", "BalanceDisclosureRequest", "UserIdentity", "RefundRequest", "AidRequest", "CharityAgent", "Charity", "AdminAuditLog", "AdminUser", "Withdrawal", "EscrowHold", "EmailVerification", "MemberDevice", "Contact", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User", "ChainCursor", "SystemSetting" CASCADE');
   await prisma.systemSetting.createMany({ data: [
     { key: 'WITHDRAWAL_BASE_FEE_BPS', value: '100' },
     { key: 'WITHDRAWAL_MIN_FEE_USDT', value: '0.20' },
@@ -895,6 +895,176 @@ describe('member API', () => {
     expect(paged.body.items).toHaveLength(1);
     expect(paged.body.nextCursor).toBeNull();
     expect((await request(app).get('/v1/me/refunds?role=buyer').set('Authorization', `Bearer ${unrelated.body.tokens.accessToken}`)).body.items).toHaveLength(0);
+  });
+});
+
+describe('public disclosure API', () => {
+  it('reports real reserves separately from demo circulation', async () => {
+    const { app } = appFixture();
+    const systems = await addSystemAccounts();
+    const demoIssuance = await account(AccountType.SYSTEM_DEMO_ISSUANCE, Asset.COUPON);
+    const real = await provisionUser(prisma, config, { phoneNumber: '+1555000701' });
+    const demo = await provisionUser(prisma, config, { phoneNumber: '+1555000702', isDemo: true });
+    const realAccount = await prisma.ledgerAccount.findFirstOrThrow({ where: { userId: real.id, type: AccountType.USER_COUPON, asset: Asset.COUPON } });
+    const demoAccount = await prisma.ledgerAccount.findFirstOrThrow({ where: { userId: demo.id, type: AccountType.USER_COUPON, asset: Asset.COUPON } });
+    await postDeposit(prisma, {
+      externalRef: 'public-real-deposit',
+      userId: real.id,
+      userCouponAccountId: realAccount.id,
+      externalOnchainAccountId: systems.external.id,
+      vaultAccountId: systems.vault.id,
+      issuanceAccountId: systems.issuance.id,
+      amountMicroUsdt: 1_000_000n,
+    });
+    await issueDemoCoupons(prisma, {
+      userId: demo.id,
+      userCouponAccountId: demoAccount.id,
+      demoIssuanceAccountId: demoIssuance.id,
+      amountCoupons: 50n,
+      externalRef: 'public-demo-issue',
+    });
+    const result = await request(app).get('/v1/public/reserves');
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      custodyUsdt: '1',
+      obligationsUsdt: '1',
+      surplusUsdt: '0',
+      isSolvent: true,
+      couponsInCirculation: '100',
+      demoCouponsInCirculation: '50',
+    });
+    expect(result.body.asOf).toEqual(expect.any(String));
+    expect(Number.isNaN(Date.parse(result.body.asOf))).toBe(false);
+  });
+
+  it('returns an anonymised, minute-truncated confirmed transaction feed', async () => {
+    const { app } = appFixture();
+    const systems = await addSystemAccounts();
+    const user = await provisionUser(prisma, config, { phoneNumber: '+1555000703' });
+    const userAccount = await prisma.ledgerAccount.findFirstOrThrow({ where: { userId: user.id, type: AccountType.USER_COUPON, asset: Asset.COUPON } });
+    await postDeposit(prisma, {
+      externalRef: 'public-feed-deposit',
+      userId: user.id,
+      userCouponAccountId: userAccount.id,
+      externalOnchainAccountId: systems.external.id,
+      vaultAccountId: systems.vault.id,
+      issuanceAccountId: systems.issuance.id,
+      amountMicroUsdt: 1_000_000n,
+    });
+    const result = await request(app).get('/v1/public/transactions?limit=1');
+    expect(result.status).toBe(200);
+    expect(result.body.items).toHaveLength(1);
+    expect(result.body.items[0]).toEqual({
+      type: 'DEPOSIT',
+      amountCoupons: '100',
+      at: expect.stringMatching(/:00\.000Z$/),
+      isDemo: false,
+    });
+    expect(Object.keys(result.body.items[0]).sort()).toEqual(['amountCoupons', 'at', 'isDemo', 'type']);
+    expect(result.body.items[0]).not.toHaveProperty('id');
+    expect(result.body.items[0]).not.toHaveProperty('userId');
+    expect(result.body.items[0]).not.toHaveProperty('barcodeId');
+  });
+
+  it('returns only public barcode status and rejects unknown barcodes', async () => {
+    const { app } = appFixture();
+    const user = await provisionUser(prisma, config, { phoneNumber: '+1555000704', barcodeId: 'TC_PUBLIC_STATUS' });
+    const result = await request(app).get(`/v1/public/barcodes/${user.barcodeId}`);
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      barcodeId: user.barcodeId,
+      status: 'active',
+      isDemo: false,
+      memberSince: user.createdAt.toISOString(),
+    });
+    expect(result.body).not.toHaveProperty('balance');
+    expect(result.body).not.toHaveProperty('phoneNumber');
+    expect(result.body).not.toHaveProperty('displayName');
+    const unknown = await request(app).get('/v1/public/barcodes/TC_UNKNOWN');
+    expect(unknown.status).toBe(404);
+    expect(unknown.body).toEqual({ error: 'not_found' });
+  });
+
+  it('supports owner-approved one-shot balance disclosure', async () => {
+    const { app } = appFixture();
+    const systems = await addSystemAccounts();
+    const user = await provisionUser(prisma, config, { phoneNumber: '+1555000705', barcodeId: 'TC_PUBLIC_DISCLOSE' });
+    const userAccount = await prisma.ledgerAccount.findFirstOrThrow({ where: { userId: user.id, type: AccountType.USER_COUPON, asset: Asset.COUPON } });
+    await postDeposit(prisma, {
+      externalRef: 'public-disclosure-deposit',
+      userId: user.id,
+      userCouponAccountId: userAccount.id,
+      externalOnchainAccountId: systems.external.id,
+      vaultAccountId: systems.vault.id,
+      issuanceAccountId: systems.issuance.id,
+      amountMicroUsdt: 1_000_000n,
+    });
+    const accessToken = await memberToken(app, user.phoneNumber!);
+    const created = await request(app).post(`/v1/public/barcodes/${user.barcodeId}/disclosure`);
+    expect(created.status).toBe(201);
+    expect(created.body).toEqual({ requestId: expect.any(String), expiresAt: expect.any(String) });
+    expect(created.body).not.toHaveProperty('code');
+    const pending = await request(app).get('/v1/me/disclosure-requests').set('Authorization', `Bearer ${accessToken}`);
+    expect(pending.status).toBe(200);
+    expect(pending.body.items).toEqual([{ id: created.body.requestId, createdAt: expect.any(String), expiresAt: created.body.expiresAt }]);
+    const notApproved = await request(app).post(`/v1/public/disclosure/${created.body.requestId}/verify`).send({ code: '123456' });
+    expect(notApproved.status).toBe(410);
+    expect(notApproved.body).toEqual({ error: 'unavailable' });
+    const approval = await request(app).post(`/v1/me/disclosure-requests/${created.body.requestId}/approve`).set('Authorization', `Bearer ${accessToken}`);
+    expect(approval.status).toBe(200);
+    expect(approval.body).toEqual({ code: expect.stringMatching(/^\d{6}$/), expiresAt: created.body.expiresAt });
+    const verified = await request(app).post(`/v1/public/disclosure/${created.body.requestId}/verify`).send({ code: approval.body.code });
+    expect(verified.status).toBe(200);
+    expect(verified.body).toEqual({
+      barcodeId: user.barcodeId,
+      balanceCoupons: '100',
+      isDemo: false,
+      asOf: expect.any(String),
+    });
+    expect(Object.keys(verified.body).sort()).toEqual(['asOf', 'balanceCoupons', 'barcodeId', 'isDemo']);
+    const consumed = await request(app).post(`/v1/public/disclosure/${created.body.requestId}/verify`).send({ code: approval.body.code });
+    expect(consumed.status).toBe(410);
+    expect(consumed.body).toEqual({ error: 'unavailable' });
+  });
+
+  it('caps failed disclosure attempts and enforces the per-owner request limit', async () => {
+    const { app } = appFixture();
+    const user = await provisionUser(prisma, config, { phoneNumber: '+1555000706', barcodeId: 'TC_PUBLIC_LIMIT' });
+    const accessToken = await memberToken(app, user.phoneNumber!);
+    const requests = await Promise.all([
+      request(app).post(`/v1/public/barcodes/${user.barcodeId}/disclosure`),
+      request(app).post(`/v1/public/barcodes/${user.barcodeId}/disclosure`),
+      request(app).post(`/v1/public/barcodes/${user.barcodeId}/disclosure`),
+    ]);
+    expect(requests.every((result) => result.status === 201)).toBe(true);
+    const overLimit = await request(app).post(`/v1/public/barcodes/${user.barcodeId}/disclosure`);
+    expect(overLimit.status).toBe(429);
+    const approval = await request(app).post(`/v1/me/disclosure-requests/${requests[0].body.requestId}/approve`).set('Authorization', `Bearer ${accessToken}`);
+    expect(approval.status).toBe(200);
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const wrong = await request(app).post(`/v1/public/disclosure/${requests[0].body.requestId}/verify`).send({ code: '000000' });
+      expect(wrong.status).toBe(410);
+      expect(wrong.body).toEqual({ error: 'unavailable' });
+    }
+    const correctAfterCap = await request(app).post(`/v1/public/disclosure/${requests[0].body.requestId}/verify`).send({ code: approval.body.code });
+    expect(correctAfterCap.status).toBe(410);
+    expect(correctAfterCap.body).toEqual({ error: 'unavailable' });
+  });
+
+  it('does not disclose whether a request was denied or expired', async () => {
+    const { app } = appFixture();
+    const user = await provisionUser(prisma, config, { phoneNumber: '+1555000707', barcodeId: 'TC_PUBLIC_UNAVAILABLE' });
+    const accessToken = await memberToken(app, user.phoneNumber!);
+    const denied = await request(app).post(`/v1/public/barcodes/${user.barcodeId}/disclosure`);
+    await request(app).post(`/v1/me/disclosure-requests/${denied.body.requestId}/deny`).set('Authorization', `Bearer ${accessToken}`);
+    const deniedVerify = await request(app).post(`/v1/public/disclosure/${denied.body.requestId}/verify`).send({ code: '123456' });
+    expect(deniedVerify.status).toBe(410);
+    expect(deniedVerify.body).toEqual({ error: 'unavailable' });
+    const expired = await request(app).post(`/v1/public/barcodes/${user.barcodeId}/disclosure`);
+    await prisma.balanceDisclosureRequest.update({ where: { id: expired.body.requestId }, data: { expiresAt: new Date(Date.now() - 1_000) } });
+    const expiredVerify = await request(app).post(`/v1/public/disclosure/${expired.body.requestId}/verify`).send({ code: '123456' });
+    expect(expiredVerify.status).toBe(410);
+    expect(expiredVerify.body).toEqual({ error: 'unavailable' });
   });
 });
 

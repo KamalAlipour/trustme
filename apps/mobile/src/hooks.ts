@@ -1,6 +1,6 @@
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { request } from './api/client';
-import type { AidRequest, Balance, Charity, Contact, Loan, Member, RefundRequest, TransactionsPage, WithdrawalAvailability } from './api/types';
+import type { AidRequest, Balance, Charity, Contact, DisclosureRequest, Loan, Member, RefundRequest, TransactionsPage, WithdrawalAvailability } from './api/types';
 
 export function useMember() { return useQuery({ queryKey: ['me'], queryFn: () => request<Member>('/v1/me') }); }
 export function useBalance() { return useQuery({ queryKey: ['balance'], queryFn: () => request<Balance>('/v1/me/balance') }); }
@@ -18,9 +18,10 @@ export function useRefunds(role: 'buyer' | 'seller') {
 export function useAidRequests() { return useQuery({ queryKey: ['aid-requests'], queryFn: () => request<{ items: AidRequest[] }>('/v1/me/aid-requests') }); }
 export function useCharities() { return useQuery({ queryKey: ['charities'], queryFn: () => request<{ items: Charity[] }>('/v1/me/charities') }); }
 export function useCharityRequests() { return useQuery({ queryKey: ['charity-requests'], queryFn: () => request<{ items: AidRequest[] }>('/v1/me/charity-requests') }); }
+export function useDisclosureRequests() { return useQuery({ queryKey: ['disclosure-requests'], queryFn: () => request<{ items: DisclosureRequest[] }>('/v1/me/disclosure-requests') }); }
 export function useInvalidateMoney() {
   const client = useQueryClient();
-  return () => Promise.all([client.invalidateQueries({ queryKey: ['me'] }), client.invalidateQueries({ queryKey: ['balance'] }), client.invalidateQueries({ queryKey: ['withdrawal-availability'] }), client.invalidateQueries({ queryKey: ['transactions'] }), client.invalidateQueries({ queryKey: ['loans'] }), client.invalidateQueries({ queryKey: ['refunds'] }), client.invalidateQueries({ queryKey: ['aid-requests'] }), client.invalidateQueries({ queryKey: ['charity-requests'] })]);
+  return () => Promise.all([client.invalidateQueries({ queryKey: ['me'] }), client.invalidateQueries({ queryKey: ['balance'] }), client.invalidateQueries({ queryKey: ['withdrawal-availability'] }), client.invalidateQueries({ queryKey: ['transactions'] }), client.invalidateQueries({ queryKey: ['loans'] }), client.invalidateQueries({ queryKey: ['refunds'] }), client.invalidateQueries({ queryKey: ['aid-requests'] }), client.invalidateQueries({ queryKey: ['charity-requests'] }), client.invalidateQueries({ queryKey: ['disclosure-requests'] })]);
 }
 
 export type { TransactionsPage };

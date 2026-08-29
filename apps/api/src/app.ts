@@ -41,6 +41,7 @@ import { createAdminRouter, EthersAdminChainProvider, type AdminChainProvider } 
 import { HttpError } from './http-error.js';
 import { createMemberAuthRouter, createMemberSecurityRouter, requireMember } from './member-auth.js';
 import { createMemberRouter } from './member-router.js';
+import { createPublicRouter } from './public-router.js';
 import { provisionUser } from './user-provisioning.js';
 
 export { HttpError } from './http-error.js';
@@ -181,6 +182,7 @@ export function createApp(dependencies: ApiDependencies): express.Express {
   app.use(pinoHttp({ logger }));
   app.use('/v1', rateLimit({ windowMs: config.rateLimitWindowMs, limit: config.rateLimitMax, standardHeaders: true, legacyHeaders: false }));
   useConfiguredCors(app, config.allowedOrigins);
+  app.use('/v1/public', rateLimit({ windowMs: 60_000, limit: 30, standardHeaders: true, legacyHeaders: false }), createPublicRouter({ prisma }));
   const logEmailCode = dependencies.logEmailCode ?? ((email: string, code: string) => logger.info({ email }, `member email code ${code}`));
   app.use('/v1/auth', createMemberAuthRouter({
     config,

@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import express from 'express';
 import rateLimit from 'express-rate-limit';
 import bcrypt from 'bcryptjs';
@@ -38,6 +38,7 @@ import {
   rejectAidRequest,
   requestAidDocuments,
   donateToCharity,
+  withSerializableRetry,
 } from '@trustme/core';
 import { DomainError } from '@trustme/core';
 import type { QueueLike } from './app.js';
@@ -77,6 +78,7 @@ const loanSchema = z.object({
 const repaymentSchema = z.object({ amountCoupons: couponsSchema, idempotencyKey: z.string().min(1) });
 const codeSchema = z.object({ code: fourDigitCodeSchema });
 const emailCodeSchema = z.object({ code: z.string().regex(/^\d{6}$/, 'code must be exactly six digits') });
+const disclosureIdSchema = z.string().uuid();
 const approvalSchema = z.object({ code: fourDigitCodeSchema, pin: fourDigitCodeSchema });
 const contactSchema = z.object({ barcodeId: barcodeIdSchema, alias: z.string().trim().min(1).max(128) });
 const contactPatchSchema = z.object({ alias: z.string().trim().min(1).max(128) });
@@ -343,9 +345,9 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
   const sender = dependencies.emailSender ?? smtpSender(dependencies.config);
   const router = express.Router();
   const mediaLimiter = rateLimit({ windowMs: 60 * 60_000, limit: 20, keyGenerator: (request) => memberClaims(request).sub });
-  const setupAllowedPaths = new Set(['/security-setup', '/email', '/email/verify', '/logout']);
+  const setupAllowedPaths = new Set(['/security-setup', '/email', '/email/verify', '/logout', '/disclosure-requests']);
   router.use((request, response, next) => {
-    if (setupAllowedPaths.has(request.path)) {
+    if (setupAllowedPaths.has(request.path) || request.path.startsWith('/disclosure-requests/')) {
       next();
       return;
     }
@@ -359,6 +361,84 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
         select: { pinHash: true, emailVerifiedAt: true, biometricEnrolledAt: true, setupAcknowledgedAt: true, securitySetupCompletedAt: true },
       });
       response.json(securitySetupStatus(user, dependencies.config.requireEmailVerification));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/disclosure-requests', async (request, response, next) => {
+    try {
+      const requests = await prisma.balanceDisclosureRequest.findMany({
+        where: {
+          userId: memberClaims(request).sub,
+          expiresAt: { gt: new Date() },
+          consumedAt: null,
+          deniedAt: null,
+        },
+        select: { id: true, createdAt: true, expiresAt: true },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      });
+      response.json({
+        items: requests.map((disclosure) => ({
+          id: disclosure.id,
+          createdAt: disclosure.createdAt.toISOString(),
+          expiresAt: disclosure.expiresAt.toISOString(),
+        })),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/disclosure-requests/:id/approve', async (request, response, next) => {
+    try {
+      const id = disclosureIdSchema.parse(request.params.id);
+      const userId = memberClaims(request).sub;
+      const result = await withSerializableRetry(prisma, async (tx) => {
+        await tx.$queryRaw`SELECT id FROM "BalanceDisclosureRequest" WHERE id = ${id}::uuid FOR UPDATE`;
+        const disclosure = await tx.balanceDisclosureRequest.findUnique({ where: { id } });
+        if (
+          disclosure === null ||
+          disclosure.userId !== userId ||
+          disclosure.expiresAt <= new Date() ||
+          disclosure.consumedAt !== null ||
+          disclosure.deniedAt !== null
+        ) {
+          return null;
+        }
+        const code = randomInt(0, 1_000_000).toString().padStart(6, '0');
+        const codeHash = await bcrypt.hash(code, 12);
+        await tx.balanceDisclosureRequest.update({ where: { id }, data: { codeHash } });
+        return { code, expiresAt: disclosure.expiresAt };
+      });
+      if (result === null) throw new HttpError(404, 'not_found');
+      response.json({ code: result.code, expiresAt: result.expiresAt.toISOString() });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/disclosure-requests/:id/deny', async (request, response, next) => {
+    try {
+      const id = disclosureIdSchema.parse(request.params.id);
+      const userId = memberClaims(request).sub;
+      const result = await withSerializableRetry(prisma, async (tx) => {
+        await tx.$queryRaw`SELECT id FROM "BalanceDisclosureRequest" WHERE id = ${id}::uuid FOR UPDATE`;
+        const disclosure = await tx.balanceDisclosureRequest.findUnique({ where: { id } });
+        if (
+          disclosure === null ||
+          disclosure.userId !== userId ||
+          disclosure.expiresAt <= new Date() ||
+          disclosure.consumedAt !== null ||
+          disclosure.deniedAt !== null
+        ) {
+          return false;
+        }
+        await tx.balanceDisclosureRequest.update({ where: { id }, data: { deniedAt: new Date() } });
+        return true;
+      });
+      if (!result) throw new HttpError(404, 'not_found');
+      response.status(204).send();
     } catch (error) {
       next(error);
     }
