@@ -1,14 +1,16 @@
 import React, { useEffect, useState } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
-import { Pressable, Text, TextInput, View } from 'react-native';
+import { Pressable, Share, Text, TextInput, View } from 'react-native';
+import QRCode from 'react-native-qrcode-svg';
 import { ApiError, request } from '../../src/api/client';
 import { useSession } from '../../src/auth/session';
 import { Page, LoadingScreen } from '../../src/components/Screen';
 import { useBalance, useDisclosures, useInvalidateMoney, useMember } from '../../src/hooks';
 import { useTranslation } from '../../src/i18n';
+import { getBarcodeQrValue } from '../../src/lib/barcode-payload';
 import { randomFourDigitCode } from '../../src/lib/code';
 import { formatCoupons } from '../../src/lib/format';
-import { styles } from '../../src/styles';
+import { colors, styles } from '../../src/styles';
 
 function formatDisclosureCountdown(expiresAt: string, now: number): string {
   const remainingSeconds = Math.max(0, Math.ceil((new Date(expiresAt).getTime() - now) / 1000));
@@ -31,6 +33,7 @@ export default function Home() {
   const [merchant, setMerchant] = useState(false);
   const [escrowCode, setEscrowCode] = useState('');
   const [error, setError] = useState('');
+  const [barcodeShareError, setBarcodeShareError] = useState('');
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (params.barcodeId !== undefined) setBarcodeId(params.barcodeId);
@@ -68,6 +71,16 @@ export default function Home() {
       await invalidate();
     } catch (cause) { setError(cause instanceof ApiError ? cause.message : t.unknownError); }
   };
+  const ownBarcodeId = balance.data?.barcodeId ?? member?.barcodeId ?? profile.data?.barcodeId;
+  const shareBarcode = async () => {
+    if (!ownBarcodeId) return;
+    setBarcodeShareError('');
+    try {
+      await Share.share({ message: ownBarcodeId });
+    } catch {
+      setBarcodeShareError(t.barcodeShareUnavailable);
+    }
+  };
   return (
     <Page>
       <View style={styles.row}><Text style={styles.title}>{t.home}</Text><Pressable onPress={() => router.push('/contacts')}><Text style={styles.secondaryButtonText}>{t.contacts}</Text></Pressable></View>
@@ -88,6 +101,18 @@ export default function Home() {
         <Text style={styles.muted}>{member?.displayName ?? profile.data?.displayName ?? ''}</Text>
       </View>
       {member?.isRestricted ? <View style={styles.card}><Text style={styles.danger}>{t.restricted}</Text><Text style={styles.text}>{t.restrictedExplanation}</Text></View> : null}
+      {ownBarcodeId ? <View style={styles.card}>
+        <Text style={styles.heading}>{t.myBarcode}</Text>
+        <Text style={styles.muted}>{t.myBarcodeInstructions}</Text>
+        <View style={styles.barcodeQr}>
+          <QRCode value={getBarcodeQrValue(ownBarcodeId)} size={220} color={colors.ink} backgroundColor={colors.card} />
+          <Text selectable style={{ ...styles.title, textAlign: 'center', letterSpacing: 2 }}>{ownBarcodeId}</Text>
+        </View>
+        <Pressable onPress={() => void shareBarcode()} style={styles.secondaryButton}>
+          <Text style={styles.secondaryButtonText}>{t.shareBarcode}</Text>
+        </Pressable>
+        {barcodeShareError ? <Text style={styles.danger}>{barcodeShareError}</Text> : null}
+      </View> : null}
       <View style={styles.card}>
         <Text style={styles.heading}>{merchant ? t.payMerchant : t.send}</Text>
         <TextInput value={barcodeId} onChangeText={setBarcodeId} placeholder={t.barcode} style={styles.input} />

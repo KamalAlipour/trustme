@@ -32,6 +32,7 @@ export const styles = StyleSheet.create({
   languageActive: { borderColor: colors.primary, borderWidth: 2, borderRadius: 12, padding: 9 },
   danger: { color: colors.danger, fontSize: 16, textAlign: 'auto', writingDirection: 'auto' },
   notice: { color: colors.success, fontSize: 16, textAlign: 'auto', writingDirection: 'auto' },
+  barcodeQr: { alignItems: 'center', gap: 12, padding: 8 },
   row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 },
   pill: { borderRadius: 99, backgroundColor: '#E5F2F5', paddingHorizontal: 10, paddingVertical: 5 },
   divider: { height: 1, backgroundColor: colors.border },
