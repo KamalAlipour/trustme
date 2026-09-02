@@ -9,6 +9,7 @@ User=trustme
 Group=trustme
 WorkingDirectory=/opt/trustme/current
 EnvironmentFile=/etc/trustme/trustme.env
+EnvironmentFile=-/etc/trustme/trustme-worker.env
 ExecStartPre=/bin/sh -c 'test ! -e "$${FAILOVER_MARKER_PATH:-/etc/trustme/FAILED_OVER}"'
 ExecStart=/usr/bin/node /opt/trustme/current/apps/worker/dist/index.js
 Restart=always
