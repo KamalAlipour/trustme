@@ -8,6 +8,7 @@ type Settings = {
   minimumWithdrawalMicroUsdt: string;
   autoApprovalLimitMicroUsdt: string;
   requireIdentityForWithdrawal: boolean;
+  identityRequiredCountries: string[];
 };
 
 export function SettingsForm({ settings, errorField, errorMessage }: Readonly<{ settings: Settings; errorField?: string | undefined; errorMessage?: string | undefined }>) {
@@ -22,6 +23,10 @@ export function SettingsForm({ settings, errorField, errorMessage }: Readonly<{ 
       <label className="flex items-center gap-3">
         <input type="checkbox" name="requireIdentityForWithdrawal" defaultChecked={settings.requireIdentityForWithdrawal} />
         <span className="text-sm font-medium">{labels.requireIdentityForWithdrawal}</span>
+      </label>
+      <label className="flex items-center gap-3">
+        <input type="checkbox" name="identityRequiredCountries" value="IR" defaultChecked={settings.identityRequiredCountries.includes('IR')} />
+        <span className="text-sm font-medium">{labels.identityRequiredBeforeSpendingIran}</span>
       </label>
       <label className="block">
         <span className="mb-1 block text-sm font-medium">{labels.minimumFeeMicroUsdt}</span>

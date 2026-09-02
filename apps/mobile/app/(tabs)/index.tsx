@@ -8,6 +8,7 @@ import { Page, LoadingScreen } from '../../src/components/Screen';
 import { useBalance, useDisclosures, useEscrowBalance, useEscrowConfig, useInvalidateMoney, useMember } from '../../src/hooks';
 import { useTranslation } from '../../src/i18n';
 import { randomFourDigitCode } from '../../src/lib/code';
+import { mapApiError } from '../../src/lib/errors';
 import { formatCoupons, formatMicroUsdt } from '../../src/lib/format';
 import { colors, styles } from '../../src/styles';
 
@@ -51,7 +52,7 @@ export default function Home() {
       if (!stepUp) { setError(t.operationPinRequired); return; }
       await request('/v1/me/transfers', { method: 'POST', body: { toBarcodeId: barcodeId, amountCoupons: amount, idempotencyKey: `mobile-${Date.now()}`, pin: stepUp } });
       setAmount(''); setPin(''); await invalidate();
-    } catch (cause) { setError(cause instanceof ApiError ? cause.message : t.unknownError); }
+    } catch (cause) { setError(mapApiError(cause, t)); }
   };
   const submitEscrow = async () => {
     setError('');
@@ -70,7 +71,7 @@ export default function Home() {
       setEscrowCode(code);
       setPin('');
       await invalidate();
-    } catch (cause) { setError(cause instanceof ApiError ? cause.message : t.unknownError); }
+    } catch (cause) { setError(mapApiError(cause, t)); }
   };
   const ownBarcodeId = balance.data?.barcodeId ?? member?.barcodeId ?? profile.data?.barcodeId;
   const shareBarcode = async () => {

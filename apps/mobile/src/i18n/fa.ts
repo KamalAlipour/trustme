@@ -152,6 +152,7 @@ export const fa: Translations = {
   identityCaptureError: 'آغاز احراز هویت زنده ممکن نشد.',
   plannedIdentity: (provider: string) => `${provider} برای کشور شما در برنامه است.`,
   identityWithdrawalRequired: 'برای برداشت احراز هویت لازم است؛ آن را از پروفایل تکمیل کنید.',
+  identitySpendingRequired: 'پیش از خرج کردن، احراز هویت را کامل کنید. از پروفایل، بخش احراز هویت را باز کنید.',
   identityCountrySaved: 'کشور ذخیره شد.',
   identityVerified: 'هویت شما تأیید شده است.',
   identityVerifiedAt: (date: string) => `تأیید شده در ${date}.`,

@@ -33,6 +33,7 @@ import { adminClaims, createAdminJwt, requireAdmin, requireRole, verifyAdminPass
 import type { ApiConfig } from './config.js';
 import { HttpError } from './http-error.js';
 import { requireIdentityForWithdrawal } from './withdrawal-settings.js';
+import { parseIdentityRequiredCountries } from './identity-required-countries.js';
 import { deleteMediaFile, mediaPath } from './media.js';
 
 export type AdminChainProvider = {
@@ -77,6 +78,7 @@ const settingSchema = z.object({
   minimumWithdrawalMicroUsdt: nonNegativeIntegerString,
   autoApprovalLimitMicroUsdt: nonNegativeIntegerString,
   requireIdentityForWithdrawal: z.boolean(),
+  identityRequiredCountries: z.array(z.string().regex(/^[A-Za-z]{2}$/, 'country code must be exactly two letters')).transform((countries) => [...new Set(countries.map((country) => country.toUpperCase()))]),
 }).strict();
 const patchSettingsSchema = settingSchema.partial().strict();
 const statusSchema = z.nativeEnum(WithdrawalStatus).optional();
@@ -194,7 +196,7 @@ function nextCursor(createdAt: Date, id: string): string {
 }
 
 async function readAdminSettings(prisma: PrismaClient) {
-  const rows = await prisma.systemSetting.findMany({ where: { key: { in: ['WITHDRAWAL_BASE_FEE_BPS', 'WITHDRAWAL_MIN_FEE_USDT', 'MIN_WITHDRAWAL_USDT', 'AUTO_APPROVAL_LIMIT_USDT', 'REQUIRE_IDENTITY_FOR_WITHDRAWAL'] } } });
+  const rows = await prisma.systemSetting.findMany({ where: { key: { in: ['WITHDRAWAL_BASE_FEE_BPS', 'WITHDRAWAL_MIN_FEE_USDT', 'MIN_WITHDRAWAL_USDT', 'AUTO_APPROVAL_LIMIT_USDT', 'REQUIRE_IDENTITY_FOR_WITHDRAWAL', 'IDENTITY_REQUIRED_COUNTRIES'] } } });
   const values = new Map(rows.map((row) => [row.key, row.value]));
   return {
     withdrawalBaseFeeBps: values.get('WITHDRAWAL_BASE_FEE_BPS') ?? '0',
@@ -202,6 +204,7 @@ async function readAdminSettings(prisma: PrismaClient) {
     minimumWithdrawalMicroUsdt: microUsdtFromDecimal(values.get('MIN_WITHDRAWAL_USDT') ?? '0').toString(),
     autoApprovalLimitMicroUsdt: microUsdtFromDecimal(values.get('AUTO_APPROVAL_LIMIT_USDT') ?? '0').toString(),
     requireIdentityForWithdrawal: requireIdentityForWithdrawal(values.get('REQUIRE_IDENTITY_FOR_WITHDRAWAL')),
+    identityRequiredCountries: [...parseIdentityRequiredCountries(values.get('IDENTITY_REQUIRED_COUNTRIES'))],
   };
 }
 
@@ -321,6 +324,7 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
           minimumWithdrawalMicroUsdt: 'MIN_WITHDRAWAL_USDT',
           autoApprovalLimitMicroUsdt: 'AUTO_APPROVAL_LIMIT_USDT',
           requireIdentityForWithdrawal: 'REQUIRE_IDENTITY_FOR_WITHDRAWAL',
+          identityRequiredCountries: 'IDENTITY_REQUIRED_COUNTRIES',
         };
         const before = await tx.systemSetting.findMany({ where: { key: { in: keys.map((key) => keyMap[key]!) } } });
         const oldValues = Object.fromEntries(before.map((row) => [row.key, row.value]));
@@ -328,7 +332,11 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
           const value = body[field as keyof typeof body];
           if (value === undefined) continue;
           const key = keyMap[field]!;
-          const storedValue = field === 'withdrawalBaseFeeBps' || field === 'requireIdentityForWithdrawal' ? String(value) : decimalFromMicroUsdt(BigInt(value));
+          const storedValue = field === 'withdrawalBaseFeeBps' || field === 'requireIdentityForWithdrawal'
+            ? String(value)
+            : field === 'identityRequiredCountries'
+              ? (value as string[]).join(',')
+              : decimalFromMicroUsdt(BigInt(value as string));
           await tx.systemSetting.upsert({ where: { key }, update: { value: storedValue }, create: { key, value: storedValue } });
         }
         const after = await tx.systemSetting.findMany({ where: { key: { in: keys.map((key) => keyMap[key]!) } } });

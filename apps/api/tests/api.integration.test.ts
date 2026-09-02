@@ -3,7 +3,7 @@ import request from 'supertest';
 import { getAddress, HDNodeWallet } from 'ethers';
 import { Redis } from 'ioredis';
 import bcrypt from 'bcryptjs';
-import { AccountType, AdminRole, Asset, BalanceDisclosureStatus, IdentityCaptureStep, PrismaClient, TransactionType, WithdrawalStatus } from '@trustme/db';
+import { AccountType, AdminRole, Asset, BalanceDisclosureStatus, IdentityCaptureStep, PayCodeStatus, PrismaClient, TransactionType, WithdrawalStatus } from '@trustme/db';
 import { createLoanRequest, postDeposit } from '@trustme/core';
 import { createApp, type ApiDependencies } from '../src/app.js';
 import { HttpError } from '../src/http-error.js';
@@ -882,6 +882,74 @@ describe('member API', () => {
     expect((await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000128' } })).pinAttempts).toBe(1);
   });
 
+  it('keeps member spending permissive by default and gates only configured countries', async () => {
+    const { app } = appFixture(undefined, undefined, { escrowContractAddress: getAddress(`0x${'44'.repeat(20)}`) });
+    for (const [phone, barcode] of [
+      ['09000000101', 'gate-ir'],
+      ['+1555000102', 'gate-recipient'],
+      ['+1555000103', 'gate-no'],
+      ['+1555000104', 'gate-null'],
+      ['+1555000105', 'gate-merchant'],
+    ] as const) {
+      expect((await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone, barcodeId: barcode })).status).toBe(201);
+    }
+    const buyer = await prisma.user.findUniqueOrThrow({ where: { barcodeId: 'gate-ir' } });
+    const recipient = await prisma.user.findUniqueOrThrow({ where: { barcodeId: 'gate-recipient' } });
+    const noUser = await prisma.user.findUniqueOrThrow({ where: { barcodeId: 'gate-no' } });
+    const nullUser = await prisma.user.findUniqueOrThrow({ where: { barcodeId: 'gate-null' } });
+    const merchant = await prisma.user.findUniqueOrThrow({ where: { barcodeId: 'gate-merchant' } });
+    await prisma.user.update({ where: { id: noUser.id }, data: { country: 'NO' } });
+    const systems = await addSystemAccounts();
+    for (const user of [buyer, noUser, nullUser]) {
+      const userAccount = await prisma.ledgerAccount.findFirstOrThrow({ where: { userId: user.id, type: AccountType.USER_COUPON, asset: Asset.COUPON } });
+      await postDeposit(prisma, {
+        externalRef: `gate-fund:${user.barcodeId}`,
+        userId: user.id,
+        userCouponAccountId: userAccount.id,
+        externalOnchainAccountId: systems.external.id,
+        vaultAccountId: systems.vault.id,
+        issuanceAccountId: systems.issuance.id,
+        amountMicroUsdt: 10_000_000n,
+      });
+      await prisma.escrowBalance.create({ data: { userId: user.id, lockedMicroUsdt: 10_000_000n } });
+    }
+    const buyerToken = await memberToken(app, buyer.phoneNumber);
+    const noToken = await memberToken(app, noUser.phoneNumber);
+    const nullToken = await memberToken(app, nullUser.phoneNumber);
+    const merchantToken = await memberToken(app, merchant.phoneNumber);
+
+    expect((await request(app).post('/v1/me/transfers').set('Authorization', `Bearer ${buyerToken}`).send({ toBarcodeId: recipient.barcodeId, amountCoupons: '1', idempotencyKey: 'gate-default-transfer', pin: '2468' })).status).toBe(201);
+    expect((await request(app).post('/v1/me/escrow/pay-codes').set('Authorization', `Bearer ${buyerToken}`).send({ code: '1234', maxAmount: '1', pin: '2468' })).status).toBe(201);
+
+    await prisma.systemSetting.upsert({ where: { key: 'IDENTITY_REQUIRED_COUNTRIES' }, update: { value: 'IR' }, create: { key: 'IDENTITY_REQUIRED_COUNTRIES', value: 'IR' } });
+    for (const [path, body] of [
+      ['/v1/me/transfers', { toBarcodeId: recipient.barcodeId, amountCoupons: '1', idempotencyKey: 'gate-transfer', pin: '2468' }],
+      ['/v1/me/escrows', { recipientBarcodeId: recipient.barcodeId, amountCoupons: '1', code: '5678', expiresAt: new Date(Date.now() + 60_000).toISOString(), pin: '2468' }],
+      ['/v1/me/escrow/pay-codes', { code: '2345', maxAmount: '1', pin: '2468' }],
+      ['/v1/me/escrow/unloads', { amount: '1', pin: '2468' }],
+    ] as const) {
+      const result = await request(app).post(path).set('Authorization', `Bearer ${buyerToken}`).send(body);
+      expect(result.status).toBe(403);
+      expect(result.body).toEqual({ error: 'identity_verification_required' });
+    }
+
+    await prisma.user.update({ where: { id: buyer.id }, data: { identityVerificationStatus: 'VERIFIED' } });
+    await prisma.memberWallet.create({ data: { userId: buyer.id, address: getAddress(`0x${'55'.repeat(20)}`), kind: 'IN_APP', chainId: 137 } });
+    const verifiedBuyerToken = await memberTokenForUser(buyer.id);
+    expect((await request(app).post('/v1/me/transfers').set('Authorization', `Bearer ${verifiedBuyerToken}`).send({ toBarcodeId: recipient.barcodeId, amountCoupons: '1', idempotencyKey: 'gate-verified-transfer', pin: '2468' })).status).toBe(201);
+    expect((await request(app).post('/v1/me/escrows').set('Authorization', `Bearer ${verifiedBuyerToken}`).send({ recipientBarcodeId: recipient.barcodeId, amountCoupons: '1', code: '6789', expiresAt: new Date(Date.now() + 60_000).toISOString(), pin: '2468' })).status).toBe(201);
+    expect((await request(app).post('/v1/me/escrow/pay-codes').set('Authorization', `Bearer ${verifiedBuyerToken}`).send({ code: '3456', maxAmount: '1', pin: '2468' })).status).toBe(201);
+    expect((await request(app).post('/v1/me/escrow/unloads').set('Authorization', `Bearer ${verifiedBuyerToken}`).send({ amount: '1', pin: '2468' })).status).toBe(201);
+
+    expect((await request(app).post('/v1/me/transfers').set('Authorization', `Bearer ${noToken}`).send({ toBarcodeId: recipient.barcodeId, amountCoupons: '1', idempotencyKey: 'gate-no-transfer', pin: '2468' })).status).toBe(201);
+    expect((await request(app).post('/v1/me/transfers').set('Authorization', `Bearer ${nullToken}`).send({ toBarcodeId: recipient.barcodeId, amountCoupons: '1', idempotencyKey: 'gate-null-transfer', pin: '2468' })).status).toBe(201);
+
+    await prisma.user.update({ where: { id: buyer.id }, data: { identityVerificationStatus: 'UNVERIFIED' } });
+    await prisma.payCode.create({ data: { buyerId: buyer.id, codeHash: await bcrypt.hash('7890', 10), maxAmountMicroUsdt: 1_000_000n, expiresAt: new Date(Date.now() + 60_000), status: PayCodeStatus.ACTIVE } });
+    const settlement = await request(app).post('/v1/me/escrow/settlements').set('Authorization', `Bearer ${merchantToken}`).send({ buyerBarcodeId: buyer.barcodeId, code: '7890', amount: '1', idempotencyKey: 'gate-settlement', pin: '2468' });
+    expect(settlement.status).toBe(201);
+  });
+
   it('keeps Restricted Mode active on /v1/me while allowing loan repayment', async () => {
     const { app } = appFixture();
     for (const [phone, barcode] of [['+1555000136', 'restricted-borrower'], ['+1555000137', 'restricted-guarantor'], ['+1555000138', 'restricted-lender']] as const) {
@@ -1665,9 +1733,11 @@ describe('admin API', () => {
       withdrawalBaseFeeBps: '250',
       minimumFeeMicroUsdt: '300000',
       minimumWithdrawalMicroUsdt: '2000000',
+      identityRequiredCountries: ['ir', 'NO', 'ir'],
     });
     expect(updated.status).toBe(200);
-    expect(updated.body).toMatchObject({ withdrawalBaseFeeBps: '250', minimumFeeMicroUsdt: '300000', minimumWithdrawalMicroUsdt: '2000000' });
+    expect(updated.body).toMatchObject({ withdrawalBaseFeeBps: '250', minimumFeeMicroUsdt: '300000', minimumWithdrawalMicroUsdt: '2000000', identityRequiredCountries: ['IR', 'NO'] });
+    expect(await prisma.systemSetting.findUniqueOrThrow({ where: { key: 'IDENTITY_REQUIRED_COUNTRIES' } })).toMatchObject({ value: 'IR,NO' });
     expect(await prisma.adminAuditLog.count({ where: { action: 'settings.update' } })).toBe(1);
     const unknown = await request(app).patch('/admin/settings').set('Authorization', `Bearer ${jwt}`).send({ unexpected: '1' });
     expect(unknown.status).toBe(400);
@@ -1677,6 +1747,9 @@ describe('admin API', () => {
       error: 'validation failed',
       fields: [{ path: 'withdrawalBaseFeeBps', message: 'fee bps must be between 0 and 10000' }],
     });
+    const invalidCountry = await request(app).patch('/admin/settings').set('Authorization', `Bearer ${jwt}`).send({ identityRequiredCountries: ['IR', 'iran'] });
+    expect(invalidCountry.status).toBe(400);
+    expect(invalidCountry.body.fields[0]).toEqual({ path: 'identityRequiredCountries.1', message: 'country code must be exactly two letters' });
     expect(await prisma.adminAuditLog.count({ where: { action: 'settings.update' } })).toBe(1);
     const invalidMinimumFee = await request(app).patch('/admin/settings').set('Authorization', `Bearer ${jwt}`).send({ minimumFeeMicroUsdt: '100000001' });
     expect(invalidMinimumFee.status).toBe(400);

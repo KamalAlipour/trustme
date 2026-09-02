@@ -10,6 +10,10 @@ import { mapApiError } from './errors';
 import { fa } from '../i18n/fa';
 
 describe('Persian API errors', () => {
+  it('maps country-scoped spending identity failures to identity guidance', () => {
+    expect(mapApiError(new ApiError(403, { error: 'identity_verification_required' }), fa)).toBe(fa.identitySpendingRequired);
+  });
+
   it('maps refund, aid, and upload failures', () => {
     expect(mapApiError(new ApiError(409, { error: 'insufficient balance for refund' }), fa)).toBe(fa.insufficientRefundBalance);
     expect(mapApiError(new ApiError(409, { error: 'insufficient charity balance' }), fa)).toBe(fa.insufficientCharityBalance);
