@@ -12,12 +12,17 @@ Deploy from a controlled operator environment:
 ESCROW_DEPLOYER_KEY=... \
 USDT_CONTRACT_ADDRESS=... \
 ESCROW_VAULT_ADDRESS=... \
+ESCROW_SETTLER_ADDRESS=... \
 POLYGON_RPC_URL=... \
 npx tsx scripts/deploy-escrow.ts
 ```
 
 `ESCROW_CONTRACT_ADDRESS`, `ESCROW_CHAIN_ID`, `USDT_CONTRACT_ADDRESS`,
 `WALLETCONNECT_PROJECT_ID`, and `WEB3AUTH_CLIENT_ID` are API settings.
+`ESCROW_SETTLER_ADDRESS` is a required deployment-time input. It must be the
+address corresponding to the worker's `ESCROW_SETTLER_KEY`; the deployment
+script configures the contract's settler automatically after deployment, so no
+manual `setSettler` step is needed.
 `ESCROW_PUBLIC_RPC_URL` is an optional API setting exposed as `rpcUrl` to the
 mobile app. It must be a public RPC endpoint without an embedded API key,
 because the app receives this value and users can inspect it.
