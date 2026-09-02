@@ -68,7 +68,33 @@ export const openapiDocument = {
     '/v1/me/pin': { post: { responses: { '204': { description: 'PIN changed' } } } },
     '/v1/me/email': { post: { responses: { '202': { description: 'Email verification requested' }, '503': { description: 'Email delivery unavailable' } } } },
     '/v1/me/email/verify': { post: { responses: { '200': { description: 'Verified member profile' } } } },
-    '/v1/me/escrow/config': { get: { responses: { '200': { description: 'Escrow contract and wallet configuration' } } } },
+    '/v1/me/escrow/config': {
+      get: {
+        responses: {
+          '200': {
+            description: 'Escrow contract, RPC, and wallet configuration',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['contractAddress', 'chainId', 'usdtAddress', 'rpcUrl', 'decimals', 'walletConnectProjectId', 'web3AuthClientId', 'enabled'],
+                  properties: {
+                    contractAddress: { type: 'string', nullable: true },
+                    chainId: { type: 'integer' },
+                    usdtAddress: { type: 'string' },
+                    rpcUrl: { type: 'string', format: 'uri' },
+                    decimals: { type: 'integer' },
+                    walletConnectProjectId: { type: 'string', nullable: true },
+                    web3AuthClientId: { type: 'string', nullable: true },
+                    enabled: { type: 'boolean' },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
     '/v1/me/wallets': {
       get: { responses: { '200': { description: 'Registered member wallets' }, '503': { description: 'Escrow is not configured' } } },
       post: { responses: { '201': { description: 'Primary wallet registered' }, '409': { description: 'Wallet belongs to another member' }, '503': { description: 'Escrow is not configured' } } },
