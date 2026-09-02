@@ -328,6 +328,7 @@ export const fa: Translations = {
     nativeWalletNote: 'اتصال کیف پول فعلاً در مرورگر در دسترس است. در این دستگاه از کیف پول درون‌برنامه‌ای یا برنامه مرورگر استفاده کنید.',
     recoveryWords: 'این ۱۲ کلمه بازیابی را یادداشت کنید. این کلمات فقط یک بار نمایش داده می‌شوند.',
     writtenDown: 'یادداشت کردم',
+    showWordsAgain: 'دوباره کلمات را نشان بده',
     verifyWords: (first: number, second: number) => `برای ادامه، کلمه ${first} و کلمه ${second} را وارد کنید.`,
     verifyWord: (number: number) => `کلمه ${number}`,
     verifyRecovery: 'تأیید کلمات بازیابی',

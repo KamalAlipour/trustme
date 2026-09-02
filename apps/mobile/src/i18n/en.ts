@@ -326,6 +326,7 @@ export const en = {
     nativeWalletNote: 'Wallet connection is available in the browser for now. Use the in-app wallet or browser app on this device.',
     recoveryWords: 'Write down these 12 recovery words. They will only be shown once.',
     writtenDown: 'I have written it down',
+    showWordsAgain: 'Show the words again',
     verifyWords: (first: number, second: number) => `Enter word ${first} and word ${second} to continue.`,
     verifyWord: (number: number) => `Word ${number}`,
     verifyRecovery: 'Verify recovery words',
