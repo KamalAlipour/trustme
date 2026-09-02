@@ -15,6 +15,7 @@ import { createInAppWallet, readEscrowMnemonic, saveEscrowMnemonic } from '../sr
 import { formatEscrowCountdown, parseRecoveryPhrase, parseUsdtAmount, randomVerificationWordIndices, selectBuyerSettlementConfirmation, shouldApproveAllowance, verifyMnemonicWords } from '../src/lib/escrow';
 import { formatDate, formatMicroUsdt } from '../src/lib/format';
 import { randomFourDigitCode } from '../src/lib/code';
+import { mapApiError } from '../src/lib/errors';
 import { styles } from '../src/styles';
 
 const ERC20_ABI = [
@@ -102,7 +103,7 @@ export default function Tether() {
   }
 
   const displayError = (cause: unknown, fallback = t.unknownError): string => {
-    if (cause instanceof ApiError) return cause.message;
+    if (cause instanceof ApiError) return mapApiError(cause, t);
     const errorCode = typeof cause === 'object' && cause !== null && 'code' in cause ? String(cause.code) : '';
     if (errorCode === 'INSUFFICIENT_FUNDS') return t.escrow.insufficientGas;
     if (errorCode === 'ACTION_REJECTED') return t.escrow.transactionRejected;

@@ -1,4 +1,5 @@
 import { updateSettingsAction } from '../app/settings/actions';
+import { identityCountryRegistry } from '@trustme/core';
 import { labels } from '../labels';
 import { bpsToPercent, microUsdtToDecimal } from '../lib/format';
 
@@ -8,10 +9,13 @@ type Settings = {
   minimumWithdrawalMicroUsdt: string;
   autoApprovalLimitMicroUsdt: string;
   requireIdentityForWithdrawal: boolean;
+  identityRequiredCountries: string[];
 };
 
 export function SettingsForm({ settings, errorField, errorMessage }: Readonly<{ settings: Settings; errorField?: string | undefined; errorMessage?: string | undefined }>) {
   const fieldError = (field: string) => errorField === field ? errorMessage : undefined;
+  const registeredCountries = new Set(identityCountryRegistry.map((country) => country.country));
+  const extraCountries = [...new Set(settings.identityRequiredCountries.filter((country) => !registeredCountries.has(country)))];
   return (
     <form action={updateSettingsAction} className="max-w-xl space-y-5 rounded-lg border bg-white p-6 shadow-sm">
       <label className="block">
@@ -23,6 +27,21 @@ export function SettingsForm({ settings, errorField, errorMessage }: Readonly<{ 
         <input type="checkbox" name="requireIdentityForWithdrawal" defaultChecked={settings.requireIdentityForWithdrawal} />
         <span className="text-sm font-medium">{labels.requireIdentityForWithdrawal}</span>
       </label>
+      <fieldset className="space-y-2">
+        <legend className="mb-1 block text-sm font-medium">{labels.identityRequiredBeforeSpending}</legend>
+        {identityCountryRegistry.map((country) => (
+          <label className="flex items-center gap-3" key={country.country}>
+            <input type="checkbox" name="identityRequiredCountries" value={country.country} defaultChecked={settings.identityRequiredCountries.includes(country.country)} />
+            <span className="text-sm">{country.country} — {country.providerLabel}</span>
+          </label>
+        ))}
+        {extraCountries.map((country) => (
+          <label className="flex items-center gap-3" key={country}>
+            <input type="checkbox" name="identityRequiredCountries" value={country} defaultChecked />
+            <span className="text-sm">{country}</span>
+          </label>
+        ))}
+      </fieldset>
       <label className="block">
         <span className="mb-1 block text-sm font-medium">{labels.minimumFeeMicroUsdt}</span>
         <input className="w-full" name="minimumFeeUsdt" defaultValue={microUsdtToDecimal(settings.minimumFeeMicroUsdt)} inputMode="decimal" />

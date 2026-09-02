@@ -39,6 +39,7 @@ export const labels = {
   minimumWithdrawalMicroUsdt: 'Minimum withdrawal (USDT)',
   autoApprovalLimitMicroUsdt: 'Auto-approval limit (USDT)',
   requireIdentityForWithdrawal: 'Require identity verification for withdrawals',
+  identityRequiredBeforeSpending: 'Require verified identity before spending',
   feeEquivalent: 'bps =',
   save: 'Save settings',
   barcode: 'Member barcode',

@@ -150,6 +150,7 @@ export const en = {
   identityCaptureError: 'Live identity capture could not start.',
   plannedIdentity: (provider: string) => `${provider} is planned for your country.`,
   identityWithdrawalRequired: 'Identity verification is required for payouts. Complete it from your profile.',
+  identitySpendingRequired: 'Complete identity verification before spending. Open Identity verification from your profile.',
   identityCountrySaved: 'Country saved.',
   identityVerified: 'Your identity is verified.',
   identityVerifiedAt: (date: string) => `Verified on ${date}.`,

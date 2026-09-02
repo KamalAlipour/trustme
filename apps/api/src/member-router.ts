@@ -64,6 +64,7 @@ import { deleteMediaFile, mediaPath, uploadMedia } from './media.js';
 import { hashIdentityValue } from './identity.js';
 import { checkShahkarMatch } from './shahkar.js';
 import { requireIdentityForWithdrawal } from './withdrawal-settings.js';
+import { parseIdentityRequiredCountries, requireIdentityForSpending } from './identity-required-countries.js';
 
 export type MemberRouterDependencies = {
   config: ApiConfig;
@@ -189,7 +190,7 @@ async function systemAccount(prisma: PrismaClient, type: AccountType, asset: Ass
 
 async function withdrawalSettings(prisma: PrismaClient) {
   const values = await prisma.systemSetting.findMany({
-    where: { key: { in: ['WITHDRAWAL_BASE_FEE_BPS', 'WITHDRAWAL_MIN_FEE_USDT', 'MIN_WITHDRAWAL_USDT', 'AUTO_APPROVAL_LIMIT_USDT', 'WITHDRAWAL_COOLDOWN_HOURS', 'REQUIRE_IDENTITY_FOR_WITHDRAWAL'] } },
+    where: { key: { in: ['WITHDRAWAL_BASE_FEE_BPS', 'WITHDRAWAL_MIN_FEE_USDT', 'MIN_WITHDRAWAL_USDT', 'AUTO_APPROVAL_LIMIT_USDT', 'WITHDRAWAL_COOLDOWN_HOURS', 'REQUIRE_IDENTITY_FOR_WITHDRAWAL', 'IDENTITY_REQUIRED_COUNTRIES'] } },
   });
   const settings = new Map(values.map((setting) => [setting.key, setting.value]));
   return {
@@ -199,6 +200,7 @@ async function withdrawalSettings(prisma: PrismaClient) {
     autoApprovalLimitMicroUsdt: microUsdtFromDecimal(settings.get('AUTO_APPROVAL_LIMIT_USDT') ?? '0'),
     cooldownHours: Number(settings.get('WITHDRAWAL_COOLDOWN_HOURS') ?? '168'),
     requireIdentityVerification: requireIdentityForWithdrawal(settings.get('REQUIRE_IDENTITY_FOR_WITHDRAWAL')),
+    identityRequiredCountries: parseIdentityRequiredCountries(settings.get('IDENTITY_REQUIRED_COUNTRIES')),
   };
 }
 
@@ -512,6 +514,8 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       escrowConfigured();
       const body = payCodeSchema.parse(request.body);
       const userId = memberClaims(request).sub;
+      const user = await member(prisma, userId);
+      requireIdentityForSpending(user.country, user.identityVerificationStatus, (await withdrawalSettings(prisma)).identityRequiredCountries);
       await verifyMemberPin(prisma, userId, body.pin);
       const code = await createPayCode(prisma, { buyerId: userId, code: body.code, maxAmountMicroUsdt: microUsdtFromDecimal(body.maxAmount), expiresAt: new Date(Date.now() + 5 * 60_000) });
       response.status(201).json({ id: code.id, expiresAt: code.expiresAt, maxAmount: decimalFromMicroUsdt(code.maxAmountMicroUsdt) });
@@ -567,6 +571,8 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       escrowConfigured();
       const body = escrowUnloadSchema.parse(request.body);
       const userId = memberClaims(request).sub;
+      const user = await member(prisma, userId);
+      requireIdentityForSpending(user.country, user.identityVerificationStatus, (await withdrawalSettings(prisma)).identityRequiredCountries);
       await verifyMemberPin(prisma, userId, body.pin);
       const unload = await requestUnload(prisma, { userId, amountMicroUsdt: microUsdtFromDecimal(body.amount) });
       await queue.add('escrow-unload', { unloadId: unload.id }, { jobId: `escrow-unload:${unload.id}` });
@@ -1145,6 +1151,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
     try {
       const body = transferSchema.parse(request.body);
       const user = await member(prisma, memberClaims(request).sub);
+      requireIdentityForSpending(user.country, user.identityVerificationStatus, (await withdrawalSettings(prisma)).identityRequiredCountries);
       await verifyMemberPin(prisma, user.id, body.pin);
       const destination = await userByBarcode(prisma, body.toBarcodeId);
       const transaction = await transferCoupons(prisma, {
@@ -1174,6 +1181,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
     try {
       const body = escrowSchema.parse(request.body);
       const sender = await member(prisma, memberClaims(request).sub);
+      requireIdentityForSpending(sender.country, sender.identityVerificationStatus, (await withdrawalSettings(prisma)).identityRequiredCountries);
       await verifyMemberPin(prisma, sender.id, body.pin);
       const recipient = await userByBarcode(prisma, body.recipientBarcodeId);
       const hold = await createEscrowHold(prisma, {

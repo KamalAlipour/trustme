@@ -14,7 +14,7 @@ export async function updateSettingsAction(formData: FormData): Promise<void> {
       redirect(`/settings?errorField=${field}&error=${encodeURIComponent(labels.required)}`);
     }
   }
-  let body: Record<string, string | boolean>;
+  let body: Record<string, string | boolean | string[]>;
   try {
     const minimumWithdrawalMicroUsdt = decimalUsdtToMicro(values.minimumWithdrawalUsdt as string);
     const minimumFeeMicroUsdt = decimalUsdtToMicro(values.minimumFeeUsdt as string);
@@ -25,6 +25,7 @@ export async function updateSettingsAction(formData: FormData): Promise<void> {
       minimumWithdrawalMicroUsdt,
       autoApprovalLimitMicroUsdt,
       requireIdentityForWithdrawal: formData.get('requireIdentityForWithdrawal') === 'on',
+      identityRequiredCountries: formData.getAll('identityRequiredCountries').filter((value): value is string => typeof value === 'string'),
     };
   } catch {
     const invalidField = !/^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/.test(values.minimumFeeUsdt as string)

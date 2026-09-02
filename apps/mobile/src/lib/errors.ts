@@ -6,6 +6,7 @@ export function mapApiError(error: unknown, t: Translations): string {
   if (error.status === 413) return t.mediaTooLarge;
   if (error.status === 415) return t.unsupportedMedia;
   const messages: Record<string, string> = {
+    identity_verification_required: t.identitySpendingRequired,
     'refund is already pending': t.refundAlreadyPending,
     'refund exceeds refundable amount': t.refundExceedsAmount,
     'transaction is not refundable': t.transactionNotRefundable,
