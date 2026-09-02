@@ -83,13 +83,15 @@ export default function Tether() {
     if (balance.data?.primaryWallet !== undefined) setWallet(balance.data.primaryWallet);
   }, [balance.data?.primaryWallet]);
   useEffect(() => {
-    if (!unloadPrefilled.current && balance.data?.availableMicroUsdt !== undefined) {
-      setUnloadAmount(formatMicroUsdt(balance.data.availableMicroUsdt, 'en'));
-      unloadPrefilled.current = true;
-    }
+    if (unloadPrefilled.current) return;
+    const available = balance.data?.availableMicroUsdt;
+    if (available === undefined || BigInt(available) === 0n) return;
+    setUnloadAmount(formatMicroUsdt(available, 'en'));
+    unloadPrefilled.current = true;
   }, [balance.data?.availableMicroUsdt]);
 
   const shortAddress = useMemo(() => wallet === null ? '' : `${wallet.address.slice(0, 6)}…${wallet.address.slice(-4)}`, [wallet]);
+  const availableMicroUsdt = BigInt(balance.data?.availableMicroUsdt ?? '0');
   if (config.isLoading) return <LoadingScreen />;
   if (!config.data?.enabled) {
     return <Page><Pressable onPress={() => router.back()}><Text style={styles.secondaryButtonText}>{t.escrow.back}</Text></Pressable><Text style={styles.title}>{t.escrow.title}</Text><Text style={styles.muted}>{t.comingSoon}</Text></Page>;
@@ -338,13 +340,13 @@ export default function Tether() {
         <Pressable disabled={busy !== '' || wallet === null || publicRpcUnavailable} onPress={() => void sendTopUp()} style={[styles.button, busy !== '' || wallet === null || publicRpcUnavailable ? styles.buttonDisabled : null]}><Text style={styles.buttonText}>{t.escrow.topUpButton}</Text></Pressable>
       </View>
 
-      <View style={styles.card}>
+      {availableMicroUsdt > 0n ? <View style={styles.card}>
         <Text style={styles.heading}>{t.escrow.unload}</Text>
         <TextInput value={unloadAmount} onChangeText={setUnloadAmount} placeholder={t.escrow.unloadAmount} style={styles.input} keyboardType="decimal-pad" />
         <Pressable onPress={useFullAvailable} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.escrow.useFullAvailable}</Text></Pressable>
         <Pressable disabled={busy !== ''} onPress={() => void requestUnload()} style={[styles.button, busy !== '' ? styles.buttonDisabled : null]}><Text style={styles.buttonText}>{t.escrow.unloadButton}</Text></Pressable>
         {(unloads.data?.items ?? []).slice(0, 3).map((item) => <Text key={item.id} style={item.status === 'CONFIRMED' ? styles.notice : item.status === 'FAILED' ? styles.danger : styles.muted}>{item.status === 'CONFIRMED' ? t.escrow.unloadConfirmed : item.status === 'FAILED' ? t.escrow.unloadFailed : t.escrow.unloadPending}: {item.amount} USDT</Text>)}
-      </View>
+      </View> : null}
 
       <View style={styles.card}>
         <Text style={styles.heading}>{t.escrow.history}</Text>
