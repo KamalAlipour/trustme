@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd -- "$script_dir/.." && pwd)"
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+repo_root="$(cd -- "$script_dir/.." && pwd -P)"
 web_env_file="${TRUSTME_WEB_ENV_FILE:-/etc/trustme/trustme-web.env}"
 web_root="${TRUSTME_WEB_ROOT:-/var/www/trustcoupon-web}"
 previous_retention="${TRUSTME_WEB_PREVIOUS_RETENTION:-1}"
@@ -48,6 +48,7 @@ web_name="$(basename -- "$web_root")"
 mkdir -p "$web_parent"
 mobile_root="$repo_root/apps/mobile"
 staging_dir="$(mktemp -d "$mobile_root/.web-publish.XXXXXX")"
+staging_name="$(basename -- "$staging_dir")"
 
 cleanup() {
   if [[ -d "$staging_dir" ]]; then
@@ -58,7 +59,7 @@ trap cleanup EXIT
 
 (
   cd "$repo_root/apps/mobile"
-  npx expo export --platform web --clear --output-dir "$staging_dir"
+  npx expo export --platform web --clear --output-dir "$staging_name"
 )
 
 web_chunks_dir="$staging_dir/_expo/static/js/web"
