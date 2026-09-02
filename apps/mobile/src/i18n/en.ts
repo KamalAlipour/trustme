@@ -329,6 +329,7 @@ export const en = {
     verifyWords: (first: number, second: number) => `Enter word ${first} and word ${second} to continue.`,
     verifyWord: (number: number) => `Word ${number}`,
     verifyRecovery: 'Verify recovery words',
+    verifyRecoveryMismatch: (first: number, second: number) => `Those words don't match. Check word ${first} and word ${second}.`,
     walletCreated: 'In-app wallet created.',
     topUp: 'Top up',
     topUpAmount: 'USDT amount',
