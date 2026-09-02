@@ -331,7 +331,7 @@ export const fa: Translations = {
     verifyWords: (first: number, second: number) => `برای ادامه، کلمه ${first} و کلمه ${second} را وارد کنید.`,
     verifyWord: (number: number) => `کلمه ${number}`,
     verifyRecovery: 'تأیید کلمات بازیابی',
-    verifyRecoveryMismatch: (first: number, second: number) => `کلمات درست نیست. کلمهٔ ${first} و کلمهٔ ${second} را بررسی کن.`,
+    recoveryMismatchRestart: 'کلمات مطابقت نداشت، آن عبارت باطل شد و کیف‌پولی ساخته نشد. برای شروع دوباره با عبارت تازه، «ساخت کیف پول» را بزن.',
     walletCreated: 'کیف پول درون‌برنامه‌ای ساخته شد.',
     topUp: 'افزایش موجودی',
     topUpAmount: 'مقدار USDT',

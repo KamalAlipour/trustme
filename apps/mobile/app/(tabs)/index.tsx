@@ -159,7 +159,7 @@ export default function Home() {
       <View style={styles.row}>
         <Text style={styles.title}>{t.home}</Text>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
-          <Pressable onPress={() => router.push('/contacts')}><Text style={styles.secondaryButtonText}>{t.contacts}</Text></Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel={t.contacts} onPress={() => router.push('/contacts')}><Ionicons name="book-outline" size={28} color={colors.ink} /></Pressable>
           {escrowEnabled ? <Pressable accessibilityRole="button" accessibilityLabel={t.escrow.title} onPress={() => router.push('/tether')}><Ionicons name="wallet-outline" size={28} color={colors.ink} /></Pressable> : null}
         </View>
       </View>

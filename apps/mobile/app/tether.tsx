@@ -134,20 +134,24 @@ export default function Tether() {
     setWordAnswers(['', '']);
     setWrittenDown(false);
   };
-  const discardDraft = () => {
+  const clearDraft = () => {
     setDraftWords(null);
     setMnemonic(null);
     setDraftAddress('');
     setWordIndices(null);
     setWordAnswers(['', '']);
     setWrittenDown(false);
+  };
+  const discardDraft = () => {
+    clearDraft();
     setMessage('');
   };
   const finishWallet = async () => {
     if (draftWords === null || mnemonic === null || wordIndices === null) return;
     if (!writtenDown) return;
     if (!verifyMnemonicWords(draftWords, wordIndices, wordAnswers)) {
-      setMessage(t.escrow.verifyRecoveryMismatch(wordIndices[0] + 1, wordIndices[1] + 1));
+      clearDraft();
+      setMessage(t.escrow.recoveryMismatchRestart);
       return;
     }
     await run('wallet', async () => {
