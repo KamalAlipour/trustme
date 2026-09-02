@@ -570,7 +570,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
     try {
       escrowConfigured();
       const rows = await prisma.payCode.findMany({ where: { merchantId: memberClaims(request).sub, status: PayCodeStatus.ACTIVE, expiresAt: { gt: new Date() } }, include: { buyer: { select: { barcodeId: true, displayName: true } } }, orderBy: { createdAt: 'desc' } });
-      response.json({ items: rows.map((row) => ({ id: row.id, amount: row.amountMicroUsdt === null ? null : decimalFromMicroUsdt(row.amountMicroUsdt), expiresAt: row.expiresAt, buyerBarcodeId: row.buyer.barcodeId, buyerDisplayName: row.buyer.displayName })) });
+      response.json({ items: rows.flatMap((row) => row.amountMicroUsdt === null ? [] : [{ id: row.id, amount: decimalFromMicroUsdt(row.amountMicroUsdt), expiresAt: row.expiresAt, buyerBarcodeId: row.buyer.barcodeId, buyerDisplayName: row.buyer.displayName }]) });
     } catch (error) { next(error); }
   });
 

@@ -105,6 +105,10 @@ export default function Home() {
   const paySeller = async () => {
     setPayMessage('');
     try {
+      if (payMerchantBarcode.trim() === '') {
+        setPayMessage(t.barcode);
+        return;
+      }
       parseUsdtAmount(payAmount);
       const stepUp = await getStepUpPin();
       if (!stepUp) { setPayMessage(t.operationPinRequired); return; }
