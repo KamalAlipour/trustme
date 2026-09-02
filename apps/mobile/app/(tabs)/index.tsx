@@ -106,7 +106,7 @@ export default function Home() {
     setPayMessage('');
     try {
       if (payMerchantBarcode.trim() === '') {
-        setPayMessage(t.barcode);
+        setPayMessage(t.escrow.payMerchantRequired);
         return;
       }
       parseUsdtAmount(payAmount);

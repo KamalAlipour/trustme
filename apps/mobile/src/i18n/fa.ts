@@ -340,6 +340,7 @@ export const fa: Translations = {
     confirmationNotice: 'تأیید زنجیره کمی زمان می‌برد. موجودی پس از دریافت رویداد به‌روزرسانی می‌شود.',
     payTitle: 'پرداخت به فروشنده با تتر',
     payMerchantBarcode: 'بارکد فروشنده',
+    payMerchantRequired: 'اول بارکد فروشنده را اسکن یا وارد کن.',
     payAmountUsdt: 'مبلغ به تتر',
     payNow: 'پرداخت',
     payCodeShow: 'این کد را به فروشنده بگو',
