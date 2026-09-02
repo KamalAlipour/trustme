@@ -49,8 +49,11 @@ export async function dispatchEscrowSettlement(
     try { await provider.sendTransaction(signed); } catch (error) { if (!isKnownBroadcastError(error, txHash)) throw error; }
     return { status: 'broadcast', txHash };
   } catch (error) {
-    await failSettlement(prisma, { settlementId, error: error instanceof Error ? error.message : String(error) });
-    return { status: 'failed' };
+    await prisma.escrowSettlement.update({
+      where: { id: settlementId },
+      data: { attempts: { increment: 1 }, lastError: error instanceof Error ? error.message : String(error) },
+    });
+    throw error;
   }
 }
 
@@ -80,8 +83,11 @@ export async function dispatchEscrowUnload(
     try { await provider.sendTransaction(signed); } catch (error) { if (!isKnownBroadcastError(error, txHash)) throw error; }
     return { status: 'broadcast', txHash };
   } catch (error) {
-    await failUnload(prisma, { unloadId, error: error instanceof Error ? error.message : String(error) });
-    return { status: 'failed' };
+    await prisma.escrowUnload.update({
+      where: { id: unloadId },
+      data: { attempts: { increment: 1 }, lastError: error instanceof Error ? error.message : String(error) },
+    });
+    throw error;
   }
 }
 

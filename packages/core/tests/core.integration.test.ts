@@ -20,6 +20,9 @@ import {
   confirmSettlement,
   createPayCode,
   failSettlement,
+  requestUnload,
+  confirmUnload,
+  failUnload,
   settleWithPayCode,
 } from '../src/index.js';
 
@@ -446,6 +449,74 @@ describe('prepaid USDT escrow', () => {
     const failed = await failSettlement(prisma, { settlementId: pending.settlement.id, error: 'retryable failure' });
     expect(failed.status).toBe('FAILED');
     expect((await prisma.escrowBalance.findUniqueOrThrow({ where: { userId: users[0]!.id } })).reservedMicroUsdt).toBe(0n);
+  });
+
+  it('reserves unloads, confirms them idempotently, and releases failed reservations', async () => {
+    const fixtureAccounts = await fixture(1);
+    const user = await prisma.user.findFirstOrThrow();
+    await prisma.memberWallet.create({ data: { userId: user.id, address: '0x0000000000000000000000000000000000000001', kind: 'EXTERNAL', chainId: 137 } });
+    await prisma.escrowBalance.create({ data: { userId: user.id, lockedMicroUsdt: 2_000_000n } });
+    const unload = await requestUnload(prisma, { userId: user.id, amountMicroUsdt: 750_000n });
+    expect(await prisma.escrowBalance.findUniqueOrThrow({ where: { userId: user.id } })).toMatchObject({ lockedMicroUsdt: 2_000_000n, reservedMicroUsdt: 750_000n });
+    const confirmed = await confirmUnload(prisma, { ref: unload.ref, txHash: '0xunload' });
+    expect(confirmed.status).toBe('CONFIRMED');
+    await expect(confirmUnload(prisma, { ref: unload.ref, txHash: '0xother' })).resolves.toMatchObject({ id: unload.id });
+    expect(await prisma.escrowBalance.findUniqueOrThrow({ where: { userId: user.id } })).toMatchObject({ lockedMicroUsdt: 1_250_000n, reservedMicroUsdt: 0n });
+    const failedUnload = await requestUnload(prisma, { userId: user.id, amountMicroUsdt: 250_000n });
+    await expect(failUnload(prisma, { unloadId: failedUnload.id, error: 'temporary failure' })).resolves.toMatchObject({ status: 'FAILED' });
+    expect(await prisma.escrowBalance.findUniqueOrThrow({ where: { userId: user.id } })).toMatchObject({ lockedMicroUsdt: 1_250_000n, reservedMicroUsdt: 0n });
+    expect(fixtureAccounts.users).toHaveLength(1);
+  });
+
+  it('reconciles settlement and unload events idempotently and records unknown references', async () => {
+    await fixture(2);
+    const users = await prisma.user.findMany({ orderBy: { barcodeId: 'asc' } });
+    await prisma.escrowBalance.create({ data: { userId: users[0]!.id, lockedMicroUsdt: 2_000_000n } });
+    await createPayCode(prisma, { buyerId: users[0]!.id, code: '1234', maxAmountMicroUsdt: 1_000_000n, expiresAt: new Date(Date.now() + 60_000) });
+    const settlement = await settleWithPayCode(prisma, { merchantId: users[1]!.id, buyerBarcodeId: users[0]!.barcodeId, code: '1234', amountMicroUsdt: 600_000n });
+    const settleEvent = { kind: EscrowEventKind.SETTLE, txHash: '0xsettle-event', logIndex: 0, blockNumber: 1n, walletAddress: '0x0000000000000000000000000000000000000001', amountMicroUsdt: 600_000n, ref: settlement.settlement.ref };
+    await applyEscrowChainEvent(prisma, settleEvent);
+    await applyEscrowChainEvent(prisma, settleEvent);
+    expect(await prisma.escrowChainEvent.count({ where: { txHash: settleEvent.txHash } })).toBe(1);
+    expect((await prisma.escrowChainEvent.findUniqueOrThrow({ where: { txHash_logIndex: { txHash: settleEvent.txHash, logIndex: 0 } } })).reconciledAt).toBeInstanceOf(Date);
+    expect((await prisma.escrowSettlement.findUniqueOrThrow({ where: { id: settlement.settlement.id } })).status).toBe('CONFIRMED');
+    expect((await prisma.escrowBalance.findUniqueOrThrow({ where: { userId: users[0]!.id } })).lockedMicroUsdt).toBe(1_400_000n);
+
+    await prisma.memberWallet.create({ data: { userId: users[0]!.id, address: '0x0000000000000000000000000000000000000002', kind: 'EXTERNAL', chainId: 137 } });
+    const unload = await requestUnload(prisma, { userId: users[0]!.id, amountMicroUsdt: 400_000n });
+    const unloadEvent = { kind: EscrowEventKind.UNLOAD, txHash: '0xunload-event', logIndex: 0, blockNumber: 2n, walletAddress: unload.walletAddress, amountMicroUsdt: 400_000n, ref: unload.ref };
+    await applyEscrowChainEvent(prisma, unloadEvent);
+    await applyEscrowChainEvent(prisma, unloadEvent);
+    expect(await prisma.escrowChainEvent.count({ where: { txHash: unloadEvent.txHash } })).toBe(1);
+    expect((await prisma.escrowChainEvent.findUniqueOrThrow({ where: { txHash_logIndex: { txHash: unloadEvent.txHash, logIndex: 0 } } })).reconciledAt).toBeInstanceOf(Date);
+    expect((await prisma.escrowUnload.findUniqueOrThrow({ where: { id: unload.id } })).status).toBe('CONFIRMED');
+    expect((await prisma.escrowBalance.findUniqueOrThrow({ where: { userId: users[0]!.id } })).lockedMicroUsdt).toBe(1_000_000n);
+
+    const unknown = { kind: EscrowEventKind.SETTLE, txHash: '0xunknown-event', logIndex: 0, blockNumber: 3n, walletAddress: unload.walletAddress, amountMicroUsdt: 1n, ref: '0x' + 'ff'.repeat(32) };
+    await expect(applyEscrowChainEvent(prisma, unknown)).resolves.toMatchObject({ txHash: unknown.txHash, reconciledAt: null });
+    expect(await prisma.escrowChainEvent.count({ where: { txHash: unknown.txHash } })).toBe(1);
+    expect((await prisma.escrowBalance.findUniqueOrThrow({ where: { userId: users[0]!.id } })).lockedMicroUsdt).toBe(1_000_000n);
+  });
+
+  it('reverses settlement dust using the merchant current balance', async () => {
+    const fixtureAccounts = await fixture(2);
+    const users = await prisma.user.findMany({ orderBy: { barcodeId: 'asc' } });
+    await prisma.escrowBalance.create({ data: { userId: users[0]!.id, lockedMicroUsdt: 2_000_000n } });
+    await createPayCode(prisma, { buyerId: users[0]!.id, code: '1234', maxAmountMicroUsdt: 100_000n, expiresAt: new Date(Date.now() + 60_000) });
+    const settlement = await settleWithPayCode(prisma, { merchantId: users[1]!.id, buyerBarcodeId: users[0]!.barcodeId, code: '1234', amountMicroUsdt: 15_000n });
+    await postDeposit(prisma, {
+      externalRef: 'deposit:interleaved-dust',
+      userId: users[1]!.id,
+      userCouponAccountId: fixtureAccounts.users[1]!,
+      externalOnchainAccountId: fixtureAccounts.external,
+      vaultAccountId: fixtureAccounts.vault,
+      issuanceAccountId: fixtureAccounts.issuance,
+      amountMicroUsdt: 1_000n,
+    });
+    const failed = await failSettlement(prisma, { settlementId: settlement.settlement.id, error: 'provider failure' });
+    expect(failed.status).toBe('FAILED');
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: users[1]!.id } })).dustMicroUsdt).toBe(1_000n);
+    expect((await prisma.ledgerAccount.findUniqueOrThrow({ where: { id: fixtureAccounts.users[1]! } })).balance).toBe(0n);
   });
 
   it('records chain events idempotently and preserves unknown deposits', async () => {

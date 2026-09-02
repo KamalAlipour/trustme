@@ -15,7 +15,6 @@ import {
 } from '@trustme/db';
 import { postDepositCouponCredit } from './domain.js';
 import { postWithClient } from './ledger.js';
-import { couponsFromMicroUsdt } from './money.js';
 import { withSerializableRetry } from './retry.js';
 import { evmAddressSchema, fourDigitCodeSchema } from './schemas.js';
 import { DomainError } from './domain-error.js';
@@ -164,9 +163,13 @@ export async function failSettlement(prisma: PrismaClient, input: { settlementId
     let lastError = input.error;
     if (settlement.transactionId !== null) {
       const original = await tx.transaction.findUniqueOrThrow({ where: { id: settlement.transactionId } });
+      await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "User" WHERE "id" = ${settlement.merchantId}::uuid FOR UPDATE`);
+      const merchant = await tx.user.findUniqueOrThrow({ where: { id: settlement.merchantId } });
+      const newDust = merchant.dustMicroUsdt + original.amountCoupons * 10_000n - settlement.amountMicroUsdt;
       const merchantAccount = await userCouponAccount(tx, settlement.merchantId);
       const issuance = await issuanceAccount(tx);
       try {
+        if (newDust < 0n) throw new DomainError('manual handling is needed: merchant dust would become negative');
         if (original.amountCoupons > 0n) {
           await postWithClient(tx, {
             type: TransactionType.REFUND,
@@ -179,10 +182,9 @@ export async function failSettlement(prisma: PrismaClient, input: { settlementId
             legs: [{ fromAccountId: merchantAccount.id, toAccountId: issuance.id, amount: original.amountCoupons, asset: Asset.COUPON }],
           });
         }
-        const previousDust = (original.roundingDustMicroUsdt + 10_000n - (settlement.amountMicroUsdt % 10_000n)) % 10_000n;
-        await tx.user.update({ where: { id: settlement.merchantId }, data: { dustMicroUsdt: previousDust } });
+        await tx.user.update({ where: { id: settlement.merchantId }, data: { dustMicroUsdt: newDust } });
       } catch (error) {
-        lastError = `${input.error}; reversal failed: ${error instanceof Error ? error.message : String(error)}`;
+        lastError = `${input.error}; reversal failed: ${error instanceof Error ? error.message : String(error)}; manual handling is needed`;
         await tx.escrowBalance.update({ where: { userId: settlement.buyerId }, data: { reservedMicroUsdt: { decrement: release } } });
         return tx.escrowSettlement.update({ where: { id: settlement.id }, data: { status: EscrowSettlementStatus.FAILED, lastError } });
       }
@@ -245,15 +247,19 @@ export type EscrowChainEventInput = {
   ref?: string;
 };
 
-export async function applyEscrowChainEvent(prisma: PrismaClient, event: EscrowChainEventInput) {
+export async function applyEscrowChainEvent(
+  prisma: PrismaClient,
+  event: EscrowChainEventInput,
+  log: Pick<Console, 'error'> = console,
+) {
   evmAddressSchema.parse(event.walletAddress);
   if (event.amountMicroUsdt <= 0n) throw new DomainError('chain event amount must be positive');
   return withSerializableRetry(prisma, async (tx) => {
     const existing = await tx.escrowChainEvent.findUnique({ where: { txHash_logIndex: { txHash: event.txHash, logIndex: event.logIndex } } });
-    if (existing !== null) return existing;
     const wallet = await tx.memberWallet.findUnique({ where: { address: event.walletAddress.toLowerCase() } });
     const userId = wallet?.userId;
-    const recorded = await tx.escrowChainEvent.create({
+    if (existing !== null && existing.reconciledAt !== null) return existing;
+    const recorded = existing ?? await tx.escrowChainEvent.create({
       data: {
         kind: event.kind,
         txHash: event.txHash,
@@ -265,34 +271,59 @@ export async function applyEscrowChainEvent(prisma: PrismaClient, event: EscrowC
         ...(userId === undefined ? {} : { userId }),
       },
     });
+    const markReconciled = () => tx.escrowChainEvent.update({ where: { id: recorded.id }, data: { reconciledAt: new Date() } });
     if (event.kind === EscrowEventKind.DEPOSIT) {
-      if (userId !== undefined) {
-        await lockBalance(tx, userId);
-        await tx.escrowBalance.update({ where: { userId }, data: { lockedMicroUsdt: { increment: event.amountMicroUsdt }, lastEventAt: new Date() } });
+      if (userId === undefined) {
+        log.error(`unreconciled escrow deposit event ${event.txHash}:${event.logIndex}: wallet is not registered`);
+        return recorded;
       }
-    } else if (event.ref !== undefined) {
-      if (event.kind === EscrowEventKind.SETTLE) {
-        const settlement = await tx.escrowSettlement.findUnique({ where: { ref: event.ref } });
-        if (settlement === null || settlement.amountMicroUsdt !== event.amountMicroUsdt) throw new DomainError('settlement event does not match');
-        if (settlement.status === EscrowSettlementStatus.PENDING) {
-          await lockBalance(tx, settlement.buyerId);
-          await tx.escrowBalance.update({ where: { userId: settlement.buyerId }, data: { lockedMicroUsdt: { decrement: settlement.amountMicroUsdt }, reservedMicroUsdt: { decrement: settlement.amountMicroUsdt } } });
-          await tx.escrowSettlement.update({ where: { id: settlement.id }, data: { status: EscrowSettlementStatus.CONFIRMED, chainTxHash: event.txHash, confirmedAt: new Date() } });
-        }
-      } else {
-        const unload = await tx.escrowUnload.findUnique({ where: { ref: event.ref } });
-        if (unload === null || unload.amountMicroUsdt !== event.amountMicroUsdt) throw new DomainError('unload event does not match');
-        if (unload.status === EscrowUnloadStatus.PENDING) {
-          await lockBalance(tx, unload.userId);
-          await tx.escrowBalance.update({ where: { userId: unload.userId }, data: { lockedMicroUsdt: { decrement: unload.amountMicroUsdt }, reservedMicroUsdt: { decrement: unload.amountMicroUsdt } } });
-          await tx.escrowUnload.update({ where: { id: unload.id }, data: { status: EscrowUnloadStatus.CONFIRMED, chainTxHash: event.txHash, confirmedAt: new Date() } });
-        }
-      }
+      await lockBalance(tx, userId);
+      await tx.escrowBalance.update({ where: { userId }, data: { lockedMicroUsdt: { increment: event.amountMicroUsdt }, lastEventAt: new Date() } });
+      return markReconciled();
     }
-    return recorded;
+    if (event.ref === undefined) {
+      log.error(`unreconciled escrow ${event.kind.toLowerCase()} event ${event.txHash}:${event.logIndex}: reference is missing`);
+      return recorded;
+    }
+    if (event.kind === EscrowEventKind.SETTLE) {
+      const settlement = await tx.escrowSettlement.findUnique({ where: { ref: event.ref } });
+      if (settlement === null) {
+        log.error(`unreconciled escrow settlement event ${event.txHash}:${event.logIndex}: reference ${event.ref} is unknown`);
+        return recorded;
+      }
+      if (settlement.amountMicroUsdt !== event.amountMicroUsdt) {
+        log.error(`unreconciled escrow settlement event ${event.txHash}:${event.logIndex}: amount does not match reference ${event.ref}`);
+        return recorded;
+      }
+      if (settlement.status === EscrowSettlementStatus.PENDING) {
+        const balance = await lockBalance(tx, settlement.buyerId);
+        if (balance.lockedMicroUsdt < settlement.amountMicroUsdt || balance.reservedMicroUsdt < settlement.amountMicroUsdt) {
+          log.error(`unreconciled escrow settlement event ${event.txHash}:${event.logIndex}: escrow balance is inconsistent`);
+          return recorded;
+        }
+        await tx.escrowBalance.update({ where: { userId: settlement.buyerId }, data: { lockedMicroUsdt: { decrement: settlement.amountMicroUsdt }, reservedMicroUsdt: { decrement: settlement.amountMicroUsdt } } });
+        await tx.escrowSettlement.update({ where: { id: settlement.id }, data: { status: EscrowSettlementStatus.CONFIRMED, chainTxHash: event.txHash, confirmedAt: new Date() } });
+      }
+      return markReconciled();
+    }
+    const unload = await tx.escrowUnload.findUnique({ where: { ref: event.ref } });
+    if (unload === null) {
+      log.error(`unreconciled escrow unload event ${event.txHash}:${event.logIndex}: reference ${event.ref} is unknown`);
+      return recorded;
+    }
+    if (unload.amountMicroUsdt !== event.amountMicroUsdt) {
+      log.error(`unreconciled escrow unload event ${event.txHash}:${event.logIndex}: amount does not match reference ${event.ref}`);
+      return recorded;
+    }
+    if (unload.status === EscrowUnloadStatus.PENDING) {
+      const balance = await lockBalance(tx, unload.userId);
+      if (balance.lockedMicroUsdt < unload.amountMicroUsdt || balance.reservedMicroUsdt < unload.amountMicroUsdt) {
+        log.error(`unreconciled escrow unload event ${event.txHash}:${event.logIndex}: escrow balance is inconsistent`);
+        return recorded;
+      }
+      await tx.escrowBalance.update({ where: { userId: unload.userId }, data: { lockedMicroUsdt: { decrement: unload.amountMicroUsdt }, reservedMicroUsdt: { decrement: unload.amountMicroUsdt } } });
+      await tx.escrowUnload.update({ where: { id: unload.id }, data: { status: EscrowUnloadStatus.CONFIRMED, chainTxHash: event.txHash, confirmedAt: new Date() } });
+    }
+    return markReconciled();
   });
-}
-
-export function couponAmountForEscrow(microUsdt: bigint): bigint {
-  return couponsFromMicroUsdt(microUsdt);
 }

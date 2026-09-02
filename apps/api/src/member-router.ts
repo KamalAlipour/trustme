@@ -568,7 +568,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       const userId = memberClaims(request).sub;
       await verifyMemberPin(prisma, userId, body.pin);
       const unload = await requestUnload(prisma, { userId, amountMicroUsdt: microUsdtFromDecimal(body.amount) });
-      await queue.add('escrow-unload', { unloadId: unload.id });
+      await queue.add('escrow-unload', { unloadId: unload.id }, { jobId: `escrow-unload:${unload.id}` });
       response.status(201).json({ id: unload.id, status: unload.status, amount: decimalFromMicroUsdt(unload.amountMicroUsdt), walletAddress: unload.walletAddress });
     } catch (error) { next(error); }
   });

@@ -519,6 +519,7 @@ model EscrowChainEvent {
   amountMicroUsdt BigInt
   ref             String?
   userId          String?         @db.Uuid
+  reconciledAt    DateTime?
   createdAt       DateTime        @default(now())
   user            User?           @relation(fields: [userId], references: [id])
 
