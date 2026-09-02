@@ -6,7 +6,9 @@ const storage = vi.hoisted(() => ({
   saveRefreshToken: vi.fn(async () => undefined),
   saveCredentials: vi.fn(async () => undefined),
 }));
+const platform = vi.hoisted(() => ({ OS: 'ios', Version: null as string | null }));
 vi.mock('../lib/storage', () => storage);
+vi.mock('react-native', () => ({ Platform: platform }));
 
 import { ApiError, LockedError, request, setAccessToken } from './client';
 

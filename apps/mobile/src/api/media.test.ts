@@ -30,7 +30,7 @@ describe('authenticated media upload', () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ id: 'media-id', kind: 'IMAGE', mimeType: 'image/jpeg', byteSize: 100 }), { status: 201 }));
     await uploadMedia({ uri: 'file:///private/path/photo.jpg', kind: 'IMAGE', mimeType: 'image/jpeg' });
     const [, init] = fetchMock.mock.calls[0] as [RequestInfo | URL, RequestInit];
-    expect(init.headers).toEqual({ accept: 'application/json', authorization: 'Bearer member-token' });
+    expect(init.headers).toEqual({ accept: 'application/json', authorization: 'Bearer member-token', 'x-device-label': 'iOS app' });
     expect(init.body).toBeInstanceOf(FormData);
     const form = init.body as FormData;
     expect(form.get('kind')).toBe('IMAGE');
