@@ -34,6 +34,25 @@ If `ESCROW_CONTRACT_ADDRESS` is absent, the API reports escrow as disabled and
 escrow mutation endpoints return `escrow_not_configured`; worker escrow jobs
 warn and no-op while all existing jobs continue to run. Independently review
 the contract before locking real Polygon funds.
+
+## Local escrow end-to-end dry run
+
+The repeatable local runner requires Foundry Anvil on
+`http://127.0.0.1:8545` (chain ID `31337`), local PostgreSQL and Redis, and
+the TrustMe API and worker running against that local stack. It uses Anvil's
+well-known development mnemonic and an unrestricted test token; it must never
+be run against a public chain or a non-local database.
+
+From the repository root, provide the local PostgreSQL URL and run:
+
+```bash
+DATABASE_URL='postgresql://<local-user>:<local-password>@127.0.0.1:<local-port>/<local-database>' \
+npx tsx scripts/escrow-e2e-local.ts
+```
+
+The runner independently verifies the RPC chain ID and database hostname,
+deploys the test token and escrow, exercises API and worker escrow paths, and
+exits non-zero on the first failed assertion.
 # TrustMe deployment runbook
 
 ## Scope and topology
