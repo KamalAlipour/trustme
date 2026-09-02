@@ -1,0 +1,10 @@
+{
+  "chatId": "-1003861509835",
+  "messages": {
+    "01-intro": 7,
+    "02-barcode": 8,
+    "03-identity": 9,
+    "04-tether": 10,
+    "05-more": 11
+  }
+}
