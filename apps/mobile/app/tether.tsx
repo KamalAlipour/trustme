@@ -12,7 +12,7 @@ import { useSession } from '../src/auth/session';
 import { Page, LoadingScreen } from '../src/components/Screen';
 import { useTranslation } from '../src/i18n';
 import { clearEscrowMnemonic, createInAppWallet, readEscrowMnemonic, saveEscrowMnemonic } from '../src/lib/escrow-wallet';
-import { parseRecoveryPhrase, parseUsdtAmount, randomVerificationWordIndices, shouldApproveAllowance, verifyMnemonicWords, withWalletConnectDeadline } from '../src/lib/escrow';
+import { isValidRecoveryPhrase, normalizeRecoveryPhrase, parseRecoveryPhrase, parseUsdtAmount, randomVerificationWordIndices, shouldApproveAllowance, verifyMnemonicWords, withWalletConnectDeadline } from '../src/lib/escrow';
 import { formatDate, formatMicroUsdt } from '../src/lib/format';
 import { mapApiError } from '../src/lib/errors';
 import { colors, styles } from '../src/styles';
@@ -92,6 +92,10 @@ export default function Tether() {
 
   const shortAddress = useMemo(() => wallet === null ? '' : `${wallet.address.slice(0, 6)}…${wallet.address.slice(-4)}`, [wallet]);
   const availableMicroUsdt = BigInt(balance.data?.availableMicroUsdt ?? '0');
+  const recoveryWordCount = useMemo(() => {
+    const normalized = normalizeRecoveryPhrase(recoveryPhrase);
+    return normalized === '' ? 0 : normalized.split(' ').length;
+  }, [recoveryPhrase]);
   if (config.isLoading) return <LoadingScreen />;
   if (!config.data?.enabled) {
     return <Page><Pressable onPress={() => router.back()}><Text style={styles.secondaryButtonText}>{t.escrow.back}</Text></Pressable><Text style={styles.title}>{t.escrow.title}</Text><Text style={styles.muted}>{t.comingSoon}</Text></Page>;
@@ -171,6 +175,10 @@ export default function Tether() {
   };
   const importWallet = async () => {
     await run('import-wallet', async () => {
+      if (!isValidRecoveryPhrase(recoveryPhrase)) {
+        setMessage(t.escrow.importInvalidPhrase);
+        return;
+      }
       const phrase = parseRecoveryPhrase(recoveryPhrase);
       const imported = Wallet.fromPhrase(phrase);
       await saveEscrowMnemonic(phrase);
@@ -325,7 +333,7 @@ export default function Tether() {
         {draftWords !== null && wordIndices !== null ? <View style={styles.card}><Text style={styles.text}>{t.escrow.recoveryWords}</Text><RecoveryWords words={draftWords} /><Pressable onPress={() => { const nextWrittenDown = !writtenDown; setWrittenDown(nextWrittenDown); if (!nextWrittenDown) { setWordAnswers(['', '']); setMessage(''); } }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{writtenDown ? '☑ ' : '☐ '}{t.escrow.writtenDown}</Text></Pressable>{writtenDown ? <><Text style={styles.muted}>{t.escrow.verifyWords(wordIndices[0] + 1, wordIndices[1] + 1)}</Text><TextInput value={wordAnswers[0]} onChangeText={(value) => setWordAnswers([value, wordAnswers[1]])} placeholder={t.escrow.verifyWord(wordIndices[0] + 1)} style={styles.input} autoCapitalize="none" /><TextInput value={wordAnswers[1]} onChangeText={(value) => setWordAnswers([wordAnswers[0], value])} placeholder={t.escrow.verifyWord(wordIndices[1] + 1)} style={styles.input} autoCapitalize="none" /><Pressable onPress={() => void finishWallet()} style={styles.button}><Text style={styles.buttonText}>{t.escrow.verifyRecovery}</Text></Pressable></> : null}<Pressable onPress={discardDraft} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.escrow.discardDraft}</Text></Pressable></View> : <>
           {wallet === null ? <><Pressable disabled={busy !== ''} onPress={() => void run('wallet', createWallet)} style={[styles.button, busy !== '' ? styles.buttonDisabled : null]}><Text style={styles.buttonText}>{t.escrow.createWallet}</Text></Pressable>{config.data.walletConnectProjectId !== null ? <Pressable disabled={busy !== ''} onPress={() => void connectWallet()} style={[styles.secondaryButton, busy !== '' ? styles.buttonDisabled : null]}><Text style={styles.secondaryButtonText}>{t.escrow.connectWallet}</Text></Pressable> : Platform.OS !== 'web' && config.data.walletConnectProjectId === null ? <Text style={styles.muted}>{t.escrow.nativeWalletNote}</Text> : null}</> : wallet.kind === 'EXTERNAL' && walletConnectSession === null && config.data.walletConnectProjectId !== null ? <Pressable disabled={busy !== ''} onPress={() => void connectWallet()} style={[styles.secondaryButton, busy !== '' ? styles.buttonDisabled : null]}><Text style={styles.secondaryButtonText}>{t.escrow.connectWallet}</Text></Pressable> : null}
           {busy === 'connect-wallet' ? <><Text style={styles.muted}>{t.escrow.connectPending}</Text><Pressable onPress={cancelConnect} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.escrow.cancelConnect}</Text></Pressable></> : null}
-          <View style={styles.card}><Text style={styles.heading}>{t.escrow.importRecovery}</Text><TextInput value={recoveryPhrase} onChangeText={setRecoveryPhrase} placeholder={t.escrow.importRecoveryPlaceholder} style={styles.input} autoCapitalize="none" multiline /><Pressable disabled={busy !== ''} onPress={() => void importWallet()} style={[styles.secondaryButton, busy !== '' ? styles.buttonDisabled : null]}><Text style={styles.secondaryButtonText}>{t.escrow.importWallet}</Text></Pressable></View>
+          <View style={styles.card}><Text style={styles.heading}>{t.escrow.importRecovery}</Text><TextInput value={recoveryPhrase} onChangeText={setRecoveryPhrase} placeholder={t.escrow.importRecoveryPlaceholder} style={styles.input} autoCapitalize="none" multiline />{recoveryWordCount > 0 && recoveryWordCount !== 12 ? <Text style={styles.muted}>{t.escrow.importWordCount(recoveryWordCount)}</Text> : null}<Pressable disabled={busy !== '' || recoveryWordCount !== 12} onPress={() => void importWallet()} style={[styles.secondaryButton, busy !== '' || recoveryWordCount !== 12 ? styles.buttonDisabled : null]}><Text style={styles.secondaryButtonText}>{t.escrow.importWallet}</Text></Pressable></View>
         </>}
         {revealedWords !== null ? <View style={styles.card}><Text style={styles.text}>{t.escrow.recoveryWords}</Text><RecoveryWords words={revealedWords} /><Pressable onPress={() => setRevealedWords(null)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.close}</Text></Pressable></View> : null}
         {busy === 'remove-wallet' ? <Text style={styles.muted}>{t.loading}</Text> : null}
@@ -340,11 +348,11 @@ export default function Tether() {
         <Pressable disabled={busy !== '' || wallet === null || publicRpcUnavailable} onPress={() => void sendTopUp()} style={[styles.button, busy !== '' || wallet === null || publicRpcUnavailable ? styles.buttonDisabled : null]}><Text style={styles.buttonText}>{t.escrow.topUpButton}</Text></Pressable>
       </View>
 
-      {availableMicroUsdt > 0n ? <View style={styles.card}>
+      {availableMicroUsdt > 0n || (unloads.data?.items ?? []).length > 0 ? <View style={styles.card}>
         <Text style={styles.heading}>{t.escrow.unload}</Text>
-        <TextInput value={unloadAmount} onChangeText={setUnloadAmount} placeholder={t.escrow.unloadAmount} style={styles.input} keyboardType="decimal-pad" />
+        {availableMicroUsdt > 0n ? <><TextInput value={unloadAmount} onChangeText={setUnloadAmount} placeholder={t.escrow.unloadAmount} style={styles.input} keyboardType="decimal-pad" />
         <Pressable onPress={useFullAvailable} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.escrow.useFullAvailable}</Text></Pressable>
-        <Pressable disabled={busy !== ''} onPress={() => void requestUnload()} style={[styles.button, busy !== '' ? styles.buttonDisabled : null]}><Text style={styles.buttonText}>{t.escrow.unloadButton}</Text></Pressable>
+        <Pressable disabled={busy !== ''} onPress={() => void requestUnload()} style={[styles.button, busy !== '' ? styles.buttonDisabled : null]}><Text style={styles.buttonText}>{t.escrow.unloadButton}</Text></Pressable></> : null}
         {(unloads.data?.items ?? []).slice(0, 3).map((item) => <Text key={item.id} style={item.status === 'CONFIRMED' ? styles.notice : item.status === 'FAILED' ? styles.danger : styles.muted}>{item.status === 'CONFIRMED' ? t.escrow.unloadConfirmed : item.status === 'FAILED' ? t.escrow.unloadFailed : t.escrow.unloadPending}: {item.amount} USDT</Text>)}
       </View> : null}
 

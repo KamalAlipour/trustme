@@ -382,6 +382,8 @@ export const en = {
     disconnected: 'Wallet removed.',
     importRecovery: 'Import recovery phrase',
     importRecoveryPlaceholder: 'Enter your 12-word recovery phrase',
+    importWordCount: (count: number) => `${count} of 12 words entered.`,
+    importInvalidPhrase: 'That is not a valid 12-word recovery phrase. Check the words and their order, or tap “Create wallet” to make a new wallet instead.',
     importWallet: 'Import wallet',
     recoveryImported: 'Recovery wallet imported.',
     walletPersistenceFailed: 'The recovery phrase could not be verified after saving. Wallet registration was cancelled.',
