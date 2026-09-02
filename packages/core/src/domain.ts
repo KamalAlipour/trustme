@@ -10,7 +10,7 @@ import {
   TransactionType,
   WithdrawalStatus,
 } from '@trustme/db';
-import { postWithClient } from './ledger.js';
+import { postWithClient, type LedgerLeg } from './ledger.js';
 import { couponsFromMicroUsdt, withdrawalQuote } from './money.js';
 import { evmAddressSchema, fourDigitCodeSchema } from './schemas.js';
 import { withSerializableRetry } from './retry.js';
@@ -36,12 +36,45 @@ export async function postDeposit(
     const existing = await tx.transaction.findUnique({ where: { externalRef: input.externalRef } });
     if (existing) return existing;
     await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "User" WHERE "id" = ${input.userId}::uuid FOR UPDATE`);
-    const user = await tx.user.findUniqueOrThrow({ where: { id: input.userId } });
-    const combinedDust = user.dustMicroUsdt + input.amountMicroUsdt;
-    const coupons = couponsFromMicroUsdt(combinedDust);
-    const carry = combinedDust % 10_000n;
-    const transaction = await postWithClient(tx, {
+    const transaction = await postDepositCouponCredit(tx, {
+      externalRef: input.externalRef,
+      userId: input.userId,
+      userCouponAccountId: input.userCouponAccountId,
+      issuanceAccountId: input.issuanceAccountId,
+      amountMicroUsdt: input.amountMicroUsdt,
       type: TransactionType.DEPOSIT,
+      ...(input.txHash === undefined ? {} : { txHash: input.txHash }),
+      legs: [{ fromAccountId: input.externalOnchainAccountId, toAccountId: input.vaultAccountId, amount: input.amountMicroUsdt, asset: Asset.USDT }],
+    });
+    return transaction;
+  });
+}
+
+export async function postDepositCouponCredit(
+  tx: Prisma.TransactionClient,
+  input: {
+    externalRef: string;
+    userId: string;
+    userCouponAccountId: string;
+    issuanceAccountId: string;
+    amountMicroUsdt: bigint;
+    type?: TransactionType;
+    txHash?: string;
+    legs?: readonly LedgerLeg[];
+  },
+) {
+  if (input.amountMicroUsdt <= 0n) throw new DomainError('deposit amount must be positive');
+  const user = await tx.user.findUniqueOrThrow({ where: { id: input.userId } });
+  const combinedDust = user.dustMicroUsdt + input.amountMicroUsdt;
+  const coupons = couponsFromMicroUsdt(combinedDust);
+  const carry = combinedDust % 10_000n;
+  const legs = [
+    ...(input.legs ?? []),
+    ...(coupons > 0n ? [{ fromAccountId: input.issuanceAccountId, toAccountId: input.userCouponAccountId, amount: coupons, asset: Asset.COUPON }] : []),
+  ];
+  const transaction = legs.length > 0
+    ? await postWithClient(tx, {
+      type: input.type ?? TransactionType.DEPOSIT,
       externalRef: input.externalRef,
       userId: input.userId,
       ...(input.txHash === undefined ? {} : { txHash: input.txHash }),
@@ -49,14 +82,22 @@ export async function postDeposit(
       amountMicroUsdt: input.amountMicroUsdt,
       amountCoupons: coupons,
       roundingDustMicroUsdt: carry,
-      legs: [
-        { fromAccountId: input.externalOnchainAccountId, toAccountId: input.vaultAccountId, amount: input.amountMicroUsdt, asset: Asset.USDT },
-        ...(coupons > 0n ? [{ fromAccountId: input.issuanceAccountId, toAccountId: input.userCouponAccountId, amount: coupons, asset: Asset.COUPON }] : []),
-      ],
+      legs,
+    })
+    : await tx.transaction.create({
+      data: {
+        type: input.type ?? TransactionType.DEPOSIT,
+        externalRef: input.externalRef,
+        userId: input.userId,
+        ...(input.txHash === undefined ? {} : { txHash: input.txHash }),
+        status: TransactionStatus.CONFIRMED,
+        amountMicroUsdt: input.amountMicroUsdt,
+        amountCoupons: 0n,
+        roundingDustMicroUsdt: carry,
+      },
     });
-    await tx.user.update({ where: { id: input.userId }, data: { dustMicroUsdt: carry } });
-    return transaction;
-  });
+  await tx.user.update({ where: { id: input.userId }, data: { dustMicroUsdt: carry } });
+  return transaction;
 }
 
 export async function transferCoupons(

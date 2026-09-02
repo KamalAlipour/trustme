@@ -7,7 +7,9 @@ import { DepositSweepStatus, PrismaClient, WithdrawalStatus } from '@trustme/db'
 import { createEthersProvider, createWalletSigner } from './provider.js';
 import { loadWorkerConfig, type WorkerConfig } from './config.js';
 import { ingestOnce } from './ingest.js';
+import { ingestEscrowOnce } from './escrow-ingest.js';
 import { confirmWithdrawal, dispatchWithdrawal } from './dispatch.js';
+import { confirmEscrowSettlement, confirmEscrowUnload, dispatchEscrowSettlement, dispatchEscrowUnload } from './escrow-dispatch.js';
 import { cleanupUnattachedMedia } from './media-cleanup.js';
 import { expireBalanceDisclosures } from './disclosure-cleanup.js';
 import { churnDemoCoupons } from './demo-churn.js';
@@ -17,7 +19,9 @@ import { CONFIRMATION_QUEUE, createQueues, DISPATCH_QUEUE, INGEST_QUEUE, SWEEP_Q
 export { loadWorkerConfig } from './config.js';
 export * from './provider.js';
 export * from './ingest.js';
+export * from './escrow-ingest.js';
 export * from './dispatch.js';
+export * from './escrow-dispatch.js';
 export * from './queues.js';
 export * from './sweep.js';
 
@@ -62,7 +66,7 @@ export async function startWorker(config: WorkerConfig = loadWorkerConfig()): Pr
     throw new Error(`failover marker exists at ${config.failoverMarkerPath}; refusing to start worker`);
   }
   const logger = pino({
-    redact: ['code', 'privateKey', 'HOT_WALLET_PRIVATE_KEY', 'authorization', 'token', 'mnemonic', 'phrase', 'DEPOSIT_WALLET_MNEMONIC', 'xpub'],
+    redact: ['code', 'privateKey', 'HOT_WALLET_PRIVATE_KEY', 'ESCROW_SETTLER_KEY', 'authorization', 'token', 'mnemonic', 'phrase', 'DEPOSIT_WALLET_MNEMONIC', 'xpub'],
   });
   const depositAccountNode = await loadDepositAccountNode(config, logger);
   const prisma = new PrismaClient({ datasources: { db: { url: config.databaseUrl } } });
@@ -74,6 +78,10 @@ export async function startWorker(config: WorkerConfig = loadWorkerConfig()): Pr
     throw new Error(`configured chain ID ${config.chainId} does not match provider chain ID ${chainId}`);
   }
   const signer = createWalletSigner(config.hotWalletPrivateKey, rpc);
+  const escrowSigner = config.escrowSettlerKey === undefined ? null : createWalletSigner(config.escrowSettlerKey, rpc);
+  if (config.escrowContractAddress === undefined || config.escrowSettlerKey === undefined) {
+    logger.warn('escrow dispatch disabled: ESCROW_CONTRACT_ADDRESS or ESCROW_SETTLER_KEY is not configured');
+  }
   const sweepConfig = { ...config, hotWalletAddress: signer.address };
   const queues = createQueues(config.redisUrl);
   const ingestWorker = new BullWorker(
@@ -90,6 +98,9 @@ export async function startWorker(config: WorkerConfig = loadWorkerConfig()): Pr
           maxCouponsPerTransfer: config.demoChurnMaxCoupons,
         }, logger);
       }
+      if (job.name === 'escrow-ingest') {
+        return ingestEscrowOnce(prisma, provider, config, logger);
+      }
       const result = await ingestOnce(prisma, provider, config, logger);
       await Promise.all(result.sweepDepositAddressIds.map((depositAddressId) => queues.sweep.add(
         'sweep',
@@ -103,6 +114,24 @@ export async function startWorker(config: WorkerConfig = loadWorkerConfig()): Pr
   const dispatchWorker = new BullWorker(
     DISPATCH_QUEUE,
     async (job) => {
+      if (job.name === 'escrow-settle') {
+        if (escrowSigner === null || config.escrowContractAddress === undefined) {
+          logger.warn('escrow settlement disabled: ESCROW_SETTLER_KEY or ESCROW_CONTRACT_ADDRESS is not configured');
+          return { status: 'disabled' };
+        }
+        const result = await dispatchEscrowSettlement(prisma, provider, escrowSigner, config, String(job.data.settlementId));
+        if (result.txHash !== undefined) await queues.confirmation.add('escrow-settle-confirm', job.data, { delay: 15_000, jobId: `escrow-settlement-confirm:${job.data.settlementId}` });
+        return result;
+      }
+      if (job.name === 'escrow-unload') {
+        if (escrowSigner === null || config.escrowContractAddress === undefined) {
+          logger.warn('escrow unload disabled: ESCROW_SETTLER_KEY or ESCROW_CONTRACT_ADDRESS is not configured');
+          return { status: 'disabled' };
+        }
+        const result = await dispatchEscrowUnload(prisma, provider, escrowSigner, config, String(job.data.unloadId));
+        if (result.txHash !== undefined) await queues.confirmation.add('escrow-unload-confirm', job.data, { delay: 15_000, jobId: `escrow-unload-confirm:${job.data.unloadId}` });
+        return result;
+      }
       if (job.name === 'sweep-gas') {
         if (depositAccountNode === null) return { status: 'disabled' };
         const result = await fundSweepGas(prisma, provider, depositAccountNode, signer, sweepConfig, String(job.data.sweepId));
@@ -126,6 +155,16 @@ export async function startWorker(config: WorkerConfig = loadWorkerConfig()): Pr
   const confirmationWorker = new BullWorker(
     CONFIRMATION_QUEUE,
     async (job) => {
+      if (job.name === 'escrow-settle-confirm') {
+        const result = await confirmEscrowSettlement(prisma, provider, String(job.data.settlementId));
+        if (result.status === 'waiting') await queues.confirmation.add('escrow-settle-confirm', job.data, { delay: 15_000, jobId: `escrow-settlement-confirm:${job.data.settlementId}:${Date.now()}` });
+        return result;
+      }
+      if (job.name === 'escrow-unload-confirm') {
+        const result = await confirmEscrowUnload(prisma, provider, String(job.data.unloadId));
+        if (result.status === 'waiting') await queues.confirmation.add('escrow-unload-confirm', job.data, { delay: 15_000, jobId: `escrow-unload-confirm:${job.data.unloadId}:${Date.now()}` });
+        return result;
+      }
       const result = await confirmWithdrawal(prisma, provider, config, String(job.data.withdrawalId), logger);
       if (result?.status === 'waiting') {
         await queues.confirmation.add('confirm', job.data, { delay: 15_000, jobId: `confirmation:${job.data.withdrawalId}:${Date.now()}` });
@@ -166,6 +205,7 @@ export async function startWorker(config: WorkerConfig = loadWorkerConfig()): Pr
   );
   const workers = [ingestWorker, dispatchWorker, confirmationWorker, sweepWorker];
   await queues.ingest.add('scan', {}, { jobId: 'chain-ingest-repeat', repeat: { every: 15_000 } });
+  await queues.ingest.add('escrow-ingest', {}, { jobId: 'escrow-ingest-repeat', repeat: { every: 15_000 } });
   await queues.ingest.add('media-cleanup', {}, { jobId: 'media-cleanup-repeat', repeat: { every: 60 * 60_000 } });
   const demoChurnSchedules = await queues.ingest.getRepeatableJobs();
   await Promise.all(demoChurnSchedules
@@ -185,6 +225,10 @@ export async function startWorker(config: WorkerConfig = loadWorkerConfig()): Pr
     select: { id: true },
   });
   await Promise.all(approved.map((withdrawal) => queues.dispatch.add('dispatch', { withdrawalId: withdrawal.id }, { jobId: withdrawal.id })));
+  const pendingSettlements = await prisma.escrowSettlement.findMany({ where: { status: 'PENDING', chainTxHash: { not: null } }, select: { id: true } });
+  await Promise.all(pendingSettlements.map((row) => queues.confirmation.add('escrow-settle-confirm', { settlementId: row.id }, { jobId: `escrow-settlement-confirm:${row.id}` })));
+  const pendingUnloads = await prisma.escrowUnload.findMany({ where: { status: 'PENDING', chainTxHash: { not: null } }, select: { id: true } });
+  await Promise.all(pendingUnloads.map((row) => queues.confirmation.add('escrow-unload-confirm', { unloadId: row.id }, { jobId: `escrow-unload-confirm:${row.id}` })));
   const inFlightSweeps = await prisma.depositSweep.findMany({
     where: { status: { in: [DepositSweepStatus.PENDING, DepositSweepStatus.GAS_FUNDING, DepositSweepStatus.BROADCAST] } },
     select: { depositAddressId: true },

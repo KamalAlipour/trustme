@@ -2,11 +2,13 @@ import { beforeAll, afterAll, beforeEach, describe, expect, it, vi } from 'vites
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { HDNodeWallet, id, Transaction, zeroPadValue, getAddress } from 'ethers';
+import { HDNodeWallet, id, Interface, Transaction, zeroPadValue, getAddress } from 'ethers';
 import { AccountType, Asset, DepositSweepStatus, PrismaClient, WithdrawalStatus } from '@trustme/db';
-import { postDeposit, readDemoCirculation, requestWithdrawal } from '@trustme/core';
+import { createPayCode, postDeposit, readDemoCirculation, requestUnload, requestWithdrawal, settleWithPayCode, trustCouponEscrowAbi } from '@trustme/core';
+import { decodeEscrowLog } from '../src/escrow-ingest.js';
 import { churnDemoCoupons } from '../src/demo-churn.js';
 import { confirmWithdrawal, dispatchWithdrawal } from '../src/dispatch.js';
+import { dispatchEscrowSettlement, dispatchEscrowUnload } from '../src/escrow-dispatch.js';
 import { ingestOnce } from '../src/ingest.js';
 import { loadDepositAccountNode } from '../src/index.js';
 import { FakeChainProvider, FakeTransactionSigner } from '../src/provider.js';
@@ -93,17 +95,42 @@ class TransientSweepProvider extends FakeChainProvider {
   }
 }
 
+class TransientEscrowProvider extends FakeChainProvider {
+  public failEstimateFees = true;
+
+  public override async estimateFees() {
+    if (this.failEstimateFees) throw new Error('temporary escrow RPC failure');
+    return super.estimateFees();
+  }
+}
+
 beforeAll(async () => {
   await prisma.$connect();
 });
 beforeEach(async () => {
-  await prisma.$executeRawUnsafe('TRUNCATE TABLE "MediaAsset", "RefundRequest", "AidRequest", "CharityAgent", "Charity", "AdminAuditLog", "AdminUser", "Withdrawal", "DepositSweep", "EscrowHold", "EmailVerification", "MemberDevice", "Contact", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User", "ChainCursor" CASCADE');
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "EscrowChainEvent", "EscrowUnload", "EscrowSettlement", "PayCode", "EscrowBalance", "MemberWallet", "MediaAsset", "RefundRequest", "AidRequest", "CharityAgent", "Charity", "AdminAuditLog", "AdminUser", "Withdrawal", "DepositSweep", "EscrowHold", "EmailVerification", "MemberDevice", "Contact", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User", "ChainCursor" CASCADE');
 });
 afterAll(async () => {
   await prisma.$disconnect();
 });
 
 describe('chain ingest', () => {
+  it('decodes escrow event logs', () => {
+    const iface = new Interface(trustCouponEscrowAbi);
+    const event = iface.getEvent('Deposited');
+    if (event === null) throw new Error('missing Deposited event');
+    const encoded = iface.encodeEventLog(event, ['0x0000000000000000000000000000000000000001', 123n, 123n]);
+    const decoded = decodeEscrowLog({
+      address: '0x0000000000000000000000000000000000000002',
+      topics: encoded.topics,
+      data: encoded.data,
+      blockNumber: 1,
+      transactionHash: '0xabc',
+      index: 0,
+    });
+    expect(decoded?.amountMicroUsdt).toBe(123n);
+    expect(decoded?.walletAddress).toBe('0x0000000000000000000000000000000000000001');
+  });
   it('processes confirmed deposits and replays idempotently', async () => {
     const fixtureAccounts = await fixture();
     const provider = new FakeChainProvider({
@@ -195,6 +222,31 @@ describe('chain ingest', () => {
     await expect(ingestOnce(prisma, provider, config)).resolves.toMatchObject({ rewound: true, scannedThrough: 109 });
     expect(provider.logReads).toBe(1);
     expect(await prisma.chainCursor.findUniqueOrThrow({ where: { id: 1 } })).toMatchObject({ nextBlock: 100n, lastBlockHash: null });
+  });
+});
+
+describe('escrow dispatch', () => {
+  it('retries transient settlement and unload provider failures without failing rows', async () => {
+    const buyer = await prisma.user.create({ data: { phoneNumber: '+1555000777', barcodeId: 'escrow-worker-buyer' } });
+    const merchant = await prisma.user.create({ data: { phoneNumber: '+1555000778', barcodeId: 'escrow-worker-merchant' } });
+    await account(AccountType.USER_COUPON, Asset.COUPON, buyer.id);
+    await account(AccountType.USER_COUPON, Asset.COUPON, merchant.id);
+    await account(AccountType.SYSTEM_COUPON_ISSUANCE, Asset.COUPON);
+    await prisma.memberWallet.create({ data: { userId: buyer.id, address: getAddress(`0x${'01'.repeat(20)}`), kind: 'EXTERNAL', chainId: 137 } });
+    await prisma.escrowBalance.create({ data: { userId: buyer.id, lockedMicroUsdt: 2_000_000n } });
+    await createPayCode(prisma, { buyerId: buyer.id, code: '1234', maxAmountMicroUsdt: 1_000_000n, expiresAt: new Date(Date.now() + 60_000) });
+    const settlement = await settleWithPayCode(prisma, { merchantId: merchant.id, buyerBarcodeId: buyer.barcodeId, code: '1234', amountMicroUsdt: 500_000n });
+    const signer = new FakeTransactionSigner(getAddress(`0x${'02'.repeat(20)}`), '0x02');
+    const provider = new TransientEscrowProvider({ head: 1 });
+    const escrowConfig = { ...dispatchConfig, escrowContractAddress: getAddress(`0x${'03'.repeat(20)}`), escrowSettlerKey: 'test-key', escrowMaxAttempts: 5 };
+    await expect(dispatchEscrowSettlement(prisma, provider, signer, escrowConfig, settlement.settlement.id)).rejects.toThrow('temporary escrow RPC failure');
+    expect(await prisma.escrowSettlement.findUniqueOrThrow({ where: { id: settlement.settlement.id } })).toMatchObject({ status: 'PENDING', attempts: 1, lastError: 'temporary escrow RPC failure' });
+    provider.failEstimateFees = false;
+    await expect(dispatchEscrowSettlement(prisma, provider, signer, escrowConfig, settlement.settlement.id)).resolves.toMatchObject({ status: 'broadcast' });
+    const unload = await requestUnload(prisma, { userId: buyer.id, amountMicroUsdt: 250_000n });
+    provider.failEstimateFees = true;
+    await expect(dispatchEscrowUnload(prisma, provider, signer, escrowConfig, unload.id)).rejects.toThrow('temporary escrow RPC failure');
+    expect(await prisma.escrowUnload.findUniqueOrThrow({ where: { id: unload.id } })).toMatchObject({ status: 'PENDING', attempts: 1, lastError: 'temporary escrow RPC failure' });
   });
 });
 

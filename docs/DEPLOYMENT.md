@@ -1,3 +1,31 @@
+# Prepaid USDT escrow deployment
+
+Compile the contract and generate the checked-in ABI:
+
+```bash
+npm run compile:escrow
+```
+
+Deploy from a controlled operator environment:
+
+```bash
+ESCROW_DEPLOYER_KEY=... \
+USDT_CONTRACT_ADDRESS=... \
+ESCROW_VAULT_ADDRESS=... \
+POLYGON_RPC_URL=... \
+npx tsx scripts/deploy-escrow.ts
+```
+
+`ESCROW_CONTRACT_ADDRESS`, `ESCROW_CHAIN_ID`, `USDT_CONTRACT_ADDRESS`,
+`WALLETCONNECT_PROJECT_ID`, and `WEB3AUTH_CLIENT_ID` are API settings.
+`ESCROW_CONTRACT_ADDRESS` and `ESCROW_SETTLER_KEY` are worker settings. The
+settler key is worker-only and must never be copied into API configuration,
+logs, or responses. The deployer key is used only by the deployment script.
+
+If `ESCROW_CONTRACT_ADDRESS` is absent, the API reports escrow as disabled and
+escrow mutation endpoints return `escrow_not_configured`; worker escrow jobs
+warn and no-op while all existing jobs continue to run. Independently review
+the contract before locking real Polygon funds.
 # TrustMe deployment runbook
 
 ## Scope and topology

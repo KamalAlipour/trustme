@@ -1,3 +1,22 @@
+# Prepaid USDT escrow
+
+TrustMe's direct USDT payment feature uses the non-upgradeable
+`TrustCouponEscrow` contract on Polygon. Members deposit USDT into the
+contract, redeem short-lived four-digit payment codes at merchants, and may
+unload unspent balances to their own registered wallet. The worker alone holds
+the `ESCROW_SETTLER_KEY` and settles or unloads reserved amounts; the API never
+loads or receives that key.
+
+Escrow contract funds are reported separately from vault custody and coupon
+backing. They are not ledger vault assets, coupon balances, or demo
+circulation, and therefore do not change the public backing ratio. The
+merchant coupon credit is issued immediately with the existing deposit dust
+rules; the corresponding contract settlement is confirmed asynchronously.
+
+Before locking real mainnet funds, independently review the contract and
+deployment transaction. Deploy with the documented compile and deployment
+scripts, configure the deployed address in the worker and API separately, and
+verify the settler and vault addresses out of band.
 # TrustMe — architecture and money model
 
 TrustMe is the financial module of the "social coupon" platform: USDT (Polygon

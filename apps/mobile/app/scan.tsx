@@ -19,7 +19,7 @@ export default function Scan() {
         barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
         onBarcodeScanned={scanned ? undefined : ({ data }) => {
           setScanned(true);
-          router.replace({ pathname: (returnTo ?? '/(tabs)') as '/(tabs)' | '/contacts', params: { barcodeId: data } });
+          router.replace({ pathname: (returnTo ?? '/(tabs)') as '/(tabs)' | '/contacts' | '/tether', params: { barcodeId: data } });
         }}
       />
       <View style={{ position: 'absolute', top: 60, left: 20, right: 20 }}><Button title={t.cancel} onPress={() => router.back()} /></View>

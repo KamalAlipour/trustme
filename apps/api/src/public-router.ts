@@ -107,6 +107,7 @@ export function createPublicRouter(prisma: PrismaClient): express.Router {
         readDemoCirculation(prisma),
         prisma.user.count({ where: { isDemo: true } }),
       ]);
+      const escrow = await prisma.escrowBalance.aggregate({ _sum: { lockedMicroUsdt: true } });
       const value = {
         asOf: new Date().toISOString(),
         real: {
@@ -116,6 +117,7 @@ export function createPublicRouter(prisma: PrismaClient): express.Router {
           isFullyBacked: solvency.isSolvent,
         },
         demo: { couponsInCirculation: demoCirculation.toString(), userCount: demoUsers },
+        escrowLockedMicroUsdt: (escrow._sum.lockedMicroUsdt ?? 0n).toString(),
       };
       reservesCache = { expiresAt: Date.now() + 10_000, value };
       response.json(value);

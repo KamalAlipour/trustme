@@ -104,3 +104,48 @@ export type WithdrawalQuote = {
   baseFeeBps: string;
   minimumFeeMicroUsdt: string;
 };
+export type EscrowConfig = {
+  contractAddress: string | null;
+  chainId: number;
+  usdtAddress: string;
+  rpcUrl: string;
+  decimals: number;
+  walletConnectProjectId: string | null;
+  web3AuthClientId: string | null;
+  enabled: boolean;
+};
+export type EscrowWallet = {
+  id: string;
+  address: string;
+  kind: 'EXTERNAL' | 'IN_APP' | 'SMART_ACCOUNT';
+  chainId: number;
+  isPrimary: boolean;
+};
+export type EscrowBalance = {
+  lockedMicroUsdt: string;
+  reservedMicroUsdt: string;
+  availableMicroUsdt: string;
+  locked: string;
+  primaryWallet: EscrowWallet | null;
+  enabled: boolean;
+};
+export type EscrowPayCode = { id: string; expiresAt: string; maxAmount: string; status?: string; wrongAttempts?: number };
+export type EscrowSettlement = {
+  id: string;
+  status: string;
+  amount: string;
+  buyerId: string;
+  merchantId: string;
+  role: 'MERCHANT' | 'BUYER';
+  createdAt: string;
+  confirmedAt: string | null;
+  buyerBarcodeId?: string;
+};
+export type EscrowUnload = {
+  id: string;
+  status: string;
+  amount: string;
+  walletAddress: string;
+  createdAt: string;
+  confirmedAt: string | null;
+};
