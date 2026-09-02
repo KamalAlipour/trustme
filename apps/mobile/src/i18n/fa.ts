@@ -385,6 +385,8 @@ export const fa: Translations = {
     disconnected: 'کیف‌پول حذف شد.',
     importRecovery: 'وارد کردن عبارت بازیابی',
     importRecoveryPlaceholder: 'عبارت بازیابی ۱۲ کلمه‌ای خود را وارد کنید',
+    importWordCount: (count: number) => `${count} کلمه از ۱۲ کلمه وارد شده.`,
+    importInvalidPhrase: 'این یک عبارت بازیابی ۱۲ کلمه‌ای معتبر نیست. کلمات و ترتیبشان را بررسی کن، یا برای ساخت کیف‌پول تازه «ساخت کیف پول» را بزن.',
     importWallet: 'وارد کردن کیف پول',
     recoveryImported: 'کیف پول بازیابی وارد شد.',
     walletPersistenceFailed: 'پس از ذخیره، عبارت بازیابی تأیید نشد. ثبت کیف پول لغو شد.',
