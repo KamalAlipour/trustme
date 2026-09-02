@@ -9,7 +9,7 @@ import { Page, LoadingScreen } from '../../src/components/Screen';
 import { useBalance, useDisclosures, useEscrowBalance, useEscrowConfig, useInvalidateMoney, useMember } from '../../src/hooks';
 import { useTranslation } from '../../src/i18n';
 import { randomFourDigitCode } from '../../src/lib/code';
-import { formatEscrowCountdown, parseUsdtAmount } from '../../src/lib/escrow';
+import { formatEscrowCountdown } from '../../src/lib/escrow';
 import { mapApiError } from '../../src/lib/errors';
 import { formatCoupons, formatMicroUsdt } from '../../src/lib/format';
 import { colors, styles } from '../../src/styles';
@@ -48,7 +48,7 @@ export default function Home() {
   const [incomingMessage, setIncomingMessage] = useState('');
   const incoming = useQuery({
     queryKey: ['escrow-pay-codes-incoming'],
-    queryFn: () => request<{ items: { id: string; amount: string; expiresAt: string; buyerBarcodeId: string; buyerDisplayName: string | null }[] }>('/v1/me/escrow/pay-codes/incoming'),
+    queryFn: () => request<{ items: { id: string; amount: string; amountCoupons: string; expiresAt: string; buyerBarcodeId: string; buyerDisplayName: string | null }[] }>('/v1/me/escrow/pay-codes/incoming'),
     enabled: escrowEnabled,
     refetchInterval: 4_000,
   });
@@ -109,11 +109,14 @@ export default function Home() {
         setPayMessage(t.escrow.payMerchantRequired);
         return;
       }
-      parseUsdtAmount(payAmount);
+      if (!/^[1-9][0-9]*$/.test(payAmount)) {
+        setPayMessage(t.escrow.payAmountRequired);
+        return;
+      }
       const stepUp = await getStepUpPin();
       if (!stepUp) { setPayMessage(t.operationPinRequired); return; }
       const code = await randomFourDigitCode();
-      const response = await request<{ id: string; expiresAt: string }>('/v1/me/escrow/pay-codes', { method: 'POST', body: { code, merchantBarcodeId: payMerchantBarcode, amount: payAmount, pin: stepUp } });
+      const response = await request<{ id: string; expiresAt: string }>('/v1/me/escrow/pay-codes', { method: 'POST', body: { code, merchantBarcodeId: payMerchantBarcode, amountCoupons: payAmount, pin: stepUp } });
       setBuyerPayCode({ ...response, plaintext: code });
       setPayAmount('');
       await invalidate();
@@ -169,7 +172,7 @@ export default function Home() {
         {incoming.data?.items.map((item) => <View key={item.id} style={styles.card}>
           <Text style={styles.heading}>{t.escrow.incomingFrom(item.buyerDisplayName ?? item.buyerBarcodeId)}</Text>
           <Text style={styles.muted}>{item.buyerBarcodeId}</Text>
-          <Text style={styles.text}>{t.escrow.incomingAmount}: {item.amount} USDT</Text>
+          <Text style={styles.text}>{t.escrow.incomingAmount}: {formatCoupons(item.amountCoupons, language)}</Text>
           <TextInput value={incomingCodes[item.id] ?? ''} onChangeText={(value) => setIncomingCodes((current) => ({ ...current, [item.id]: value.replace(/\D/g, '').slice(0, 4) }))} placeholder={t.escrow.incomingCodePlaceholder} style={styles.input} keyboardType="number-pad" secureTextEntry />
           <Pressable onPress={() => void settleIncoming(item)} style={styles.button}><Text style={styles.buttonText}>{t.escrow.incomingConfirm}</Text></Pressable>
         </View>)}
@@ -179,7 +182,7 @@ export default function Home() {
         <Text style={styles.heading}>{t.escrow.buyTitle}</Text>
         <TextInput value={payMerchantBarcode} onChangeText={setPayMerchantBarcode} placeholder={t.escrow.payMerchantBarcode} style={styles.input} />
         <Pressable onPress={() => router.push({ pathname: '/scan', params: { returnTo: '/(tabs)', field: 'pay' } })} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.scanQr}</Text></Pressable>
-        <TextInput value={payAmount} onChangeText={setPayAmount} placeholder={t.escrow.payAmountUsdt} style={styles.input} keyboardType="decimal-pad" autoFocus={payMerchantBarcode !== '' && buyerPayCode === null} />
+        <TextInput value={payAmount} onChangeText={(value) => setPayAmount(value.replace(/\D/g, ''))} placeholder={t.escrow.payAmountCoupons} style={styles.input} keyboardType="number-pad" autoFocus={payMerchantBarcode !== '' && buyerPayCode === null} />
         <Pressable onPress={() => void (buyerPayCode === null ? paySeller() : cancelBuyerPayCode())} style={styles.button}><Text style={styles.buttonText}>{buyerPayCode === null ? t.escrow.payNow : t.cancel}</Text></Pressable>
         {buyerPayCode !== null ? <>
           <Text style={styles.muted}>{t.escrow.payCodeShow}</Text>

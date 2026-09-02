@@ -1429,6 +1429,24 @@ describe('directed escrow API', () => {
     expect((await request(app).get('/v1/me/escrow/pay-codes/incoming').set('Authorization', `Bearer ${merchantToken}`)).body.items).toHaveLength(0);
   });
 
+  it('creates coupon-denominated directed pay codes and returns coupon amounts', async () => {
+    const { app } = appFixture(undefined, undefined, { escrowContractAddress: getAddress(`0x${'45'.repeat(20)}`) });
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000315', barcodeId: 'coupon-buyer' });
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000316', barcodeId: 'coupon-merchant' });
+    const buyerToken = await memberToken(app, '+1555000315');
+    const merchantToken = await memberToken(app, '+1555000316');
+    const buyer = await prisma.user.findUniqueOrThrow({ where: { barcodeId: 'coupon-buyer' } });
+    await prisma.escrowBalance.create({ data: { userId: buyer.id, lockedMicroUsdt: 5_000_000n } });
+    const created = await request(app).post('/v1/me/escrow/pay-codes').set('Authorization', `Bearer ${buyerToken}`).send({ code: '2345', merchantBarcodeId: 'coupon-merchant', amountCoupons: '125', pin: '2468' });
+    expect(created.status).toBe(201);
+    expect(created.body).toMatchObject({ amount: '1.25', amountCoupons: '125', merchantBarcodeId: 'coupon-merchant' });
+    const stored = await prisma.payCode.findUniqueOrThrow({ where: { id: created.body.id } });
+    expect(stored.amountMicroUsdt).toBe(1_250_000n);
+    const incoming = await request(app).get('/v1/me/escrow/pay-codes/incoming').set('Authorization', `Bearer ${merchantToken}`);
+    expect(incoming.status).toBe(200);
+    expect(incoming.body.items).toMatchObject([{ id: created.body.id, amount: '1.25', amountCoupons: '125' }]);
+  });
+
   it('removes an idle wallet and rejects locked or foreign wallets', async () => {
     const { app } = appFixture(undefined, undefined, { escrowContractAddress: getAddress(`0x${'55'.repeat(20)}`) });
     await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000313', barcodeId: 'wallet-owner' });

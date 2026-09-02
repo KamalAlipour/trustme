@@ -53,7 +53,9 @@ import {
   donateToCharity,
   identityPolicyFor,
   availableEscrowMicroUsdt,
+  couponsFromMicroUsdt,
   createPayCode,
+  microUsdtFromCoupons,
   requestUnload,
   settleWithPayCode,
   settleDirectedPayCode,
@@ -113,7 +115,7 @@ const charityDonationSchema = z.object({ amountCoupons: couponsSchema, pin: four
 const aidRequestSchema = z.object({ charityId: z.string().uuid(), amountCoupons: couponsSchema, description: z.string().trim().min(1), loanId: z.string().uuid().optional(), mediaIds: z.array(z.string().uuid()).max(10).optional() });
 const aidDocumentsSchema = z.object({ mediaIds: z.array(z.string().uuid()).min(1).max(10) });
 const walletSchema = z.object({ address: z.string().regex(/^0x[0-9a-fA-F]{40}$/), kind: z.enum(['EXTERNAL', 'IN_APP', 'SMART_ACCOUNT']) });
-const payCodeSchema = z.object({ code: fourDigitCodeSchema, maxAmount: z.string().min(1).optional(), merchantBarcodeId: barcodeIdSchema.optional(), amount: z.string().min(1).optional(), pin: fourDigitCodeSchema });
+const payCodeSchema = z.object({ code: fourDigitCodeSchema, maxAmount: z.string().min(1).optional(), merchantBarcodeId: barcodeIdSchema.optional(), amount: z.string().min(1).optional(), amountCoupons: z.string().regex(/^[1-9][0-9]*$/).optional(), pin: fourDigitCodeSchema });
 const escrowSettlementSchema = z.union([
   z.object({ buyerBarcodeId: barcodeIdSchema, code: fourDigitCodeSchema, amount: z.string().min(1), idempotencyKey: z.string().min(1), pin: fourDigitCodeSchema }),
   z.object({ payCodeId: z.string().uuid(), code: fourDigitCodeSchema, idempotencyKey: z.string().min(1), pin: fourDigitCodeSchema }),
@@ -544,25 +546,31 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       const user = await member(prisma, userId);
       requireIdentityForSpending(user.country, user.identityVerificationStatus, (await withdrawalSettings(prisma)).identityRequiredCountries);
       await verifyMemberPin(prisma, userId, body.pin);
+      if (body.amount !== undefined && body.amountCoupons !== undefined) throw new HttpError(400, 'send either amount or amountCoupons');
       let merchantId: string | undefined;
       if (body.merchantBarcodeId !== undefined) {
         const merchant = await prisma.user.findUnique({ where: { barcodeId: body.merchantBarcodeId }, select: { id: true } });
         if (merchant === null) throw new HttpError(404, 'seller not found');
         merchantId = merchant.id;
       }
-      const maxAmount = body.maxAmount ?? body.amount;
-      if (maxAmount === undefined) throw new HttpError(400, 'maxAmount is required');
+      const amountMicroUsdt = body.amountCoupons === undefined
+        ? body.amount === undefined ? undefined : microUsdtFromDecimal(body.amount)
+        : microUsdtFromCoupons(BigInt(body.amountCoupons));
+      const maxAmountMicroUsdt = body.maxAmount === undefined
+        ? amountMicroUsdt
+        : microUsdtFromDecimal(body.maxAmount);
+      if (maxAmountMicroUsdt === undefined) throw new HttpError(400, 'maxAmount is required');
       const code = await createPayCode(prisma, {
         buyerId: userId,
         code: body.code,
-        maxAmountMicroUsdt: microUsdtFromDecimal(maxAmount),
+        maxAmountMicroUsdt,
         expiresAt: new Date(Date.now() + 5 * 60_000),
         ...(merchantId === undefined ? {} : {
           merchantId,
-          ...(body.amount === undefined ? {} : { amountMicroUsdt: microUsdtFromDecimal(body.amount) }),
+          ...(amountMicroUsdt === undefined ? {} : { amountMicroUsdt }),
         }),
       });
-      response.status(201).json({ id: code.id, expiresAt: code.expiresAt, maxAmount: decimalFromMicroUsdt(code.maxAmountMicroUsdt), amount: code.amountMicroUsdt === null ? null : decimalFromMicroUsdt(code.amountMicroUsdt), merchantBarcodeId: body.merchantBarcodeId ?? null });
+      response.status(201).json({ id: code.id, expiresAt: code.expiresAt, maxAmount: decimalFromMicroUsdt(code.maxAmountMicroUsdt), amount: code.amountMicroUsdt === null ? null : decimalFromMicroUsdt(code.amountMicroUsdt), amountCoupons: code.amountMicroUsdt === null ? null : couponsFromMicroUsdt(code.amountMicroUsdt).toString(), merchantBarcodeId: body.merchantBarcodeId ?? null });
     } catch (error) { next(error); }
   });
 
@@ -570,7 +578,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
     try {
       escrowConfigured();
       const rows = await prisma.payCode.findMany({ where: { merchantId: memberClaims(request).sub, status: PayCodeStatus.ACTIVE, expiresAt: { gt: new Date() } }, include: { buyer: { select: { barcodeId: true, displayName: true } } }, orderBy: { createdAt: 'desc' } });
-      response.json({ items: rows.flatMap((row) => row.amountMicroUsdt === null ? [] : [{ id: row.id, amount: decimalFromMicroUsdt(row.amountMicroUsdt), expiresAt: row.expiresAt, buyerBarcodeId: row.buyer.barcodeId, buyerDisplayName: row.buyer.displayName }]) });
+      response.json({ items: rows.flatMap((row) => row.amountMicroUsdt === null ? [] : [{ id: row.id, amount: decimalFromMicroUsdt(row.amountMicroUsdt), amountCoupons: couponsFromMicroUsdt(row.amountMicroUsdt).toString(), expiresAt: row.expiresAt, buyerBarcodeId: row.buyer.barcodeId, buyerDisplayName: row.buyer.displayName }]) });
     } catch (error) { next(error); }
   });
 
@@ -578,7 +586,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
     try {
       escrowConfigured();
       const code = await prisma.payCode.findFirst({ where: { buyerId: memberClaims(request).sub, status: PayCodeStatus.ACTIVE, expiresAt: { gt: new Date() } }, include: { merchant: { select: { barcodeId: true } } }, orderBy: { createdAt: 'desc' } });
-      response.json(code === null ? null : { id: code.id, status: code.status, expiresAt: code.expiresAt, maxAmount: decimalFromMicroUsdt(code.maxAmountMicroUsdt), amount: code.amountMicroUsdt === null ? null : decimalFromMicroUsdt(code.amountMicroUsdt), merchantBarcodeId: code.merchant?.barcodeId ?? null, wrongAttempts: code.wrongAttempts });
+      response.json(code === null ? null : { id: code.id, status: code.status, expiresAt: code.expiresAt, maxAmount: decimalFromMicroUsdt(code.maxAmountMicroUsdt), amount: code.amountMicroUsdt === null ? null : decimalFromMicroUsdt(code.amountMicroUsdt), amountCoupons: code.amountMicroUsdt === null ? null : couponsFromMicroUsdt(code.amountMicroUsdt).toString(), merchantBarcodeId: code.merchant?.barcodeId ?? null, wrongAttempts: code.wrongAttempts });
     } catch (error) { next(error); }
   });
 
@@ -587,7 +595,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       escrowConfigured();
       const code = await prisma.payCode.findFirst({ where: { id: pathId(request.params.id), buyerId: memberClaims(request).sub }, include: { merchant: { select: { barcodeId: true } } } });
       if (code === null) throw new HttpError(404, 'pay code not found');
-      response.json({ id: code.id, status: code.status, amount: code.amountMicroUsdt === null ? null : decimalFromMicroUsdt(code.amountMicroUsdt), expiresAt: code.expiresAt, merchantBarcodeId: code.merchant?.barcodeId ?? null, wrongAttempts: code.wrongAttempts });
+      response.json({ id: code.id, status: code.status, amount: code.amountMicroUsdt === null ? null : decimalFromMicroUsdt(code.amountMicroUsdt), amountCoupons: code.amountMicroUsdt === null ? null : couponsFromMicroUsdt(code.amountMicroUsdt).toString(), expiresAt: code.expiresAt, merchantBarcodeId: code.merchant?.barcodeId ?? null, wrongAttempts: code.wrongAttempts });
     } catch (error) { next(error); }
   });
 
