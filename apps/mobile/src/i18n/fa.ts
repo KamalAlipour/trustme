@@ -314,6 +314,7 @@ export const fa: Translations = {
     noWallet: 'هنوز کیف پول امانت ثبت نشده است.',
     createWallet: 'ساخت کیف پول',
     connectWallet: 'اتصال کیف پول موجود',
+    walletAppMissing: 'کیف‌پول پیدا نشد. متامسک یا ترست‌والت را نصب کن و دوباره امتحان کن.',
     walletAddress: 'آدرس کیف پول',
     copyAddress: 'کپی آدرس',
     addressCopied: 'آدرس کپی شد.',

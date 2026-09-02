@@ -10,7 +10,9 @@ import {
   readSocialCallbackStateFromUrl,
   validateWebRedirectState,
 } from '../src/auth/web-redirect';
+import { installWalletPolyfills } from '../src/lib/wallet-polyfills';
 
+installWalletPolyfills();
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, retry: 1 } } });
 const WEB_REDIRECT_DEFER_MS = 1_200;
 

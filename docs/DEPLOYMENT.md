@@ -29,6 +29,10 @@ because the app receives this value and users can inspect it.
 `ESCROW_CONTRACT_ADDRESS` and `ESCROW_SETTLER_KEY` are worker settings. The
 settler key is worker-only and must never be copied into API configuration,
 logs, or responses. The deployer key is used only by the deployment script.
+`WALLETCONNECT_PROJECT_ID` enables external-wallet connection on web through
+the QR modal and on native through a deep link into the installed wallet. The
+allowed-domains list in WalletConnect Cloud must include
+`https://app-trustcoupon.komasi.as`.
 
 If `ESCROW_CONTRACT_ADDRESS` is absent, the API reports escrow as disabled and
 escrow mutation endpoints return `escrow_not_configured`; worker escrow jobs
