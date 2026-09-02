@@ -10,7 +10,7 @@ export type CountryIdentityPolicy = {
   plannedProviderLabel: string | null;
 };
 export type IdentityProviderAccess = { shahkar: boolean };
-const registry: Array<{ country: string; provider: IdentityProviderKey; providerLabel: string; implemented: boolean }> = [
+export const identityCountryRegistry: ReadonlyArray<{ country: string; provider: IdentityProviderKey; providerLabel: string; implemented: boolean }> = [
   { country: 'IR', provider: 'SHAHKAR', providerLabel: 'Shahkar', implemented: true },
   { country: 'NO', provider: 'BANKID_NO', providerLabel: 'BankID', implemented: false },
   { country: 'SE', provider: 'BANKID_SE', providerLabel: 'BankID (Sweden)', implemented: false },
@@ -27,7 +27,7 @@ const registry: Array<{ country: string; provider: IdentityProviderKey; provider
 ];
 export function identityPolicyFor(country: string, access: IdentityProviderAccess): CountryIdentityPolicy {
   const normalized = country.trim().toUpperCase();
-  const row = registry.find((item) => item.country === normalized);
+  const row = identityCountryRegistry.find((item) => item.country === normalized);
   if (!row) return { country: normalized, mode: 'MANUAL', provider: null, providerLabel: null, plannedProviderLabel: null };
   if (!row.implemented || (row.provider === 'SHAHKAR' && !access.shahkar)) {
     return { country: normalized, mode: 'MANUAL', provider: null, providerLabel: null, plannedProviderLabel: row.providerLabel };

@@ -1,4 +1,5 @@
 import { HttpError } from './http-error.js';
+import { IdentityVerificationStatus } from '@trustme/db';
 
 export function parseIdentityRequiredCountries(value: string | undefined): Set<string> {
   return new Set(
@@ -11,10 +12,10 @@ export function parseIdentityRequiredCountries(value: string | undefined): Set<s
 
 export function requireIdentityForSpending(
   country: string | null,
-  identityVerificationStatus: string,
+  identityVerificationStatus: IdentityVerificationStatus,
   requiredCountries: Set<string>,
 ): void {
-  if (country !== null && requiredCountries.has(country) && identityVerificationStatus !== 'VERIFIED') {
+  if (country !== null && requiredCountries.has(country) && identityVerificationStatus !== IdentityVerificationStatus.VERIFIED) {
     throw new HttpError(403, 'identity_verification_required');
   }
 }

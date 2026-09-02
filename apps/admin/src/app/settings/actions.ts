@@ -25,7 +25,7 @@ export async function updateSettingsAction(formData: FormData): Promise<void> {
       minimumWithdrawalMicroUsdt,
       autoApprovalLimitMicroUsdt,
       requireIdentityForWithdrawal: formData.get('requireIdentityForWithdrawal') === 'on',
-      identityRequiredCountries: formData.get('identityRequiredCountries') === 'IR' ? ['IR'] : [],
+      identityRequiredCountries: formData.getAll('identityRequiredCountries').filter((value): value is string => typeof value === 'string'),
     };
   } catch {
     const invalidField = !/^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/.test(values.minimumFeeUsdt as string)

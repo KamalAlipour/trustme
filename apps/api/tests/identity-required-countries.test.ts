@@ -3,7 +3,8 @@ import { parseIdentityRequiredCountries, requireIdentityForSpending } from '../s
 
 describe('identity-required countries', () => {
   it('normalizes, filters, and deduplicates configured country codes', () => {
-    expect([...parseIdentityRequiredCountries(' ir, NO, ir, USA, 1A, , fa ')]).toEqual(['IR', 'NO', 'FA']);
+    expect([...parseIdentityRequiredCountries(' ir, NO, ir, GB ')]).toEqual(['IR', 'NO', 'GB']);
+    expect([...parseIdentityRequiredCountries('USA, 1A, , lowercase!')]).toEqual([]);
     expect([...parseIdentityRequiredCountries(undefined)]).toEqual([]);
   });
 
