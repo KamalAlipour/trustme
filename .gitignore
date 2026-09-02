@@ -7,3 +7,4 @@ dist/
 coverage/
 *.log
 packages/db/prisma/generated/
+apps/mobile/.web-publish.*
