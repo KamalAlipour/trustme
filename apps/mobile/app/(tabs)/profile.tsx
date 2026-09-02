@@ -43,6 +43,8 @@ export default function Profile() {
   const [countryLoading, setCountryLoading] = useState(false);
   const [countryPickerOpen, setCountryPickerOpen] = useState(false);
   const [countrySearch, setCountrySearch] = useState('');
+  const [expandedDeviceId, setExpandedDeviceId] = useState<string | null>(null);
+  const [pendingDeviceId, setPendingDeviceId] = useState<string | null>(null);
   const [identityLoading, setIdentityLoading] = useState(false);
   const [eligibleAt, setEligibleAt] = useState<string | null>(null);
   const [withdrawalQuote, setWithdrawalQuote] = useState<WithdrawalQuote | null>(null);
@@ -68,7 +70,7 @@ export default function Profile() {
   };
   const devices = useQuery({
     queryKey: ['devices'],
-    queryFn: () => request<{ items: Array<{ id: string; label: string; current: boolean; lastSeenAt: string }> }>('/v1/me/devices'),
+    queryFn: () => request<{ items: Array<{ id: string; label: string; current: boolean; lastSeenAt: string; createdAt: string }> }>('/v1/me/devices'),
   });
   useEffect(() => {
     if (previousLanguage.current !== language) {
@@ -160,6 +162,11 @@ export default function Profile() {
       }, t);
       if (message !== null) { setEmailCode(''); setEmailFeedback(message); setEmailCodeSent(false); await invalidate(); }
     } catch (cause) { setEmailError(cause instanceof ApiError ? cause.message : t.unknownError); } finally { setEmailBusy(null); }
+  };
+  const signOutDevice = async (deviceId: string) => {
+    await request(`/v1/me/devices/${deviceId}`, { method: 'DELETE' });
+    await devices.refetch();
+    setPendingDeviceId(null);
   };
   const changePin = async () => {
     setError(''); setNotice('');
@@ -330,10 +337,29 @@ export default function Profile() {
       </View>
       <View style={styles.card}>
         <Text style={styles.heading}>{t.devices}</Text>
+        <Text style={styles.muted}>{t.devicesExplainer}</Text>
         {(devices.data?.items ?? []).map((device) => (
-          <View key={device.id} style={styles.row}>
-            <Text style={styles.muted}>{device.label} · {device.current ? t.currentDevice : formatDate(device.lastSeenAt, language)}</Text>
-            {!device.current ? <Pressable onPress={() => void request(`/v1/me/devices/${device.id}`, { method: 'DELETE' }).then(() => void devices.refetch())}><Text style={styles.danger}>{t.deviceCancel}</Text></Pressable> : null}
+          <View key={device.id} style={{ gap: 8 }}>
+            <Text style={styles.text}>{device.label === 'Unknown device' ? t.deviceUnknown : device.label}</Text>
+            {device.current ? <Text style={styles.notice}>{t.currentDevice}</Text> : null}
+            <Pressable onPress={() => setExpandedDeviceId((expanded) => expanded === device.id ? null : device.id)} style={styles.secondaryButton}>
+              <Text style={styles.secondaryButtonText}>{t.deviceDetails}</Text>
+            </Pressable>
+            {expandedDeviceId === device.id ? <>
+              <Text style={styles.muted}>{t.deviceLastSeen}: {formatDate(device.lastSeenAt, language)}</Text>
+              <Text style={styles.muted}>{t.deviceSignedInAt}: {formatDate(device.createdAt, language)}</Text>
+            </> : null}
+            {!device.current ? pendingDeviceId === device.id ? <>
+              <Text style={styles.danger}>{t.deviceSignOutConfirm}</Text>
+              <Pressable onPress={() => void signOutDevice(device.id)} style={styles.button}>
+                <Text style={styles.buttonText}>{t.deviceSignOut}</Text>
+              </Pressable>
+              <Pressable onPress={() => setPendingDeviceId(null)} style={styles.secondaryButton}>
+                <Text style={styles.secondaryButtonText}>{t.cancel}</Text>
+              </Pressable>
+            </> : <Pressable onPress={() => setPendingDeviceId(device.id)} style={styles.secondaryButton}>
+              <Text style={styles.secondaryButtonText}>{t.deviceSignOut}</Text>
+            </Pressable> : null}
           </View>
         ))}
       </View>
