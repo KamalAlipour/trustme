@@ -112,7 +112,7 @@ export default function Lending() {
       <Modal visible={revealedCode !== null} animationType="slide">
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 24, padding: 24, direction }}>
           <Text style={styles.heading}>{t.readGuaranteeCode}</Text>
-          <Text style={{ ...styles.title, fontSize: 42, letterSpacing: 10 }}>{revealedCode}</Text>
+          <Text style={{ ...styles.title, fontSize: 46, letterSpacing: 10 }}>{revealedCode}</Text>
           <Pressable onPress={() => setRevealedCode(null)} style={styles.button}><Text style={styles.buttonText}>{t.close}</Text></Pressable>
         </View>
       </Modal>
