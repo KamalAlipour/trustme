@@ -83,6 +83,7 @@ export default function Tether() {
   const connectCancel = useRef<((error: Error) => void) | null>(null);
   const [removeWalletConfirm, setRemoveWalletConfirm] = useState(false);
   const [message, setMessage] = useState('');
+  const [withdrawalFeedback, setWithdrawalFeedback] = useState<{ text: string; kind: 'error' | 'success' } | null>(null);
   const [busy, setBusy] = useState('');
   const [eligibleAt, setEligibleAt] = useState<string | null>(null);
   const [withdrawalQuote, setWithdrawalQuote] = useState<WithdrawalQuote | null>(null);
@@ -367,15 +368,19 @@ export default function Tether() {
   };
   const withdraw = async () => {
     setMessage('');
+    setWithdrawalFeedback(null);
     try {
       const stepUp = await getStepUpPin();
       if (!stepUp) return;
       const withdrawal = await request<{ eligibleAt: string }>('/v1/me/withdrawals', { method: 'POST', body: { destinationAddress: destination, couponsGross: withdrawAmount, pin: stepUp } });
       setEligibleAt(withdrawal.eligibleAt);
-      setMessage(t.withdrawalSubmitted);
+      setWithdrawalFeedback({ text: t.withdrawalSubmitted, kind: 'success' });
       await invalidate();
     } catch (cause) {
-      setMessage(cause instanceof LockedError ? `${cause.message} (${t.lockedSeconds(cause.retryAfter)})` : cause instanceof ApiError ? cause.message : t.unknownError);
+      setWithdrawalFeedback({
+        text: cause instanceof LockedError ? `${cause.message} (${t.lockedSeconds(cause.retryAfter)})` : cause instanceof ApiError ? cause.message : t.unknownError,
+        kind: 'error',
+      });
     }
   };
   const copyAddress = async () => {
@@ -453,6 +458,7 @@ export default function Tether() {
         <TextInput value={destination} onChangeText={setDestination} placeholder={t.destinationAddress} style={styles.input} />
         <Pressable disabled={withdrawalQuote === null || withdrawalQuoteLoading} onPress={() => void withdraw()} style={styles.button}><Text style={styles.buttonText}>{t.submitWithdrawal}</Text></Pressable>
         {eligibleAt ? <Text style={styles.muted}>{t.eligibleAt}: {formatDate(eligibleAt, language)}</Text> : null}
+        {withdrawalFeedback ? <Text style={withdrawalFeedback.kind === 'success' ? styles.notice : styles.danger}>{withdrawalFeedback.text}</Text> : null}
       </View> : null}
 
       <View style={styles.card}>

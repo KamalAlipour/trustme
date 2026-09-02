@@ -264,7 +264,7 @@ export default function Profile() {
       </View>
       <View style={styles.card}>
         <Text style={styles.heading}>{t.identityVerification}</Text>
-        <Text style={styles.heading}>{t.country}</Text>
+        <Text style={styles.muted}>{t.country}</Text>
         <Pressable disabled={identityStatus === 'VERIFIED'} onPress={() => setCountryPickerOpen(true)} style={styles.input}><Text style={selectedCountry ? styles.text : styles.muted}>{selectedCountry || t.selectCountry}</Text></Pressable>
         {selectedCountry && selectedCountry !== current?.country ? <Pressable disabled={countryLoading} onPress={() => void saveCountry()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.saveCountry}</Text></Pressable> : null}
         {identityStatus === 'VERIFIED' ? <Text style={styles.muted}>{t.countryLocked}</Text> : null}
