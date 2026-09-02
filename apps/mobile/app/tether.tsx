@@ -77,8 +77,9 @@ export default function Tether() {
   const [unloadAmount, setUnloadAmount] = useState('');
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [destination, setDestination] = useState('');
-  const [pin, setPin] = useState('');
   const unloadPrefilled = useRef(false);
+  const withdrawPrefilled = useRef(false);
+  const destinationPrefilled = useRef(false);
   const connectCancel = useRef<((error: Error) => void) | null>(null);
   const [removeWalletConfirm, setRemoveWalletConfirm] = useState(false);
   const [message, setMessage] = useState('');
@@ -99,6 +100,20 @@ export default function Tether() {
     setUnloadAmount(formatMicroUsdt(available, 'en'));
     unloadPrefilled.current = true;
   }, [balance.data?.availableMicroUsdt]);
+  useEffect(() => {
+    if (withdrawPrefilled.current) return;
+    const available = availability.data?.availableToWithdrawCoupons;
+    if (available === undefined || BigInt(available) === 0n) return;
+    setWithdrawAmount(available);
+    withdrawPrefilled.current = true;
+  }, [availability.data?.availableToWithdrawCoupons]);
+  useEffect(() => {
+    if (destinationPrefilled.current) return;
+    const address = wallet?.address;
+    if (address === undefined || address.length === 0) return;
+    setDestination(address);
+    destinationPrefilled.current = true;
+  }, [wallet?.address]);
   useEffect(() => {
     const amount = withdrawAmount.trim();
     if (amount.length === 0) {
@@ -353,13 +368,9 @@ export default function Tether() {
   const withdraw = async () => {
     setMessage('');
     try {
-      const stepUp = pin || await getStepUpPin();
-      if (!stepUp) {
-        setMessage(t.operationPinRequired);
-        return;
-      }
+      const stepUp = await getStepUpPin();
+      if (!stepUp) return;
       const withdrawal = await request<{ eligibleAt: string }>('/v1/me/withdrawals', { method: 'POST', body: { destinationAddress: destination, couponsGross: withdrawAmount, pin: stepUp } });
-      setPin('');
       setEligibleAt(withdrawal.eligibleAt);
       setMessage(t.withdrawalSubmitted);
       await invalidate();
@@ -440,7 +451,6 @@ export default function Tether() {
           <Text style={styles.heading}>{t.amountReceived}: {formatMicroUsdt(withdrawalQuote.netMicroUsdt, language)} USDT</Text>
         </> : null}
         <TextInput value={destination} onChangeText={setDestination} placeholder={t.destinationAddress} style={styles.input} />
-        <TextInput value={pin} onChangeText={(value) => setPin(value.replace(/\D/g, '').slice(0, 4))} placeholder={t.pin} style={styles.input} keyboardType="number-pad" secureTextEntry />
         <Pressable disabled={withdrawalQuote === null || withdrawalQuoteLoading} onPress={() => void withdraw()} style={styles.button}><Text style={styles.buttonText}>{t.submitWithdrawal}</Text></Pressable>
         {eligibleAt ? <Text style={styles.muted}>{t.eligibleAt}: {formatDate(eligibleAt, language)}</Text> : null}
       </View> : null}
