@@ -197,6 +197,7 @@ export default function Tether() {
       if (escrowConfig.contractAddress === null || wallet === null) throw new Error(t.escrow.noWallet);
       let signer;
       if (wallet.kind === 'IN_APP') {
+        if (escrowConfig.rpcUrl === null) throw new Error(t.escrow.publicRpcUnavailable);
         const stored = mnemonic ?? await readEscrowMnemonic();
         if (stored === null) throw new Error(t.escrow.walletNotFound);
         const localWallet = Wallet.fromPhrase(stored);
@@ -264,6 +265,7 @@ export default function Tether() {
     setUnloadAmount(formatMicroUsdt(balance.data?.availableMicroUsdt ?? '0', 'en'));
     unloadPrefilled.current = true;
   };
+  const publicRpcUnavailable = wallet?.kind === 'IN_APP' && config.data?.rpcUrl === null;
 
   return (
     <Page>
@@ -289,7 +291,8 @@ export default function Tether() {
         <Text style={styles.heading}>{t.escrow.topUp}</Text>
         <TextInput value={topUpAmount} onChangeText={setTopUpAmount} placeholder={t.escrow.topUpAmount} style={styles.input} keyboardType="decimal-pad" />
         <Text style={styles.muted}>{t.escrow.twoSignatureNotice}</Text>
-        <Pressable disabled={busy !== '' || wallet === null} onPress={() => void sendTopUp()} style={[styles.button, busy !== '' || wallet === null ? styles.buttonDisabled : null]}><Text style={styles.buttonText}>{t.escrow.topUpButton}</Text></Pressable>
+        {publicRpcUnavailable ? <Text style={styles.danger}>{t.escrow.publicRpcUnavailable}</Text> : null}
+        <Pressable disabled={busy !== '' || wallet === null || publicRpcUnavailable} onPress={() => void sendTopUp()} style={[styles.button, busy !== '' || wallet === null || publicRpcUnavailable ? styles.buttonDisabled : null]}><Text style={styles.buttonText}>{t.escrow.topUpButton}</Text></Pressable>
       </View>
 
       <View style={styles.card}>

@@ -108,7 +108,7 @@ export type EscrowConfig = {
   contractAddress: string | null;
   chainId: number;
   usdtAddress: string;
-  rpcUrl: string;
+  rpcUrl: string | null;
   decimals: number;
   walletConnectProjectId: string | null;
   web3AuthClientId: string | null;

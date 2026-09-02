@@ -82,7 +82,7 @@ export const openapiDocument = {
                     contractAddress: { type: 'string', nullable: true },
                     chainId: { type: 'integer' },
                     usdtAddress: { type: 'string' },
-                    rpcUrl: { type: 'string', format: 'uri' },
+                    rpcUrl: { type: 'string', format: 'uri', nullable: true },
                     decimals: { type: 'integer' },
                     walletConnectProjectId: { type: 'string', nullable: true },
                     web3AuthClientId: { type: 'string', nullable: true },
