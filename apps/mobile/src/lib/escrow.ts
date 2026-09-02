@@ -4,6 +4,21 @@ import type { EscrowSettlement } from '../api/types';
 
 const MICRO_USDT = 1_000_000n;
 
+export type WalletConnectAttempt = { done: Promise<void>; cancel: (error: Error) => void };
+
+export function withWalletConnectDeadline(
+  connect: () => Promise<unknown>,
+  timeoutMs: number,
+  timeoutError: () => Error,
+): WalletConnectAttempt {
+  let cancel: (error: Error) => void = () => {};
+  const guard = new Promise<never>((_, reject) => { cancel = reject; });
+  guard.catch(() => {});
+  const timer = setTimeout(() => cancel(timeoutError()), timeoutMs);
+  const done = Promise.race([connect().then(() => undefined), guard]).finally(() => clearTimeout(timer));
+  return { done, cancel };
+}
+
 export function parseUsdtAmount(value: string): bigint {
   const normalized = value.trim();
   if (!/^(?:\d+)(?:\.\d{1,6})?$/.test(normalized)) throw new Error('invalid amount');
