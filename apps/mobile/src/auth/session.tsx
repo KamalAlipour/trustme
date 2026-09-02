@@ -5,6 +5,7 @@ import { hasStoredCredentials, saveCredentials, saveCredentialsWithoutPin } from
 import { biometricAvailable, unlockPin } from '../lib/biometrics';
 import { isWebPlatform } from '../lib/platform';
 import { getUnlockDecision } from './unlock-routing';
+import { StepUpPinPrompt } from '../components/StepUpPinPrompt';
 
 type SessionContextValue = {
   member: Member | null;
@@ -34,6 +35,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   const [unlockRequired, setUnlockRequired] = useState(false);
   const [unlocking, setUnlocking] = useState(false);
   const [unlockError, setUnlockError] = useState(false);
+  const [pinRequest, setPinRequest] = useState<((pin: string | null) => void) | null>(null);
 
   const restoreSession = useCallback(async () => {
     const tokens = await refresh();
@@ -156,11 +158,14 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       setUnlockRequired(false);
     },
     getStepUpPin: async () => {
+      let pin: string | null = null;
       try {
-        return await unlockPin();
+        pin = await unlockPin();
       } catch {
-        return null;
+        pin = null;
       }
+      if (pin !== null) return pin;
+      return await new Promise<string | null>((resolve) => setPinRequest(() => resolve));
     },
     unlock,
     continueWithPhoneLogin: async () => {
@@ -178,7 +183,12 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     },
   }), [biometric, member, ready, setup, unlock, unlocking, unlockError, unlockRequired]);
 
-  return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
+  return (
+    <SessionContext.Provider value={value}>
+      {children}
+      {pinRequest !== null ? <StepUpPinPrompt onResolve={(pin) => { setPinRequest(null); pinRequest(pin); }} /> : null}
+    </SessionContext.Provider>
+  );
 }
 
 export function useSession(): SessionContextValue {
