@@ -312,6 +312,7 @@ export const en = {
     noWallet: 'No escrow wallet is registered yet.',
     createWallet: 'Create wallet',
     connectWallet: 'Connect existing wallet',
+    walletAppMissing: 'No wallet app found. Install MetaMask or Trust Wallet and try again.',
     walletAddress: 'Wallet address',
     copyAddress: 'Copy address',
     addressCopied: 'Address copied.',

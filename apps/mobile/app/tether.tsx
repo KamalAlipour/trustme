@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, Pressable, Text, TextInput, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
+import * as Linking from 'expo-linking';
 import { BrowserProvider, Contract, JsonRpcProvider, MaxUint256, Wallet } from 'ethers';
 import EthereumProvider from '@walletconnect/ethereum-provider';
 import { useQuery } from '@tanstack/react-query';
@@ -171,11 +172,35 @@ export default function Tether() {
       setMessage(t.escrow.recoveryImported);
     });
   };
+  const openWalletApp = async (uri: string): Promise<void> => {
+    try {
+      await Linking.openURL(uri);
+    } catch {
+      setMessage(t.escrow.walletAppMissing);
+    }
+  };
   const connectWallet = async () => {
-    if (Platform.OS !== 'web' || config.data.walletConnectProjectId === null) return;
+    if (config.data.walletConnectProjectId === null) return;
     await run('wallet', async () => {
-      const provider = await EthereumProvider.init({ projectId: config.data.walletConnectProjectId!, chains: [config.data.chainId], showQrModal: true });
-      await provider.connect();
+      const provider = await EthereumProvider.init({
+        projectId: config.data.walletConnectProjectId!,
+        chains: [config.data.chainId],
+        showQrModal: Platform.OS === 'web',
+        metadata: {
+          name: 'Trust Coupon',
+          description: 'Trust Coupon',
+          url: 'https://app-trustcoupon.komasi.as',
+          icons: ['https://app-trustcoupon.komasi.as/favicon.ico'],
+          redirect: { native: 'trustcoupon://', universal: 'https://app-trustcoupon.komasi.as' },
+        },
+      });
+      const displayUriHandler = Platform.OS === 'web' ? null : (uri: string) => { void openWalletApp(uri); };
+      if (displayUriHandler !== null) provider.on('display_uri', displayUriHandler);
+      try {
+        await provider.connect();
+      } finally {
+        if (displayUriHandler !== null) provider.removeListener('display_uri', displayUriHandler);
+      }
       const browser = new BrowserProvider(provider);
       const signer = await browser.getSigner();
       await registerWallet(await signer.getAddress(), 'EXTERNAL');
@@ -282,7 +307,7 @@ export default function Tether() {
         <Text style={styles.heading}>{t.escrow.wallet}</Text>
         {wallet === null ? <Text style={styles.muted}>{t.escrow.noWallet}</Text> : <><Text style={styles.muted}>{t.escrow.walletAddress}: {shortAddress}</Text><Pressable onPress={() => void copyAddress()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.escrow.copyAddress}</Text></Pressable>{wallet.kind === 'IN_APP' ? <Pressable onPress={() => void revealWallet()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.escrow.walletReveal}</Text></Pressable> : null}</>}
         {Platform.OS === 'web' ? <Text style={styles.muted}>{t.escrow.webWalletWarning}</Text> : null}
-        {wallet === null ? <><Pressable disabled={busy !== ''} onPress={() => void run('wallet', createWallet)} style={[styles.button, busy !== '' ? styles.buttonDisabled : null]}><Text style={styles.buttonText}>{t.escrow.createWallet}</Text></Pressable>{Platform.OS === 'web' && config.data.walletConnectProjectId !== null ? <Pressable disabled={busy !== ''} onPress={() => void connectWallet()} style={[styles.secondaryButton, busy !== '' ? styles.buttonDisabled : null]}><Text style={styles.secondaryButtonText}>{t.escrow.connectWallet}</Text></Pressable> : Platform.OS !== 'web' ? <Text style={styles.muted}>{t.escrow.nativeWalletNote}</Text> : null}</> : wallet.kind === 'EXTERNAL' && walletConnectSession === null && Platform.OS === 'web' && config.data.walletConnectProjectId !== null ? <Pressable disabled={busy !== ''} onPress={() => void connectWallet()} style={[styles.secondaryButton, busy !== '' ? styles.buttonDisabled : null]}><Text style={styles.secondaryButtonText}>{t.escrow.connectWallet}</Text></Pressable> : null}
+        {wallet === null ? <><Pressable disabled={busy !== ''} onPress={() => void run('wallet', createWallet)} style={[styles.button, busy !== '' ? styles.buttonDisabled : null]}><Text style={styles.buttonText}>{t.escrow.createWallet}</Text></Pressable>{config.data.walletConnectProjectId !== null ? <Pressable disabled={busy !== ''} onPress={() => void connectWallet()} style={[styles.secondaryButton, busy !== '' ? styles.buttonDisabled : null]}><Text style={styles.secondaryButtonText}>{t.escrow.connectWallet}</Text></Pressable> : Platform.OS !== 'web' && config.data.walletConnectProjectId === null ? <Text style={styles.muted}>{t.escrow.nativeWalletNote}</Text> : null}</> : wallet.kind === 'EXTERNAL' && walletConnectSession === null && config.data.walletConnectProjectId !== null ? <Pressable disabled={busy !== ''} onPress={() => void connectWallet()} style={[styles.secondaryButton, busy !== '' ? styles.buttonDisabled : null]}><Text style={styles.secondaryButtonText}>{t.escrow.connectWallet}</Text></Pressable> : null}
         <View style={styles.card}><Text style={styles.heading}>{t.escrow.importRecovery}</Text><TextInput value={recoveryPhrase} onChangeText={setRecoveryPhrase} placeholder={t.escrow.importRecoveryPlaceholder} style={styles.input} autoCapitalize="none" multiline /><Pressable disabled={busy !== ''} onPress={() => void importWallet()} style={[styles.secondaryButton, busy !== '' ? styles.buttonDisabled : null]}><Text style={styles.secondaryButtonText}>{t.escrow.importWallet}</Text></Pressable></View>
         {draftWords !== null && wordIndices !== null ? <View style={styles.card}><Text style={styles.text}>{t.escrow.recoveryWords}</Text><Text selectable style={styles.text}>{draftWords.join(' ')}</Text><Pressable onPress={() => setWrittenDown(!writtenDown)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{writtenDown ? '✓ ' : ''}{t.escrow.writtenDown}</Text></Pressable><Text style={styles.muted}>{t.escrow.verifyWords(wordIndices[0] + 1, wordIndices[1] + 1)}</Text><TextInput value={wordAnswers[0]} onChangeText={(value) => setWordAnswers([value, wordAnswers[1]])} placeholder={t.escrow.verifyWord(wordIndices[0] + 1)} style={styles.input} autoCapitalize="none" /><TextInput value={wordAnswers[1]} onChangeText={(value) => setWordAnswers([wordAnswers[0], value])} placeholder={t.escrow.verifyWord(wordIndices[1] + 1)} style={styles.input} autoCapitalize="none" /><Pressable onPress={() => void finishWallet()} style={styles.button}><Text style={styles.buttonText}>{t.escrow.verifyRecovery}</Text></Pressable></View> : null}
         {revealedWords !== null ? <View style={styles.card}><Text style={styles.text}>{t.escrow.recoveryWords}</Text><Text selectable style={styles.text}>{revealedWords.join(' ')}</Text><Pressable onPress={() => setRevealedWords(null)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.close}</Text></Pressable></View> : null}
