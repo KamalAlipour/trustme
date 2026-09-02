@@ -36,6 +36,7 @@ export default function Profile() {
   const [phoneError, setPhoneError] = useState('');
   const [currentPin, setCurrentPin] = useState('');
   const [newPin, setNewPin] = useState('');
+  const [pinEditing, setPinEditing] = useState(false);
   const [nationalCode, setNationalCode] = useState('');
   const [country, setCountry] = useState('');
   const [countryLoading, setCountryLoading] = useState(false);
@@ -152,7 +153,7 @@ export default function Profile() {
   };
   const changePin = async () => {
     setError(''); setNotice('');
-    try { await request('/v1/me/pin', { method: 'POST', body: { currentPin, newPin } }); setCurrentPin(''); setNewPin(''); setNotice(t.pinChanged); } catch (cause) { setError(cause instanceof ApiError ? cause.message : t.unknownError); }
+    try { await request('/v1/me/pin', { method: 'POST', body: { currentPin, newPin } }); setCurrentPin(''); setNewPin(''); setNotice(t.pinChanged); setPinEditing(false); } catch (cause) { setError(cause instanceof ApiError ? cause.message : t.unknownError); }
   };
   const enableBiometric = async () => {
     setError(''); setNotice('');
@@ -296,9 +297,25 @@ export default function Profile() {
       </View>
       <View style={styles.card}>
         <Text style={styles.heading}>{t.pin}</Text>
-        <TextInput value={currentPin} onChangeText={(value) => setCurrentPin(value.replace(/\D/g, '').slice(0, 4))} placeholder={t.currentPin} style={styles.input} keyboardType="number-pad" secureTextEntry />
-        <TextInput value={newPin} onChangeText={(value) => setNewPin(value.replace(/\D/g, '').slice(0, 4))} placeholder={t.newPin} style={styles.input} keyboardType="number-pad" secureTextEntry />
-        <Pressable onPress={() => void changePin()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.changePin}</Text></Pressable>
+        {pinEditing ? <>
+          <TextInput value={currentPin} onChangeText={(value) => setCurrentPin(value.replace(/\D/g, '').slice(0, 4))} placeholder={t.currentPin} style={styles.input} keyboardType="number-pad" secureTextEntry />
+          <TextInput value={newPin} onChangeText={(value) => setNewPin(value.replace(/\D/g, '').slice(0, 4))} placeholder={t.newPin} style={styles.input} keyboardType="number-pad" secureTextEntry />
+          <Pressable
+            disabled={currentPin.length !== 4 || newPin.length !== 4}
+            onPress={() => void changePin()}
+            style={[styles.button, currentPin.length !== 4 || newPin.length !== 4 ? styles.buttonDisabled : null]}
+          >
+            <Text style={styles.buttonText}>{t.changePin}</Text>
+          </Pressable>
+          <Pressable onPress={() => { setCurrentPin(''); setNewPin(''); setPinEditing(false); }} style={styles.secondaryButton}>
+            <Text style={styles.secondaryButtonText}>{t.cancel}</Text>
+          </Pressable>
+        </> : <>
+          <Text style={styles.notice}>{t.pinIsSet}</Text>
+          <Pressable onPress={() => setPinEditing(true)} style={styles.secondaryButton}>
+            <Text style={styles.secondaryButtonText}>{t.changePin}</Text>
+          </Pressable>
+        </>}
       </View>
       <View style={styles.card}>
         <Text style={styles.heading}>{t.devices}</Text>
