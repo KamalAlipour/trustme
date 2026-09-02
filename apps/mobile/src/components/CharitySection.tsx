@@ -50,6 +50,12 @@ export function CharitySection() {
     } catch (cause) { setError(mapApiError(cause, t)); }
   };
 
+  const hasContent =
+    (aid.data?.items?.length ?? 0) > 0 ||
+    (agent.data?.items?.length ?? 0) > 0 ||
+    error !== '';
+  if (!hasContent) return null;
+
   return <View style={styles.card}>
     {(aid.data?.items ?? []).map((item) => <AidRow key={item.id} item={item} onDocuments={(ids) => sendDocuments(item.id, ids)} />)}
     {(agent.data?.items ?? []).length > 0 ? <><Text style={styles.heading}>{t.socialWorkerRequests}</Text>{(agent.data?.items ?? []).map((item) => <View key={item.id} style={styles.card}>

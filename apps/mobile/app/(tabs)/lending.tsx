@@ -51,7 +51,7 @@ export default function Lending() {
   return (
     <Page>
       <View style={styles.row}><Text style={styles.title}>{t.lending}</Text><HeaderIcons /></View>
-      <CreditRequestForm operationError={error} />
+      <CreditRequestForm />
       {(loans.data?.items ?? []).map((loan) => (
         <View key={loan.id} style={styles.card}>
           <Text style={styles.heading}>{t.loanTitle(formatCoupons(loan.principalCoupons, language))}</Text>
@@ -82,6 +82,7 @@ export default function Lending() {
           <Text style={styles.muted}>{formatDate(loan.createdAt, language)}</Text>
         </View>
       ))}
+      {error ? <Text style={styles.danger}>{error}</Text> : null}
       <CharitySection />
       <Modal visible={revealedCode !== null} animationType="slide">
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 24, padding: 24, direction }}>

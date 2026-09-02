@@ -9,7 +9,7 @@ import { formatCoupons } from '../lib/format';
 import { useTranslation } from '../i18n';
 import { styles } from '../styles';
 
-export function CreditRequestForm({ operationError = '' }: { operationError?: string }) {
+export function CreditRequestForm() {
   const { t, language } = useTranslation();
   const contacts = useContacts();
   const charities = useCharities();
@@ -28,6 +28,7 @@ export function CreditRequestForm({ operationError = '' }: { operationError?: st
   const hasRecipient = selectedGuarantors.length > 0 || charityId !== '';
 
   const submitLoan = async () => {
+    setError('');
     if (selectedGuarantors.length === 0) { setError(t.loanMinimumGuarantor); return; }
     try {
       const rows = installments.map((installment) => ({ dueAt: new Date(`${installment.dueAt}T23:59:59.000Z`).toISOString(), amountCoupons: installment.amountCoupons || amount }));
@@ -79,7 +80,7 @@ export function CreditRequestForm({ operationError = '' }: { operationError?: st
         </>}
         <Pressable onPress={() => void (charityId !== '' ? submitAid() : submitLoan())} style={styles.button}><Text style={styles.buttonText}>{t.submitRequest}</Text></Pressable>
       </> : null}
-      {operationError || error ? <Text style={styles.danger}>{operationError || error}</Text> : null}
+      {error ? <Text style={styles.danger}>{error}</Text> : null}
     </View>
   );
 }
