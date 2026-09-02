@@ -49,11 +49,24 @@ async function issuanceAccount(tx: Prisma.TransactionClient) {
 
 export async function createPayCode(
   prisma: PrismaClient,
-  input: { buyerId: string; code: string; maxAmountMicroUsdt: bigint; expiresAt: Date },
+  input: {
+    buyerId: string;
+    code: string;
+    maxAmountMicroUsdt: bigint;
+    expiresAt: Date;
+    merchantId?: string;
+    amountMicroUsdt?: bigint;
+  },
 ) {
   fourDigitCodeSchema.parse(input.code);
   if (input.maxAmountMicroUsdt <= 0n) throw new DomainError('pay code amount must be positive');
   if (input.expiresAt <= new Date()) throw new DomainError('pay code expiry must be in the future');
+  if (input.merchantId !== undefined) {
+    if (input.merchantId === input.buyerId) throw new DomainError('buyer and merchant must be different');
+    if (input.amountMicroUsdt === undefined) throw new DomainError('directed pay code amount is required');
+    if (input.amountMicroUsdt <= 0n) throw new DomainError('pay code amount must be positive');
+    if (input.amountMicroUsdt > input.maxAmountMicroUsdt) throw new DomainError('pay code amount exceeds maximum');
+  }
   const id = randomUUID();
   const codeHash = await bcrypt.hash(input.code, 10);
   return withSerializableRetry(prisma, async (tx) => {
@@ -61,9 +74,57 @@ export async function createPayCode(
     if (input.maxAmountMicroUsdt > availableEscrowMicroUsdt(balance)) throw new DomainError('pay code exceeds available escrow');
     await tx.payCode.updateMany({ where: { buyerId: input.buyerId, status: PayCodeStatus.ACTIVE }, data: { status: PayCodeStatus.CANCELLED } });
     return tx.payCode.create({
-      data: { id, buyerId: input.buyerId, codeHash, maxAmountMicroUsdt: input.maxAmountMicroUsdt, expiresAt: input.expiresAt },
+      data: {
+        id,
+        buyerId: input.buyerId,
+        ...(input.merchantId === undefined ? {} : { merchantId: input.merchantId, amountMicroUsdt: input.amountMicroUsdt }),
+        codeHash,
+        maxAmountMicroUsdt: input.merchantId === undefined ? input.maxAmountMicroUsdt : input.amountMicroUsdt!,
+        expiresAt: input.expiresAt,
+      },
     });
   });
+}
+
+async function settlePayCode(
+  tx: Prisma.TransactionClient,
+  input: {
+    merchantId: string;
+    buyerId: string;
+    payCode: { id: string; codeHash: string; maxAmountMicroUsdt: bigint };
+    amountMicroUsdt: bigint;
+    externalRef?: string;
+  },
+) {
+  const balance = await lockBalance(tx, input.buyerId);
+  if (input.amountMicroUsdt > availableEscrowMicroUsdt(balance)) throw new DomainError('settlement exceeds available escrow');
+  const settlementId = randomUUID();
+  const merchantAccount = await userCouponAccount(tx, input.merchantId);
+  const issuance = await issuanceAccount(tx);
+  const transaction = await postDepositCouponCredit(tx, {
+    externalRef: `escrow:settle:${settlementId}`,
+    userId: input.merchantId,
+    userCouponAccountId: merchantAccount.id,
+    issuanceAccountId: issuance.id,
+    amountMicroUsdt: input.amountMicroUsdt,
+    type: TransactionType.DEPOSIT,
+  });
+  const settlement = await tx.escrowSettlement.create({
+    data: {
+      id: settlementId,
+      buyerId: input.buyerId,
+      merchantId: input.merchantId,
+      payCodeId: input.payCode.id,
+      amountMicroUsdt: input.amountMicroUsdt,
+      ref: escrowReference('settlement', settlementId),
+      ...(input.externalRef === undefined ? {} : { externalRef: input.externalRef }),
+      transactionId: transaction.id,
+    },
+  });
+  await tx.payCode.update({ where: { id: input.payCode.id }, data: { status: PayCodeStatus.USED, usedAt: new Date() } });
+  await tx.escrowBalance.update({ where: { userId: input.buyerId }, data: { reservedMicroUsdt: { increment: input.amountMicroUsdt } } });
+  const buyer = await tx.user.findUniqueOrThrow({ where: { id: input.buyerId }, select: { id: true, barcodeId: true, displayName: true } });
+  return { settlement, buyer, merchantId: input.merchantId };
 }
 
 export async function settleWithPayCode(
@@ -85,6 +146,7 @@ export async function settleWithPayCode(
     if (buyer.id === input.merchantId) throw new DomainError('buyer and merchant must be different');
     const payCode = await tx.payCode.findFirst({ where: { buyerId: buyer.id, status: PayCodeStatus.ACTIVE }, orderBy: { createdAt: 'desc' } });
     if (payCode === null) throw new DomainError('no active pay code');
+    if (payCode.merchantId !== null && payCode.merchantId !== input.merchantId) throw new DomainError('no active pay code');
     if (payCode.expiresAt <= new Date()) {
       await tx.payCode.update({ where: { id: payCode.id }, data: { status: PayCodeStatus.EXPIRED } });
       return { error: 'pay code has expired' as const };
@@ -99,34 +161,51 @@ export async function settleWithPayCode(
       return { error: wrongAttempts >= 3 ? 'pay code cancelled after too many attempts' : 'invalid pay code' };
     }
     if (input.amountMicroUsdt > payCode.maxAmountMicroUsdt) throw new DomainError('settlement exceeds pay code amount');
-    const balance = await lockBalance(tx, buyer.id);
-    if (input.amountMicroUsdt > availableEscrowMicroUsdt(balance)) throw new DomainError('settlement exceeds available escrow');
-    const settlementId = randomUUID();
-    const merchantAccount = await userCouponAccount(tx, input.merchantId);
-    const issuance = await issuanceAccount(tx);
-    const transaction = await postDepositCouponCredit(tx, {
-      externalRef: `escrow:settle:${settlementId}`,
-      userId: input.merchantId,
-      userCouponAccountId: merchantAccount.id,
-      issuanceAccountId: issuance.id,
+    return settlePayCode(tx, {
+      merchantId: input.merchantId,
+      buyerId: buyer.id,
+      payCode,
       amountMicroUsdt: input.amountMicroUsdt,
-      type: TransactionType.DEPOSIT,
+      ...(input.externalRef === undefined ? {} : { externalRef: input.externalRef }),
     });
-    const settlement = await tx.escrowSettlement.create({
-      data: {
-        id: settlementId,
-        buyerId: buyer.id,
-        merchantId: input.merchantId,
-        payCodeId: payCode.id,
-        amountMicroUsdt: input.amountMicroUsdt,
-        ref: escrowReference('settlement', settlementId),
-        ...(input.externalRef === undefined ? {} : { externalRef: input.externalRef }),
-        transactionId: transaction.id,
-      },
+  });
+  if ('error' in result) throw new DomainError(result.error);
+  return result;
+}
+
+export async function settleDirectedPayCode(
+  prisma: PrismaClient,
+  input: { merchantId: string; payCodeId: string; code: string; externalRef?: string },
+) {
+  fourDigitCodeSchema.parse(input.code);
+  const result = await withSerializableRetry(prisma, async (tx) => {
+    if (input.externalRef !== undefined) {
+      const existing = await tx.escrowSettlement.findUnique({
+        where: { externalRef: input.externalRef },
+        include: { buyer: { select: { id: true, barcodeId: true, displayName: true } } },
+      });
+      if (existing !== null) return { settlement: existing, buyer: existing.buyer, merchantId: input.merchantId };
+    }
+    const payCode = await tx.payCode.findUnique({ where: { id: input.payCodeId } });
+    if (payCode === null || payCode.merchantId !== input.merchantId || payCode.status !== PayCodeStatus.ACTIVE) throw new DomainError('pay code not found', 404);
+    if (payCode.expiresAt <= new Date()) {
+      await tx.payCode.update({ where: { id: payCode.id }, data: { status: PayCodeStatus.EXPIRED } });
+      return { error: 'pay code has expired' as const };
+    }
+    const valid = await bcrypt.compare(input.code, payCode.codeHash);
+    if (!valid) {
+      const wrongAttempts = payCode.wrongAttempts + 1;
+      await tx.payCode.update({ where: { id: payCode.id }, data: { wrongAttempts, status: wrongAttempts >= 3 ? PayCodeStatus.CANCELLED : PayCodeStatus.ACTIVE } });
+      return { error: wrongAttempts >= 3 ? 'pay code cancelled after too many attempts' : 'invalid pay code' };
+    }
+    if (payCode.amountMicroUsdt === null) throw new DomainError('pay code amount is missing');
+    return settlePayCode(tx, {
+      merchantId: input.merchantId,
+      buyerId: payCode.buyerId,
+      payCode,
+      amountMicroUsdt: payCode.amountMicroUsdt,
+      ...(input.externalRef === undefined ? {} : { externalRef: input.externalRef }),
     });
-    await tx.payCode.update({ where: { id: payCode.id }, data: { status: PayCodeStatus.USED, usedAt: new Date() } });
-    await tx.escrowBalance.update({ where: { userId: buyer.id }, data: { reservedMicroUsdt: { increment: input.amountMicroUsdt } } });
-    return { settlement, buyer: { id: buyer.id, barcodeId: buyer.barcodeId, displayName: buyer.displayName }, merchantId: input.merchantId };
   });
   if ('error' in result) throw new DomainError(result.error);
   return result;

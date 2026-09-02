@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
+import { useQuery } from '@tanstack/react-query';
 import { Pressable, Share, Text, TextInput, View } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 import { ApiError, request } from '../../src/api/client';
@@ -8,6 +9,7 @@ import { Page, LoadingScreen } from '../../src/components/Screen';
 import { useBalance, useDisclosures, useEscrowBalance, useEscrowConfig, useInvalidateMoney, useMember } from '../../src/hooks';
 import { useTranslation } from '../../src/i18n';
 import { randomFourDigitCode } from '../../src/lib/code';
+import { formatEscrowCountdown, parseUsdtAmount } from '../../src/lib/escrow';
 import { mapApiError } from '../../src/lib/errors';
 import { formatCoupons, formatMicroUsdt } from '../../src/lib/format';
 import { colors, styles } from '../../src/styles';
@@ -26,24 +28,51 @@ export default function Home() {
   const balance = useBalance();
   const disclosures = useDisclosures();
   const escrowConfig = useEscrowConfig();
-  const escrowBalance = useEscrowBalance(escrowConfig.data?.enabled === true);
+  const escrowEnabled = escrowConfig.data?.enabled === true;
+  const escrowBalance = useEscrowBalance(escrowEnabled);
   const invalidate = useInvalidateMoney();
-  const params = useLocalSearchParams<{ barcodeId?: string }>();
+  const params = useLocalSearchParams<{ barcodeId?: string; field?: string }>();
   const [amount, setAmount] = useState('');
-  const [barcodeId, setBarcodeId] = useState(params.barcodeId ?? '');
+  const [barcodeId, setBarcodeId] = useState(params.field === 'pay' ? '' : params.barcodeId ?? '');
   const [pin, setPin] = useState('');
   const [merchant, setMerchant] = useState(false);
   const [escrowCode, setEscrowCode] = useState('');
   const [error, setError] = useState('');
   const [barcodeShareError, setBarcodeShareError] = useState('');
   const [now, setNow] = useState(() => Date.now());
+  const [payMerchantBarcode, setPayMerchantBarcode] = useState(params.field === 'pay' ? params.barcodeId ?? '' : '');
+  const [payAmount, setPayAmount] = useState('');
+  const [buyerPayCode, setBuyerPayCode] = useState<{ id: string; expiresAt: string; plaintext: string } | null>(null);
+  const [payMessage, setPayMessage] = useState('');
+  const [incomingCodes, setIncomingCodes] = useState<Record<string, string>>({});
+  const [incomingMessage, setIncomingMessage] = useState('');
+  const incoming = useQuery({
+    queryKey: ['escrow-pay-codes-incoming'],
+    queryFn: () => request<{ items: { id: string; amount: string; expiresAt: string; buyerBarcodeId: string; buyerDisplayName: string | null }[] }>('/v1/me/escrow/pay-codes/incoming'),
+    enabled: escrowEnabled,
+    refetchInterval: 4_000,
+  });
+  const buyerStatus = useQuery({
+    queryKey: ['escrow-pay-code', buyerPayCode?.id],
+    queryFn: () => request<{ status: string }>(`/v1/me/escrow/pay-codes/${buyerPayCode!.id}`),
+    enabled: buyerPayCode !== null && payMessage === '',
+    refetchInterval: 3_000,
+  });
   useEffect(() => {
-    if (params.barcodeId !== undefined) setBarcodeId(params.barcodeId);
-  }, [params.barcodeId]);
+    if (params.barcodeId === undefined) return;
+    if (params.field === 'pay') setPayMerchantBarcode(params.barcodeId);
+    else setBarcodeId(params.barcodeId);
+  }, [params.barcodeId, params.field]);
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, []);
+  useEffect(() => {
+    const status = buyerStatus.data?.status;
+    if (status === undefined || status === 'ACTIVE' || payMessage !== '') return;
+    setPayMessage(status === 'USED' ? t.escrow.payDone : status === 'EXPIRED' ? t.escrow.payExpired : t.escrow.payCancelled);
+    void invalidate();
+  }, [buyerStatus.data?.status, invalidate, payMessage, t.escrow]);
   if (balance.isLoading) return <LoadingScreen />;
   const submitTransfer = async () => {
     setError('');
@@ -73,6 +102,45 @@ export default function Home() {
       await invalidate();
     } catch (cause) { setError(mapApiError(cause, t)); }
   };
+  const paySeller = async () => {
+    setPayMessage('');
+    try {
+      if (payMerchantBarcode.trim() === '') {
+        setPayMessage(t.escrow.payMerchantRequired);
+        return;
+      }
+      parseUsdtAmount(payAmount);
+      const stepUp = await getStepUpPin();
+      if (!stepUp) { setPayMessage(t.operationPinRequired); return; }
+      const code = await randomFourDigitCode();
+      const response = await request<{ id: string; expiresAt: string }>('/v1/me/escrow/pay-codes', { method: 'POST', body: { code, merchantBarcodeId: payMerchantBarcode, amount: payAmount, pin: stepUp } });
+      setBuyerPayCode({ ...response, plaintext: code });
+      setPayAmount('');
+      await invalidate();
+    } catch (cause) { setPayMessage(mapApiError(cause, t)); }
+  };
+  const cancelBuyerPayCode = async () => {
+    if (buyerPayCode === null) return;
+    try {
+      await request(`/v1/me/escrow/pay-codes/${buyerPayCode.id}`, { method: 'DELETE' });
+      setPayMessage(t.escrow.payCancelled);
+      setBuyerPayCode(null);
+      await invalidate();
+    } catch (cause) { setPayMessage(mapApiError(cause, t)); }
+  };
+  const settleIncoming = async (item: { id: string }) => {
+    setIncomingMessage('');
+    try {
+      const code = incomingCodes[item.id] ?? '';
+      const stepUp = await getStepUpPin();
+      if (!stepUp) { setIncomingMessage(t.operationPinRequired); return; }
+      await request('/v1/me/escrow/settlements', { method: 'POST', body: { payCodeId: item.id, code, pin: stepUp, idempotencyKey: `mobile-incoming-${item.id}-${Date.now()}` } });
+      setIncomingMessage(t.escrow.incomingSettled);
+      setIncomingCodes((current) => ({ ...current, [item.id]: '' }));
+      await invalidate();
+      await incoming.refetch();
+    } catch (cause) { setIncomingMessage(mapApiError(cause, t)); }
+  };
   const ownBarcodeId = balance.data?.barcodeId ?? member?.barcodeId ?? profile.data?.barcodeId;
   const shareBarcode = async () => {
     if (!ownBarcodeId) return;
@@ -86,6 +154,7 @@ export default function Home() {
   return (
     <Page>
       <View style={styles.row}><Text style={styles.title}>{t.home}</Text><Pressable onPress={() => router.push('/contacts')}><Text style={styles.secondaryButtonText}>{t.contacts}</Text></Pressable></View>
+      {escrowEnabled ? <Pressable onPress={() => router.push({ pathname: '/scan', params: { returnTo: '/(tabs)', field: 'pay' } })} style={styles.button}><Text style={styles.buttonText}>{t.escrow.buyTitle}</Text></Pressable> : null}
       {disclosures.data?.items.map((disclosure) => (
         <View key={disclosure.id} style={styles.card}>
           <Text style={styles.heading}>{t.balanceDisclosureTitle}</Text>
@@ -96,17 +165,36 @@ export default function Home() {
           <Pressable onPress={async () => { setError(''); try { await request(`/v1/me/disclosures/${disclosure.id}/deny`, { method: 'POST' }); await invalidate(); } catch (cause) { setError(cause instanceof ApiError ? cause.message : t.unknownError); } }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.denyDisclosure}</Text></Pressable>
         </View>
       ))}
-      <Pressable onPress={() => router.push('/barcodes')} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.barcodeSearch}</Text></Pressable>
+      {escrowEnabled && (incoming.data?.items.length ?? 0) > 0 ? <View style={styles.card}>
+        <Text style={styles.heading}>{t.escrow.incomingTitle}</Text>
+        {incoming.data?.items.map((item) => <View key={item.id} style={styles.card}>
+          <Text style={styles.heading}>{t.escrow.incomingFrom(item.buyerDisplayName ?? item.buyerBarcodeId)}</Text>
+          <Text style={styles.muted}>{item.buyerBarcodeId}</Text>
+          <Text style={styles.text}>{t.escrow.incomingAmount}: {item.amount} USDT</Text>
+          <TextInput value={incomingCodes[item.id] ?? ''} onChangeText={(value) => setIncomingCodes((current) => ({ ...current, [item.id]: value.replace(/\D/g, '').slice(0, 4) }))} placeholder={t.escrow.incomingCodePlaceholder} style={styles.input} keyboardType="number-pad" secureTextEntry />
+          <Pressable onPress={() => void settleIncoming(item)} style={styles.button}><Text style={styles.buttonText}>{t.escrow.incomingConfirm}</Text></Pressable>
+        </View>)}
+        {incomingMessage ? <Text style={styles.notice}>{incomingMessage}</Text> : null}
+      </View> : null}
       <View style={styles.card}>
         <Text style={styles.muted}>{t.balance}</Text>
         <Text style={{ ...styles.title, fontSize: 40 }}>{formatCoupons(balance.data?.coupons ?? '0', language)}</Text>
         <Text style={styles.muted}>{member?.displayName ?? profile.data?.displayName ?? ''}</Text>
       </View>
-      {escrowConfig.data?.enabled ? <Pressable onPress={() => router.push('/tether')} style={styles.card}>
-        <Text style={styles.heading}>{t.escrow.title}</Text>
-        <Text style={styles.muted}>{t.escrow.locked}: {formatMicroUsdt(escrowBalance.data?.lockedMicroUsdt ?? '0', language)} USDT</Text>
-        <Text style={styles.muted}>{t.escrow.available}: {formatMicroUsdt(escrowBalance.data?.availableMicroUsdt ?? '0', language)} USDT</Text>
-      </Pressable> : null}
+      {escrowEnabled ? <View style={styles.card}>
+        <Text style={styles.heading}>{t.escrow.payTitle}</Text>
+        <TextInput value={payMerchantBarcode} onChangeText={setPayMerchantBarcode} placeholder={t.escrow.payMerchantBarcode} style={styles.input} />
+        <Pressable onPress={() => router.push({ pathname: '/scan', params: { returnTo: '/(tabs)', field: 'pay' } })} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.scanQr}</Text></Pressable>
+        <TextInput value={payAmount} onChangeText={setPayAmount} placeholder={t.escrow.payAmountUsdt} style={styles.input} keyboardType="decimal-pad" autoFocus={payMerchantBarcode !== '' && buyerPayCode === null} />
+        <Pressable onPress={() => void (buyerPayCode === null ? paySeller() : cancelBuyerPayCode())} style={styles.button}><Text style={styles.buttonText}>{buyerPayCode === null ? t.escrow.payNow : t.cancel}</Text></Pressable>
+        {buyerPayCode !== null ? <>
+          <Text style={styles.muted}>{t.escrow.payCodeShow}</Text>
+          <Text style={{ ...styles.title, textAlign: 'center', letterSpacing: 8 }}>{buyerPayCode.plaintext}</Text>
+          <Text style={styles.muted}>{t.escrow.payWaitingSeller}</Text>
+          <Text style={styles.muted}>{formatEscrowCountdown(buyerPayCode.expiresAt, now)}</Text>
+        </> : null}
+        {payMessage ? <Text style={payMessage === t.escrow.payDone ? styles.notice : styles.danger}>{payMessage}</Text> : null}
+      </View> : null}
       {member?.isRestricted ? <View style={styles.card}><Text style={styles.danger}>{t.restricted}</Text><Text style={styles.text}>{t.restrictedExplanation}</Text></View> : null}
       {ownBarcodeId ? <View style={styles.card}>
         <Text style={styles.heading}>{t.myBarcode}</Text>
@@ -120,6 +208,11 @@ export default function Home() {
         </Pressable>
         {barcodeShareError ? <Text style={styles.danger}>{barcodeShareError}</Text> : null}
       </View> : null}
+      {escrowEnabled ? <Pressable onPress={() => router.push('/tether')} style={styles.card}>
+        <Text style={styles.heading}>{t.escrow.title}</Text>
+        <Text style={styles.muted}>{t.escrow.locked}: {formatMicroUsdt(escrowBalance.data?.lockedMicroUsdt ?? '0', language)} USDT</Text>
+        <Text style={styles.muted}>{t.escrow.available}: {formatMicroUsdt(escrowBalance.data?.availableMicroUsdt ?? '0', language)} USDT</Text>
+      </Pressable> : null}
       <View style={styles.card}>
         <Text style={styles.heading}>{merchant ? t.payMerchant : t.send}</Text>
         <TextInput value={barcodeId} onChangeText={setBarcodeId} placeholder={t.barcode} style={styles.input} />

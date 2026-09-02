@@ -13,6 +13,8 @@ import {
   IdentityVerificationStatus,
   MemberWalletKind,
   PayCodeStatus,
+  EscrowSettlementStatus,
+  EscrowUnloadStatus,
   KycStatus,
   Prisma,
   PrismaClient,
@@ -54,6 +56,7 @@ import {
   createPayCode,
   requestUnload,
   settleWithPayCode,
+  settleDirectedPayCode,
 } from '@trustme/core';
 import { DomainError } from '@trustme/core';
 import type { QueueLike } from './app.js';
@@ -110,8 +113,11 @@ const charityDonationSchema = z.object({ amountCoupons: couponsSchema, pin: four
 const aidRequestSchema = z.object({ charityId: z.string().uuid(), amountCoupons: couponsSchema, description: z.string().trim().min(1), loanId: z.string().uuid().optional(), mediaIds: z.array(z.string().uuid()).max(10).optional() });
 const aidDocumentsSchema = z.object({ mediaIds: z.array(z.string().uuid()).min(1).max(10) });
 const walletSchema = z.object({ address: z.string().regex(/^0x[0-9a-fA-F]{40}$/), kind: z.enum(['EXTERNAL', 'IN_APP', 'SMART_ACCOUNT']) });
-const payCodeSchema = z.object({ code: fourDigitCodeSchema, maxAmount: z.string().min(1), pin: fourDigitCodeSchema });
-const escrowSettlementSchema = z.object({ buyerBarcodeId: barcodeIdSchema, code: fourDigitCodeSchema, amount: z.string().min(1), idempotencyKey: z.string().min(1), pin: fourDigitCodeSchema });
+const payCodeSchema = z.object({ code: fourDigitCodeSchema, maxAmount: z.string().min(1).optional(), merchantBarcodeId: barcodeIdSchema.optional(), amount: z.string().min(1).optional(), pin: fourDigitCodeSchema });
+const escrowSettlementSchema = z.union([
+  z.object({ buyerBarcodeId: barcodeIdSchema, code: fourDigitCodeSchema, amount: z.string().min(1), idempotencyKey: z.string().min(1), pin: fourDigitCodeSchema }),
+  z.object({ payCodeId: z.string().uuid(), code: fourDigitCodeSchema, idempotencyKey: z.string().min(1), pin: fourDigitCodeSchema }),
+]);
 const escrowUnloadSchema = z.object({ amount: z.string().min(1), pin: fourDigitCodeSchema });
 const escrowHistoryQuerySchema = z.object({ cursor: z.string().optional() });
 const charityQuerySchema = z.object({ status: z.enum(['PENDING', 'DOCUMENTS_REQUESTED', 'APPROVED', 'REJECTED']).optional() });
@@ -499,6 +505,27 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
     } catch (error) { next(error); }
   });
 
+  router.delete('/wallets/:id', async (request, response, next) => {
+    try {
+      escrowConfigured();
+      const walletId = pathId(request.params.id);
+      const userId = memberClaims(request).sub;
+      const body = z.object({ pin: fourDigitCodeSchema }).parse(request.body);
+      const wallet = await prisma.memberWallet.findFirst({ where: { id: walletId, userId } });
+      if (wallet === null) throw new HttpError(404, 'wallet not found');
+      await verifyMemberPin(prisma, userId, body.pin);
+      const balance = await prisma.escrowBalance.findUnique({ where: { userId } });
+      if ((balance?.lockedMicroUsdt ?? 0n) > 0n) throw new HttpError(409, 'unload your escrow balance before removing the wallet');
+      const [pendingUnload, pendingSettlement] = await Promise.all([
+        prisma.escrowUnload.findFirst({ where: { userId, status: EscrowUnloadStatus.PENDING } }),
+        prisma.escrowSettlement.findFirst({ where: { OR: [{ buyerId: userId }, { merchantId: userId }], status: EscrowSettlementStatus.PENDING } }),
+      ]);
+      if (pendingUnload !== null || pendingSettlement !== null) throw new HttpError(409, 'wallet has pending escrow activity');
+      await prisma.memberWallet.delete({ where: { id: wallet.id } });
+      response.status(204).end();
+    } catch (error) { next(error); }
+  });
+
   router.get('/escrow', async (request, response, next) => {
     try {
       escrowConfigured();
@@ -517,16 +544,50 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       const user = await member(prisma, userId);
       requireIdentityForSpending(user.country, user.identityVerificationStatus, (await withdrawalSettings(prisma)).identityRequiredCountries);
       await verifyMemberPin(prisma, userId, body.pin);
-      const code = await createPayCode(prisma, { buyerId: userId, code: body.code, maxAmountMicroUsdt: microUsdtFromDecimal(body.maxAmount), expiresAt: new Date(Date.now() + 5 * 60_000) });
-      response.status(201).json({ id: code.id, expiresAt: code.expiresAt, maxAmount: decimalFromMicroUsdt(code.maxAmountMicroUsdt) });
+      let merchantId: string | undefined;
+      if (body.merchantBarcodeId !== undefined) {
+        const merchant = await prisma.user.findUnique({ where: { barcodeId: body.merchantBarcodeId }, select: { id: true } });
+        if (merchant === null) throw new HttpError(404, 'seller not found');
+        merchantId = merchant.id;
+      }
+      const maxAmount = body.maxAmount ?? body.amount;
+      if (maxAmount === undefined) throw new HttpError(400, 'maxAmount is required');
+      const code = await createPayCode(prisma, {
+        buyerId: userId,
+        code: body.code,
+        maxAmountMicroUsdt: microUsdtFromDecimal(maxAmount),
+        expiresAt: new Date(Date.now() + 5 * 60_000),
+        ...(merchantId === undefined ? {} : {
+          merchantId,
+          ...(body.amount === undefined ? {} : { amountMicroUsdt: microUsdtFromDecimal(body.amount) }),
+        }),
+      });
+      response.status(201).json({ id: code.id, expiresAt: code.expiresAt, maxAmount: decimalFromMicroUsdt(code.maxAmountMicroUsdt), amount: code.amountMicroUsdt === null ? null : decimalFromMicroUsdt(code.amountMicroUsdt), merchantBarcodeId: body.merchantBarcodeId ?? null });
+    } catch (error) { next(error); }
+  });
+
+  router.get('/escrow/pay-codes/incoming', async (request, response, next) => {
+    try {
+      escrowConfigured();
+      const rows = await prisma.payCode.findMany({ where: { merchantId: memberClaims(request).sub, status: PayCodeStatus.ACTIVE, expiresAt: { gt: new Date() } }, include: { buyer: { select: { barcodeId: true, displayName: true } } }, orderBy: { createdAt: 'desc' } });
+      response.json({ items: rows.flatMap((row) => row.amountMicroUsdt === null ? [] : [{ id: row.id, amount: decimalFromMicroUsdt(row.amountMicroUsdt), expiresAt: row.expiresAt, buyerBarcodeId: row.buyer.barcodeId, buyerDisplayName: row.buyer.displayName }]) });
     } catch (error) { next(error); }
   });
 
   router.get('/escrow/pay-codes/active', async (request, response, next) => {
     try {
       escrowConfigured();
-      const code = await prisma.payCode.findFirst({ where: { buyerId: memberClaims(request).sub, status: PayCodeStatus.ACTIVE, expiresAt: { gt: new Date() } }, orderBy: { createdAt: 'desc' } });
-      response.json(code === null ? null : { id: code.id, status: code.status, expiresAt: code.expiresAt, maxAmount: decimalFromMicroUsdt(code.maxAmountMicroUsdt), wrongAttempts: code.wrongAttempts });
+      const code = await prisma.payCode.findFirst({ where: { buyerId: memberClaims(request).sub, status: PayCodeStatus.ACTIVE, expiresAt: { gt: new Date() } }, include: { merchant: { select: { barcodeId: true } } }, orderBy: { createdAt: 'desc' } });
+      response.json(code === null ? null : { id: code.id, status: code.status, expiresAt: code.expiresAt, maxAmount: decimalFromMicroUsdt(code.maxAmountMicroUsdt), amount: code.amountMicroUsdt === null ? null : decimalFromMicroUsdt(code.amountMicroUsdt), merchantBarcodeId: code.merchant?.barcodeId ?? null, wrongAttempts: code.wrongAttempts });
+    } catch (error) { next(error); }
+  });
+
+  router.get('/escrow/pay-codes/:id', async (request, response, next) => {
+    try {
+      escrowConfigured();
+      const code = await prisma.payCode.findFirst({ where: { id: pathId(request.params.id), buyerId: memberClaims(request).sub }, include: { merchant: { select: { barcodeId: true } } } });
+      if (code === null) throw new HttpError(404, 'pay code not found');
+      response.json({ id: code.id, status: code.status, amount: code.amountMicroUsdt === null ? null : decimalFromMicroUsdt(code.amountMicroUsdt), expiresAt: code.expiresAt, merchantBarcodeId: code.merchant?.barcodeId ?? null, wrongAttempts: code.wrongAttempts });
     } catch (error) { next(error); }
   });
 
@@ -546,9 +607,11 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       const body = escrowSettlementSchema.parse(request.body);
       const merchantId = memberClaims(request).sub;
       await verifyMemberPin(prisma, merchantId, body.pin);
-      const result = await settleWithPayCode(prisma, { merchantId, buyerBarcodeId: body.buyerBarcodeId, code: body.code, amountMicroUsdt: microUsdtFromDecimal(body.amount), externalRef: `api:me:escrow:settle:${merchantId}:${body.idempotencyKey}` });
+      const result = 'payCodeId' in body
+        ? await settleDirectedPayCode(prisma, { merchantId, payCodeId: body.payCodeId, code: body.code, externalRef: `api:me:escrow:settle:${merchantId}:${body.idempotencyKey}` })
+        : await settleWithPayCode(prisma, { merchantId, buyerBarcodeId: body.buyerBarcodeId, code: body.code, amountMicroUsdt: microUsdtFromDecimal(body.amount), externalRef: `api:me:escrow:settle:${merchantId}:${body.idempotencyKey}` });
       await queue.add('escrow-settle', { settlementId: result.settlement.id }, { jobId: `escrow-settle:${result.settlement.id}` });
-      response.status(201).json({ id: result.settlement.id, status: result.settlement.status, amount: decimalFromMicroUsdt(result.settlement.amountMicroUsdt), buyerBarcodeId: result.buyer?.barcodeId ?? body.buyerBarcodeId, confirmedAt: result.settlement.confirmedAt });
+      response.status(201).json({ id: result.settlement.id, status: result.settlement.status, amount: decimalFromMicroUsdt(result.settlement.amountMicroUsdt), buyerBarcodeId: result.buyer?.barcodeId ?? ('buyerBarcodeId' in body ? body.buyerBarcodeId : ''), confirmedAt: result.settlement.confirmedAt });
     } catch (error) { next(error); }
   });
 

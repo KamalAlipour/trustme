@@ -1411,6 +1411,45 @@ describe('member API', () => {
   });
 });
 
+describe('directed escrow API', () => {
+  it('lists only active incoming directed pay codes for the authenticated merchant', async () => {
+    const { app } = appFixture(undefined, undefined, { escrowContractAddress: getAddress(`0x${'44'.repeat(20)}`) });
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000310', barcodeId: 'directed-buyer' });
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000311', barcodeId: 'directed-merchant' });
+    const buyerToken = await memberToken(app, '+1555000310');
+    const merchantToken = await memberToken(app, '+1555000311');
+    const buyer = await prisma.user.findUniqueOrThrow({ where: { barcodeId: 'directed-buyer' } });
+    await prisma.escrowBalance.create({ data: { userId: buyer.id, lockedMicroUsdt: 5_000_000n } });
+    const created = await request(app).post('/v1/me/escrow/pay-codes').set('Authorization', `Bearer ${buyerToken}`).send({ code: '1234', merchantBarcodeId: 'directed-merchant', amount: '1.25', pin: '2468' });
+    expect(created.status).toBe(201);
+    const incoming = await request(app).get('/v1/me/escrow/pay-codes/incoming').set('Authorization', `Bearer ${merchantToken}`);
+    expect(incoming.status).toBe(200);
+    expect(incoming.body.items).toMatchObject([{ id: created.body.id, amount: '1.25', buyerBarcodeId: 'directed-buyer' }]);
+    await prisma.payCode.update({ where: { id: created.body.id }, data: { expiresAt: new Date(Date.now() - 1_000) } });
+    expect((await request(app).get('/v1/me/escrow/pay-codes/incoming').set('Authorization', `Bearer ${merchantToken}`)).body.items).toHaveLength(0);
+  });
+
+  it('removes an idle wallet and rejects locked or foreign wallets', async () => {
+    const { app } = appFixture(undefined, undefined, { escrowContractAddress: getAddress(`0x${'55'.repeat(20)}`) });
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000313', barcodeId: 'wallet-owner' });
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000314', barcodeId: 'wallet-other' });
+    const ownerToken = await memberToken(app, '+1555000313');
+    const otherToken = await memberToken(app, '+1555000314');
+    const owner = await prisma.user.findUniqueOrThrow({ where: { barcodeId: 'wallet-owner' } });
+    const idle = await request(app).post('/v1/me/wallets').set('Authorization', `Bearer ${ownerToken}`).send({ address: `0x${'66'.repeat(20)}`, kind: 'IN_APP' });
+    expect(idle.status).toBe(201);
+    expect((await request(app).delete(`/v1/me/wallets/${idle.body.id}`).set('Authorization', `Bearer ${ownerToken}`).send({ pin: '2468' })).status).toBe(204);
+    const locked = await request(app).post('/v1/me/wallets').set('Authorization', `Bearer ${ownerToken}`).send({ address: `0x${'77'.repeat(20)}`, kind: 'IN_APP' });
+    await prisma.escrowBalance.create({ data: { userId: owner.id, lockedMicroUsdt: 1n } });
+    const lockedResult = await request(app).delete(`/v1/me/wallets/${locked.body.id}`).set('Authorization', `Bearer ${ownerToken}`).send({ pin: '2468' });
+    expect(lockedResult.status).toBe(409);
+    expect(lockedResult.body).toEqual({ error: 'unload your escrow balance before removing the wallet' });
+    const foreign = await request(app).post('/v1/me/wallets').set('Authorization', `Bearer ${await memberToken(app, '+1555000314')}`).send({ address: `0x${'88'.repeat(20)}`, kind: 'IN_APP' });
+    expect((await request(app).delete(`/v1/me/wallets/${foreign.body.id}`).set('Authorization', `Bearer ${ownerToken}`).send({ pin: '2468' })).status).toBe(404);
+    void otherToken;
+  });
+});
+
 describe('public reserves and balance disclosure API', () => {
   async function createPublicUser(phone: string, barcodeId: string) {
     return provisionUser(prisma, { depositXpub: config.depositXpub }, { phoneNumber: phone, barcodeId });

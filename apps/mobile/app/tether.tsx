@@ -1,21 +1,19 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, Pressable, Text, TextInput, View } from 'react-native';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import * as Linking from 'expo-linking';
 import { BrowserProvider, Contract, JsonRpcProvider, MaxUint256, Wallet } from 'ethers';
 import EthereumProvider from '@walletconnect/ethereum-provider';
-import { useQuery } from '@tanstack/react-query';
 import { ApiError, request } from '../src/api/client';
 import type { EscrowConfig, EscrowSettlement, EscrowWallet } from '../src/api/types';
 import { useEscrowBalance, useEscrowConfig, useEscrowSettlements, useEscrowUnloads, useInvalidateMoney } from '../src/hooks';
 import { useSession } from '../src/auth/session';
 import { Page, LoadingScreen } from '../src/components/Screen';
 import { useTranslation } from '../src/i18n';
-import { createInAppWallet, readEscrowMnemonic, saveEscrowMnemonic } from '../src/lib/escrow-wallet';
-import { formatEscrowCountdown, parseRecoveryPhrase, parseUsdtAmount, randomVerificationWordIndices, selectBuyerSettlementConfirmation, shouldApproveAllowance, verifyMnemonicWords, withWalletConnectDeadline } from '../src/lib/escrow';
+import { clearEscrowMnemonic, createInAppWallet, readEscrowMnemonic, saveEscrowMnemonic } from '../src/lib/escrow-wallet';
+import { parseRecoveryPhrase, parseUsdtAmount, randomVerificationWordIndices, shouldApproveAllowance, verifyMnemonicWords, withWalletConnectDeadline } from '../src/lib/escrow';
 import { formatDate, formatMicroUsdt } from '../src/lib/format';
-import { randomFourDigitCode } from '../src/lib/code';
 import { mapApiError } from '../src/lib/errors';
 import { styles } from '../src/styles';
 
@@ -26,7 +24,6 @@ const ERC20_ABI = [
 const ESCROW_ABI = ['function deposit(uint256 amount)'];
 
 type WalletConnectSession = { provider: Awaited<ReturnType<typeof EthereumProvider.init>>; browser: BrowserProvider };
-type ActiveCode = { id: string; expiresAt: string; maxAmount: string; plaintext: string; createdAt: number };
 
 export default function Tether() {
   const { t, language } = useTranslation();
@@ -37,7 +34,6 @@ export default function Tether() {
   const settlements = useEscrowSettlements(enabled);
   const unloads = useEscrowUnloads(enabled);
   const invalidate = useInvalidateMoney();
-  const params = useLocalSearchParams<{ barcodeId?: string }>();
   const [wallet, setWallet] = useState<EscrowWallet | null>(null);
   const [draftWords, setDraftWords] = useState<string[] | null>(null);
   const [draftAddress, setDraftAddress] = useState('');
@@ -49,54 +45,23 @@ export default function Tether() {
   const [revealedWords, setRevealedWords] = useState<string[] | null>(null);
   const [walletConnectSession, setWalletConnectSession] = useState<WalletConnectSession | null>(null);
   const [topUpAmount, setTopUpAmount] = useState('');
-  const [payAmount, setPayAmount] = useState('');
-  const [activeCode, setActiveCode] = useState<ActiveCode | null>(null);
-  const [countdownNow, setCountdownNow] = useState(() => Date.now());
-  const [buyerBarcode, setBuyerBarcode] = useState(params.barcodeId ?? '');
-  const [buyerCode, setBuyerCode] = useState('');
-  const [settleAmount, setSettleAmount] = useState('');
-  const [buyerConfirmation, setBuyerConfirmation] = useState<{ amount: string; settling: boolean } | null>(null);
-  const [sellerConfirmation, setSellerConfirmation] = useState('');
   const [unloadAmount, setUnloadAmount] = useState('');
   const unloadPrefilled = useRef(false);
   const connectCancel = useRef<((error: Error) => void) | null>(null);
+  const [removeWalletConfirm, setRemoveWalletConfirm] = useState(false);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState('');
 
-  const activeCodeQuery = useQuery({
-    queryKey: ['escrow-pay-code-active'],
-    queryFn: () => request<{ id: string; expiresAt: string; maxAmount: string } | null>('/v1/me/escrow/pay-codes/active'),
-    enabled,
-    refetchInterval: 10_000,
-  });
 
   useEffect(() => {
     if (balance.data?.primaryWallet !== undefined) setWallet(balance.data.primaryWallet);
   }, [balance.data?.primaryWallet]);
-  useEffect(() => {
-    if (params.barcodeId !== undefined) setBuyerBarcode(params.barcodeId);
-  }, [params.barcodeId]);
-  useEffect(() => {
-    const timer = setInterval(() => setCountdownNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, []);
   useEffect(() => {
     if (!unloadPrefilled.current && balance.data?.availableMicroUsdt !== undefined) {
       setUnloadAmount(formatMicroUsdt(balance.data.availableMicroUsdt, 'en'));
       unloadPrefilled.current = true;
     }
   }, [balance.data?.availableMicroUsdt]);
-  useEffect(() => {
-    const current = activeCodeQuery.data;
-    if (current !== null && current !== undefined && activeCode === null) {
-      setActiveCode({ ...current, plaintext: '', createdAt: Date.now() });
-    }
-  }, [activeCode, activeCodeQuery.data]);
-  useEffect(() => {
-    if (activeCode === null || activeCode.plaintext === '') return;
-    const item = selectBuyerSettlementConfirmation(settlements.data?.items ?? [], activeCode.createdAt);
-    if (item !== null) setBuyerConfirmation({ amount: item.amount, settling: item.status !== 'CONFIRMED' });
-  }, [activeCode, settlements.data?.items]);
 
   const shortAddress = useMemo(() => wallet === null ? '' : `${wallet.address.slice(0, 6)}…${wallet.address.slice(-4)}`, [wallet]);
   if (config.isLoading) return <LoadingScreen />;
@@ -226,6 +191,32 @@ export default function Tether() {
   const cancelConnect = () => {
     connectCancel.current?.(new Error(t.escrow.connectCancelled));
   };
+  const removeWallet = async () => {
+    if (wallet === null) return;
+    await run('remove-wallet', async () => {
+      const pin = await getStepUpPin();
+      if (!pin) throw new Error(t.escrow.stepUpRequired);
+      await request(`/v1/me/wallets/${wallet.id}`, { method: 'DELETE', body: { pin } });
+      if (walletConnectSession !== null) await walletConnectSession.provider.disconnect().catch(() => {});
+      if (wallet.kind === 'IN_APP') await clearEscrowMnemonic();
+      setWallet(null);
+      setDraftWords(null);
+      setDraftAddress('');
+      setRecoveryPhrase('');
+      setWordIndices(null);
+      setWordAnswers(['', '']);
+      setWrittenDown(false);
+      setMnemonic(null);
+      setRevealedWords(null);
+      setWalletConnectSession(null);
+      setTopUpAmount('');
+      setUnloadAmount('');
+      unloadPrefilled.current = false;
+      setRemoveWalletConfirm(false);
+      setMessage(t.escrow.disconnected);
+      await invalidate();
+    });
+  };
   const revealWallet = async () => {
     await run('reveal', async () => {
       const pin = await getStepUpPin();
@@ -263,35 +254,6 @@ export default function Tether() {
       await invalidate();
     });
   };
-  const createPayCode = async () => {
-    await run('pay-code', async () => {
-      const pin = await getStepUpPin();
-      if (!pin) throw new Error(t.escrow.stepUpRequired);
-      const code = await randomFourDigitCode();
-      const response = await request<{ id: string; expiresAt: string; maxAmount: string }>('/v1/me/escrow/pay-codes', { method: 'POST', body: { code, maxAmount: payAmount, pin } });
-      setActiveCode({ ...response, plaintext: code, createdAt: Date.now() });
-      setPayAmount('');
-      await invalidate();
-    });
-  };
-  const cancelPayCode = async () => {
-    if (activeCode === null) return;
-    await run('cancel-code', async () => {
-      await request(`/v1/me/escrow/pay-codes/${activeCode.id}`, { method: 'DELETE' });
-      setActiveCode(null);
-      await invalidate();
-    });
-  };
-  const settlePayment = async () => {
-    await run('settle', async () => {
-      const pin = await getStepUpPin();
-      if (!pin) throw new Error(t.escrow.stepUpRequired);
-      const result = await request<{ id: string; amount: string; buyerBarcodeId: string }>('/v1/me/escrow/settlements', { method: 'POST', body: { buyerBarcodeId: buyerBarcode, code: buyerCode, amount: settleAmount, idempotencyKey: `mobile-${Date.now()}`, pin } });
-      setSellerConfirmation(result.amount);
-      setBuyerCode('');
-      await invalidate();
-    });
-  };
   const requestUnload = async () => {
     await run('unload', async () => {
       const pin = await getStepUpPin();
@@ -324,7 +286,7 @@ export default function Tether() {
 
       <View style={styles.card}>
         <Text style={styles.heading}>{t.escrow.wallet}</Text>
-        {wallet === null ? <Text style={styles.muted}>{t.escrow.noWallet}</Text> : <><Text style={styles.muted}>{t.escrow.walletAddress}: {shortAddress}</Text><Pressable onPress={() => void copyAddress()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.escrow.copyAddress}</Text></Pressable>{wallet.kind === 'IN_APP' ? <Pressable onPress={() => void revealWallet()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.escrow.walletReveal}</Text></Pressable> : null}</>}
+        {wallet === null ? <Text style={styles.muted}>{t.escrow.noWallet}</Text> : <><Text style={styles.muted}>{t.escrow.walletAddress}: {shortAddress}</Text><Pressable onPress={() => void copyAddress()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.escrow.copyAddress}</Text></Pressable>{wallet.kind === 'IN_APP' ? <Pressable onPress={() => void revealWallet()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.escrow.walletReveal}</Text></Pressable> : null}<Pressable onPress={() => setRemoveWalletConfirm(true)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.escrow.disconnectWallet}</Text></Pressable>{removeWalletConfirm ? <View style={styles.card}><Text style={styles.muted}>{wallet.kind === 'IN_APP' ? t.escrow.disconnectInAppWarning : t.escrow.disconnectExternalWarning}</Text><Pressable onPress={() => void removeWallet()} style={styles.button}><Text style={styles.buttonText}>{t.escrow.disconnectConfirm}</Text></Pressable><Pressable onPress={() => setRemoveWalletConfirm(false)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.cancel}</Text></Pressable></View> : null}</>}
         {Platform.OS === 'web' ? <Text style={styles.muted}>{t.escrow.webWalletWarning}</Text> : null}
         {draftWords !== null && wordIndices !== null ? <View style={styles.card}><Text style={styles.text}>{t.escrow.recoveryWords}</Text><Text selectable style={styles.text}>{draftWords.join(' ')}</Text><Pressable onPress={() => setWrittenDown(!writtenDown)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{writtenDown ? '✓ ' : ''}{t.escrow.writtenDown}</Text></Pressable><Text style={styles.muted}>{t.escrow.verifyWords(wordIndices[0] + 1, wordIndices[1] + 1)}</Text><TextInput value={wordAnswers[0]} onChangeText={(value) => setWordAnswers([value, wordAnswers[1]])} placeholder={t.escrow.verifyWord(wordIndices[0] + 1)} style={styles.input} autoCapitalize="none" /><TextInput value={wordAnswers[1]} onChangeText={(value) => setWordAnswers([wordAnswers[0], value])} placeholder={t.escrow.verifyWord(wordIndices[1] + 1)} style={styles.input} autoCapitalize="none" /><Pressable onPress={() => void finishWallet()} style={styles.button}><Text style={styles.buttonText}>{t.escrow.verifyRecovery}</Text></Pressable><Pressable onPress={discardDraft} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.escrow.discardDraft}</Text></Pressable></View> : <>
           {wallet === null ? <><Pressable disabled={busy !== ''} onPress={() => void run('wallet', createWallet)} style={[styles.button, busy !== '' ? styles.buttonDisabled : null]}><Text style={styles.buttonText}>{t.escrow.createWallet}</Text></Pressable>{config.data.walletConnectProjectId !== null ? <Pressable disabled={busy !== ''} onPress={() => void connectWallet()} style={[styles.secondaryButton, busy !== '' ? styles.buttonDisabled : null]}><Text style={styles.secondaryButtonText}>{t.escrow.connectWallet}</Text></Pressable> : Platform.OS !== 'web' && config.data.walletConnectProjectId === null ? <Text style={styles.muted}>{t.escrow.nativeWalletNote}</Text> : null}</> : wallet.kind === 'EXTERNAL' && walletConnectSession === null && config.data.walletConnectProjectId !== null ? <Pressable disabled={busy !== ''} onPress={() => void connectWallet()} style={[styles.secondaryButton, busy !== '' ? styles.buttonDisabled : null]}><Text style={styles.secondaryButtonText}>{t.escrow.connectWallet}</Text></Pressable> : null}
@@ -340,23 +302,6 @@ export default function Tether() {
         <Text style={styles.muted}>{t.escrow.twoSignatureNotice}</Text>
         {publicRpcUnavailable ? <Text style={styles.danger}>{t.escrow.publicRpcUnavailable}</Text> : null}
         <Pressable disabled={busy !== '' || wallet === null || publicRpcUnavailable} onPress={() => void sendTopUp()} style={[styles.button, busy !== '' || wallet === null || publicRpcUnavailable ? styles.buttonDisabled : null]}><Text style={styles.buttonText}>{t.escrow.topUpButton}</Text></Pressable>
-      </View>
-
-      <View style={styles.card}>
-        <Text style={styles.heading}>{t.escrow.payCode}</Text>
-        <TextInput value={payAmount} onChangeText={setPayAmount} placeholder={t.escrow.payCodeAmount} style={styles.input} keyboardType="decimal-pad" />
-        {activeCode !== null ? <><Text style={styles.muted}>{t.escrow.activeCode}</Text>{activeCode.plaintext ? <Text selectable style={{ ...styles.title, textAlign: 'center', letterSpacing: 8 }}>{activeCode.plaintext}</Text> : <Text style={styles.muted}>{t.escrow.activeCodeUnavailable}</Text>}<Text style={styles.muted}>{t.escrow.codeExpires(formatEscrowCountdown(activeCode.expiresAt, countdownNow))}</Text><Pressable onPress={() => void cancelPayCode()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.escrow.cancelCode}</Text></Pressable></> : <Pressable disabled={busy !== ''} onPress={() => void createPayCode()} style={[styles.button, busy !== '' ? styles.buttonDisabled : null]}><Text style={styles.buttonText}>{t.escrow.createPayCode}</Text></Pressable>}
-        {buyerConfirmation ? <Text style={styles.notice}>✓ {buyerConfirmation.settling ? t.escrow.paymentConfirmedSettling(formatMicroUsdt(parseUsdtAmount(buyerConfirmation.amount).toString(), language)) : t.escrow.paymentConfirmed(formatMicroUsdt(parseUsdtAmount(buyerConfirmation.amount).toString(), language))}</Text> : null}
-      </View>
-
-      <View style={styles.card}>
-        <Text style={styles.heading}>{t.escrow.sellerSettlement}</Text>
-        <TextInput value={buyerBarcode} onChangeText={setBuyerBarcode} placeholder={t.escrow.buyerBarcode} style={styles.input} />
-        <Pressable onPress={() => router.push({ pathname: '/scan', params: { returnTo: '/tether' } })} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.escrow.scanBuyer}</Text></Pressable>
-        <TextInput value={settleAmount} onChangeText={setSettleAmount} placeholder={t.amount} style={styles.input} keyboardType="decimal-pad" />
-        <TextInput value={buyerCode} onChangeText={(value) => setBuyerCode(value.replace(/\D/g, '').slice(0, 4))} placeholder={t.escrow.buyerCode} style={styles.input} keyboardType="number-pad" secureTextEntry />
-        <Pressable disabled={busy !== ''} onPress={() => void settlePayment()} style={[styles.button, busy !== '' ? styles.buttonDisabled : null]}><Text style={styles.buttonText}>{t.escrow.settle}</Text></Pressable>
-        {sellerConfirmation ? <Text style={styles.notice}>✓ {t.escrow.settlementConfirmed(sellerConfirmation)}</Text> : null}
       </View>
 
       <View style={styles.card}>

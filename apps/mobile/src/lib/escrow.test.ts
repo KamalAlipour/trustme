@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 vi.mock('expo-crypto', () => ({ getRandomBytesAsync: vi.fn() }));
-import { formatEscrowCountdown, isValidRecoveryPhrase, parseRecoveryPhrase, parseUsdtAmount, pickVerificationWordIndices, selectBuyerSettlementConfirmation, shouldApproveAllowance, verifyMnemonicWords, withWalletConnectDeadline } from './escrow';
+import { formatEscrowCountdown, isValidRecoveryPhrase, parseRecoveryPhrase, parseUsdtAmount, pickVerificationWordIndices, shouldApproveAllowance, verifyMnemonicWords, withWalletConnectDeadline } from './escrow';
 
 describe('escrow helpers', () => {
   it('parses decimal USDT without floating point arithmetic', () => {
@@ -32,13 +32,6 @@ describe('escrow helpers', () => {
     expect(() => parseRecoveryPhrase('not a recovery phrase')).toThrow('invalid recovery phrase');
   });
 
-  it('selects an instant buyer confirmation for any non-failed settlement', () => {
-    const selected = selectBuyerSettlementConfirmation([
-      { id: 'failed', status: 'FAILED', amount: '2', buyerId: 'buyer', merchantId: 'merchant', role: 'BUYER', createdAt: new Date(2_000).toISOString(), confirmedAt: null },
-      { id: 'pending', status: 'PENDING_CHAIN', amount: '1', buyerId: 'buyer', merchantId: 'merchant', role: 'BUYER', createdAt: new Date(3_000).toISOString(), confirmedAt: null },
-    ], 2_500);
-    expect(selected?.id).toBe('pending');
-  });
 });
 
 describe('wallet connection deadline', () => {

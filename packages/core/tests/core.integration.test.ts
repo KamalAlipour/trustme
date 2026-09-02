@@ -24,6 +24,7 @@ import {
   confirmUnload,
   failUnload,
   settleWithPayCode,
+  settleDirectedPayCode,
 } from '../src/index.js';
 
 const prisma = new PrismaClient();
@@ -419,6 +420,29 @@ describe('money and ledger domain', () => {
 });
 
 describe('prepaid USDT escrow', () => {
+  it('settles directed pay codes with the stored amount and isolates the merchant', async () => {
+    const fixtureAccounts = await fixture(3);
+    const users = await prisma.user.findMany({ orderBy: { barcodeId: 'asc' } });
+    await prisma.escrowBalance.create({ data: { userId: users[0]!.id, lockedMicroUsdt: 2_000_000n } });
+    const code = await createPayCode(prisma, { buyerId: users[0]!.id, merchantId: users[1]!.id, amountMicroUsdt: 750_000n, code: '1234', maxAmountMicroUsdt: 750_000n, expiresAt: new Date(Date.now() + 60_000) });
+    await expect(settleDirectedPayCode(prisma, { merchantId: users[2]!.id, payCodeId: code.id, code: '1234' })).rejects.toThrow(/pay code not found/);
+    await expect(settleWithPayCode(prisma, { merchantId: users[2]!.id, buyerBarcodeId: users[0]!.barcodeId, code: '1234', amountMicroUsdt: 750_000n })).rejects.toThrow();
+    const settled = await settleDirectedPayCode(prisma, { merchantId: users[1]!.id, payCodeId: code.id, code: '1234' });
+    expect(settled.settlement.amountMicroUsdt).toBe(750_000n);
+    expect((await prisma.payCode.findUniqueOrThrow({ where: { id: code.id } })).status).toBe('USED');
+    expect((await prisma.ledgerAccount.findUniqueOrThrow({ where: { id: fixtureAccounts.users[1]! } })).balance).toBe(75n);
+    expect((await prisma.escrowBalance.findUniqueOrThrow({ where: { userId: users[0]!.id } })).reservedMicroUsdt).toBe(750_000n);
+  });
+
+  it('cancels directed pay codes on the third wrong code', async () => {
+    await fixture(2);
+    const users = await prisma.user.findMany({ orderBy: { barcodeId: 'asc' } });
+    await prisma.escrowBalance.create({ data: { userId: users[0]!.id, lockedMicroUsdt: 1_000_000n } });
+    const code = await createPayCode(prisma, { buyerId: users[0]!.id, merchantId: users[1]!.id, amountMicroUsdt: 100_000n, code: '1234', maxAmountMicroUsdt: 100_000n, expiresAt: new Date(Date.now() + 60_000) });
+    for (let attempt = 0; attempt < 3; attempt += 1) await expect(settleDirectedPayCode(prisma, { merchantId: users[1]!.id, payCodeId: code.id, code: '0000' })).rejects.toThrow();
+    expect((await prisma.payCode.findUniqueOrThrow({ where: { id: code.id } })).status).toBe('CANCELLED');
+  });
+
   it('locks out a pay code after three wrong attempts and rejects expiry/over-amount', async () => {
     const fixtureAccounts = await fixture(2);
     const users = await prisma.user.findMany({ orderBy: { barcodeId: 'asc' } });

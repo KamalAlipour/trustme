@@ -52,6 +52,7 @@ export default function Contacts() {
         <Pressable onPress={() => void add()} style={styles.button}><Text style={styles.buttonText}>{t.save}</Text></Pressable>
         {error ? <Text style={styles.danger}>{error}</Text> : null}
       </View>
+      <Pressable onPress={() => router.push('/barcodes')} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.barcodeSearch}</Text></Pressable>
     </Page>
   );
 }
