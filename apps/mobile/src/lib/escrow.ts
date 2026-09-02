@@ -1,4 +1,6 @@
 import { getRandomBytesAsync } from 'expo-crypto';
+import { Mnemonic } from 'ethers';
+import type { EscrowSettlement } from '../api/types';
 
 const MICRO_USDT = 1_000_000n;
 
@@ -34,4 +36,24 @@ export async function randomVerificationWordIndices(wordCount: number): Promise<
 
 export function verifyMnemonicWords(words: string[], indices: [number, number], answers: [string, string]): boolean {
   return indices.every((index, position) => words[index]?.toLowerCase() === answers[position]?.trim().toLowerCase());
+}
+
+export function normalizeRecoveryPhrase(value: string): string {
+  return value.trim().replace(/\s+/g, ' ');
+}
+
+export function isValidRecoveryPhrase(value: string): boolean {
+  return Mnemonic.isValidMnemonic(normalizeRecoveryPhrase(value));
+}
+
+export function parseRecoveryPhrase(value: string): string {
+  const phrase = normalizeRecoveryPhrase(value);
+  if (!Mnemonic.isValidMnemonic(phrase)) throw new Error('invalid recovery phrase');
+  return phrase;
+}
+
+export function selectBuyerSettlementConfirmation(settlements: EscrowSettlement[], createdAt: number): EscrowSettlement | null {
+  return settlements
+    .filter((settlement) => settlement.role === 'BUYER' && settlement.status !== 'FAILED' && new Date(settlement.createdAt).getTime() >= createdAt)
+    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())[0] ?? null;
 }
