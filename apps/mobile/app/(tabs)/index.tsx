@@ -154,7 +154,6 @@ export default function Home() {
   return (
     <Page>
       <View style={styles.row}><Text style={styles.title}>{t.home}</Text><Pressable onPress={() => router.push('/contacts')}><Text style={styles.secondaryButtonText}>{t.contacts}</Text></Pressable></View>
-      {escrowEnabled ? <Pressable onPress={() => router.push({ pathname: '/scan', params: { returnTo: '/(tabs)', field: 'pay' } })} style={styles.button}><Text style={styles.buttonText}>{t.escrow.buyTitle}</Text></Pressable> : null}
       {disclosures.data?.items.map((disclosure) => (
         <View key={disclosure.id} style={styles.card}>
           <Text style={styles.heading}>{t.balanceDisclosureTitle}</Text>
@@ -176,13 +175,8 @@ export default function Home() {
         </View>)}
         {incomingMessage ? <Text style={styles.notice}>{incomingMessage}</Text> : null}
       </View> : null}
-      <View style={styles.card}>
-        <Text style={styles.muted}>{t.balance}</Text>
-        <Text style={{ ...styles.title, fontSize: 40 }}>{formatCoupons(balance.data?.coupons ?? '0', language)}</Text>
-        <Text style={styles.muted}>{member?.displayName ?? profile.data?.displayName ?? ''}</Text>
-      </View>
       {escrowEnabled ? <View style={styles.card}>
-        <Text style={styles.heading}>{t.escrow.payTitle}</Text>
+        <Text style={styles.heading}>{t.escrow.buyTitle}</Text>
         <TextInput value={payMerchantBarcode} onChangeText={setPayMerchantBarcode} placeholder={t.escrow.payMerchantBarcode} style={styles.input} />
         <Pressable onPress={() => router.push({ pathname: '/scan', params: { returnTo: '/(tabs)', field: 'pay' } })} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.scanQr}</Text></Pressable>
         <TextInput value={payAmount} onChangeText={setPayAmount} placeholder={t.escrow.payAmountUsdt} style={styles.input} keyboardType="decimal-pad" autoFocus={payMerchantBarcode !== '' && buyerPayCode === null} />
@@ -195,6 +189,11 @@ export default function Home() {
         </> : null}
         {payMessage ? <Text style={payMessage === t.escrow.payDone ? styles.notice : styles.danger}>{payMessage}</Text> : null}
       </View> : null}
+      <View style={styles.card}>
+        <Text style={styles.muted}>{t.balance}</Text>
+        <Text style={{ ...styles.title, fontSize: 40 }}>{formatCoupons(balance.data?.coupons ?? '0', language)}</Text>
+        <Text style={styles.muted}>{member?.displayName ?? profile.data?.displayName ?? ''}</Text>
+      </View>
       {member?.isRestricted ? <View style={styles.card}><Text style={styles.danger}>{t.restricted}</Text><Text style={styles.text}>{t.restrictedExplanation}</Text></View> : null}
       {ownBarcodeId ? <View style={styles.card}>
         <Text style={styles.heading}>{t.myBarcode}</Text>

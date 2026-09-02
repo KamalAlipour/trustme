@@ -336,7 +336,6 @@ export const en = {
     insufficientUsdt: 'The wallet does not have enough USDT.',
     insufficientGas: 'The wallet does not have enough POL for gas.',
     confirmationNotice: 'On-chain confirmation takes a moment. This balance updates after the event is ingested.',
-    payTitle: 'Pay a seller with USDT',
     payMerchantBarcode: 'Seller barcode',
     payMerchantRequired: 'Scan or enter the seller barcode first.',
     payAmountUsdt: 'Amount in USDT',

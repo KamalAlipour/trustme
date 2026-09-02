@@ -338,7 +338,6 @@ export const fa: Translations = {
     insufficientUsdt: 'USDT کافی در کیف پول وجود ندارد.',
     insufficientGas: 'POL کافی برای کارمزد شبکه وجود ندارد.',
     confirmationNotice: 'تأیید زنجیره کمی زمان می‌برد. موجودی پس از دریافت رویداد به‌روزرسانی می‌شود.',
-    payTitle: 'پرداخت به فروشنده با تتر',
     payMerchantBarcode: 'بارکد فروشنده',
     payMerchantRequired: 'اول بارکد فروشنده را اسکن یا وارد کن.',
     payAmountUsdt: 'مبلغ به تتر',
