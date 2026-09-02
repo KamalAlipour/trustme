@@ -113,7 +113,7 @@ export default function Home() {
         <Text style={styles.muted}>{t.myBarcodeInstructions}</Text>
         <View style={styles.barcodeQr}>
           <QRCode value={ownBarcodeId} size={220} color={colors.ink} backgroundColor={colors.card} />
-          <Text selectable style={{ ...styles.title, textAlign: 'center', letterSpacing: 2 }}>{ownBarcodeId}</Text>
+          <Text selectable style={{ ...styles.heading, textAlign: 'center', letterSpacing: 1 }}>{ownBarcodeId}</Text>
         </View>
         <Pressable onPress={() => void shareBarcode()} style={styles.secondaryButton}>
           <Text style={styles.secondaryButtonText}>{t.shareBarcode}</Text>
