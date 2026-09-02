@@ -329,6 +329,7 @@ export const en = {
     verifyWords: (first: number, second: number) => `Enter word ${first} and word ${second} to continue.`,
     verifyWord: (number: number) => `Word ${number}`,
     verifyRecovery: 'Verify recovery words',
+    recoveryMismatchRestart: 'The words did not match, so that recovery phrase was discarded and no wallet was created. Tap “Create wallet” to start again with a new phrase.',
     walletCreated: 'In-app wallet created.',
     topUp: 'Top up',
     topUpAmount: 'USDT amount',
