@@ -1,4 +1,5 @@
 import { randomInt, randomUUID } from 'node:crypto';
+import { getAddress } from 'ethers';
 import express from 'express';
 import rateLimit from 'express-rate-limit';
 import bcrypt from 'bcryptjs';
@@ -10,6 +11,8 @@ import {
   EmailVerificationPurpose,
   IdentityCaptureStep,
   IdentityVerificationStatus,
+  MemberWalletKind,
+  PayCodeStatus,
   KycStatus,
   Prisma,
   PrismaClient,
@@ -47,6 +50,10 @@ import {
   requestAidDocuments,
   donateToCharity,
   identityPolicyFor,
+  availableEscrowMicroUsdt,
+  createPayCode,
+  requestUnload,
+  settleWithPayCode,
 } from '@trustme/core';
 import { DomainError } from '@trustme/core';
 import type { QueueLike } from './app.js';
@@ -101,6 +108,11 @@ const refundQuerySchema = z.object({ role: z.enum(['buyer', 'seller']).default('
 const charityDonationSchema = z.object({ amountCoupons: couponsSchema, pin: fourDigitCodeSchema, idempotencyKey: z.string().min(1).optional() });
 const aidRequestSchema = z.object({ charityId: z.string().uuid(), amountCoupons: couponsSchema, description: z.string().trim().min(1), loanId: z.string().uuid().optional(), mediaIds: z.array(z.string().uuid()).max(10).optional() });
 const aidDocumentsSchema = z.object({ mediaIds: z.array(z.string().uuid()).min(1).max(10) });
+const walletSchema = z.object({ address: z.string().regex(/^0x[0-9a-fA-F]{40}$/), kind: z.enum(['EXTERNAL', 'IN_APP', 'SMART_ACCOUNT']) });
+const payCodeSchema = z.object({ code: fourDigitCodeSchema, maxAmount: z.string().min(1), pin: fourDigitCodeSchema });
+const escrowSettlementSchema = z.object({ buyerBarcodeId: barcodeIdSchema, code: fourDigitCodeSchema, amount: z.string().min(1), idempotencyKey: z.string().min(1), pin: fourDigitCodeSchema });
+const escrowUnloadSchema = z.object({ amount: z.string().min(1), pin: fourDigitCodeSchema });
+const escrowHistoryQuerySchema = z.object({ cursor: z.string().optional() });
 const charityQuerySchema = z.object({ status: z.enum(['PENDING', 'DOCUMENTS_REQUESTED', 'APPROVED', 'REJECTED']).optional() });
 const aidApprovalSchema = z.object({ approvedCoupons: couponsSchema.optional(), note: z.string().trim().optional(), pin: fourDigitCodeSchema });
 const noteSchema = z.object({ note: z.string().trim().min(1) });
@@ -406,6 +418,9 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
   const router = express.Router();
   const mediaLimiter = rateLimit({ windowMs: 60 * 60_000, limit: 20, keyGenerator: (request) => memberClaims(request).sub });
   const identityLimiter = rateLimit({ windowMs: 60 * 60_000, limit: 5, keyGenerator: (request) => memberClaims(request).sub });
+  const escrowConfigured = () => {
+    if (dependencies.config.escrowContractAddress === undefined) throw new HttpError(503, 'escrow_not_configured');
+  };
   const setupAllowedPaths = new Set(['/security-setup', '/email', '/email/verify', '/logout']);
   const memberPolicy = (user: Awaited<ReturnType<typeof member>>) => {
     const policy = user.country === null
@@ -439,6 +454,136 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
     } catch (error) {
       next(error);
     }
+  });
+
+  router.get('/escrow/config', (_request, response) => {
+    response.json({
+      contractAddress: dependencies.config.escrowContractAddress ?? null,
+      chainId: dependencies.config.escrowChainId,
+      usdtAddress: dependencies.config.usdtContractAddress,
+      decimals: 6,
+      walletConnectProjectId: dependencies.config.walletConnectProjectId ?? null,
+      web3AuthClientId: dependencies.config.web3AuthClientId ?? null,
+      enabled: dependencies.config.escrowContractAddress !== undefined,
+    });
+  });
+
+  router.post('/wallets', async (request, response, next) => {
+    try {
+      escrowConfigured();
+      const body = walletSchema.parse(request.body);
+      let address: string;
+      try {
+        address = getAddress(body.address).toLowerCase();
+      } catch {
+        throw new HttpError(400, 'invalid wallet address');
+      }
+      const userId = memberClaims(request).sub;
+      const existing = await prisma.memberWallet.findUnique({ where: { address } });
+      if (existing !== null && existing.userId !== userId) throw new HttpError(409, 'wallet belongs to another user');
+      await prisma.memberWallet.updateMany({ where: { userId, isPrimary: true }, data: { isPrimary: false } });
+      const wallet = existing === null
+        ? await prisma.memberWallet.create({ data: { userId, address, kind: body.kind as MemberWalletKind, chainId: dependencies.config.escrowChainId, isPrimary: true } })
+        : await prisma.memberWallet.update({ where: { id: existing.id }, data: { kind: body.kind as MemberWalletKind, chainId: dependencies.config.escrowChainId, isPrimary: true } });
+      response.status(201).json(wallet);
+    } catch (error) { next(error); }
+  });
+
+  router.get('/wallets', async (request, response, next) => {
+    try {
+      escrowConfigured();
+      response.json({ items: await prisma.memberWallet.findMany({ where: { userId: memberClaims(request).sub }, orderBy: { createdAt: 'asc' } }) });
+    } catch (error) { next(error); }
+  });
+
+  router.get('/escrow', async (request, response, next) => {
+    try {
+      escrowConfigured();
+      const balance = await prisma.escrowBalance.findUnique({ where: { userId: memberClaims(request).sub } });
+      const value = balance ?? { lockedMicroUsdt: 0n, reservedMicroUsdt: 0n };
+      const wallet = await prisma.memberWallet.findFirst({ where: { userId: memberClaims(request).sub, isPrimary: true } });
+      response.json({ lockedMicroUsdt: value.lockedMicroUsdt.toString(), reservedMicroUsdt: value.reservedMicroUsdt.toString(), availableMicroUsdt: availableEscrowMicroUsdt(value).toString(), locked: decimalFromMicroUsdt(value.lockedMicroUsdt), primaryWallet: wallet, enabled: true });
+    } catch (error) { next(error); }
+  });
+
+  router.post('/escrow/pay-codes', async (request, response, next) => {
+    try {
+      escrowConfigured();
+      const body = payCodeSchema.parse(request.body);
+      const userId = memberClaims(request).sub;
+      await verifyMemberPin(prisma, userId, body.pin);
+      const code = await createPayCode(prisma, { buyerId: userId, code: body.code, maxAmountMicroUsdt: microUsdtFromDecimal(body.maxAmount), expiresAt: new Date(Date.now() + 5 * 60_000) });
+      response.status(201).json({ id: code.id, expiresAt: code.expiresAt, maxAmount: decimalFromMicroUsdt(code.maxAmountMicroUsdt) });
+    } catch (error) { next(error); }
+  });
+
+  router.get('/escrow/pay-codes/active', async (request, response, next) => {
+    try {
+      escrowConfigured();
+      const code = await prisma.payCode.findFirst({ where: { buyerId: memberClaims(request).sub, status: PayCodeStatus.ACTIVE, expiresAt: { gt: new Date() } }, orderBy: { createdAt: 'desc' } });
+      response.json(code === null ? null : { id: code.id, status: code.status, expiresAt: code.expiresAt, maxAmount: decimalFromMicroUsdt(code.maxAmountMicroUsdt), wrongAttempts: code.wrongAttempts });
+    } catch (error) { next(error); }
+  });
+
+  router.delete('/escrow/pay-codes/:id', async (request, response, next) => {
+    try {
+      escrowConfigured();
+      const id = pathId(request.params.id);
+      const updated = await prisma.payCode.updateMany({ where: { id, buyerId: memberClaims(request).sub, status: PayCodeStatus.ACTIVE }, data: { status: PayCodeStatus.CANCELLED } });
+      if (updated.count === 0) throw new HttpError(404, 'pay code not found');
+      response.status(204).end();
+    } catch (error) { next(error); }
+  });
+
+  router.post('/escrow/settlements', async (request, response, next) => {
+    try {
+      escrowConfigured();
+      const body = escrowSettlementSchema.parse(request.body);
+      const merchantId = memberClaims(request).sub;
+      await verifyMemberPin(prisma, merchantId, body.pin);
+      const result = await settleWithPayCode(prisma, { merchantId, buyerBarcodeId: body.buyerBarcodeId, code: body.code, amountMicroUsdt: microUsdtFromDecimal(body.amount), externalRef: `api:me:escrow:settle:${merchantId}:${body.idempotencyKey}` });
+      await queue.add('escrow-settle', { settlementId: result.settlement.id }, { jobId: `escrow-settle:${result.settlement.id}` });
+      response.status(201).json({ id: result.settlement.id, status: result.settlement.status, amount: decimalFromMicroUsdt(result.settlement.amountMicroUsdt), buyerBarcodeId: result.buyer?.barcodeId ?? body.buyerBarcodeId, confirmedAt: result.settlement.confirmedAt });
+    } catch (error) { next(error); }
+  });
+
+  router.get('/escrow/settlements', async (request, response, next) => {
+    try {
+      escrowConfigured();
+      const query = escrowHistoryQuerySchema.parse(request.query);
+      const cursor = query.cursor === undefined ? undefined : cursorDate(query.cursor);
+      const userId = memberClaims(request).sub;
+      const rows = await prisma.escrowSettlement.findMany({
+        where: { OR: [{ merchantId: userId }, { buyerId: userId }], ...(cursor === undefined ? {} : { AND: [{ OR: [{ createdAt: { lt: cursor.createdAt } }, { createdAt: cursor.createdAt, id: { lt: cursor.id } }] }] }) },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 51,
+      });
+      response.json({ items: rows.slice(0, 50).map((row) => ({ id: row.id, status: row.status, amount: decimalFromMicroUsdt(row.amountMicroUsdt), buyerId: row.buyerId, merchantId: row.merchantId, role: row.merchantId === userId ? 'MERCHANT' : 'BUYER', createdAt: row.createdAt, confirmedAt: row.confirmedAt })), nextCursor: rows.length > 50 ? nextCursor(rows[49]!.createdAt, rows[49]!.id) : null });
+    } catch (error) { next(error); }
+  });
+
+  router.post('/escrow/unloads', async (request, response, next) => {
+    try {
+      escrowConfigured();
+      const body = escrowUnloadSchema.parse(request.body);
+      const userId = memberClaims(request).sub;
+      await verifyMemberPin(prisma, userId, body.pin);
+      const unload = await requestUnload(prisma, { userId, amountMicroUsdt: microUsdtFromDecimal(body.amount) });
+      await queue.add('escrow-unload', { unloadId: unload.id });
+      response.status(201).json({ id: unload.id, status: unload.status, amount: decimalFromMicroUsdt(unload.amountMicroUsdt), walletAddress: unload.walletAddress });
+    } catch (error) { next(error); }
+  });
+
+  router.get('/escrow/unloads', async (request, response, next) => {
+    try {
+      escrowConfigured();
+      const query = escrowHistoryQuerySchema.parse(request.query);
+      const cursor = query.cursor === undefined ? undefined : cursorDate(query.cursor);
+      const rows = await prisma.escrowUnload.findMany({
+        where: { userId: memberClaims(request).sub, ...(cursor === undefined ? {} : { OR: [{ createdAt: { lt: cursor.createdAt } }, { createdAt: cursor.createdAt, id: { lt: cursor.id } }] }) },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 51,
+      });
+      response.json({ items: rows.slice(0, 50).map((row) => ({ id: row.id, status: row.status, amount: decimalFromMicroUsdt(row.amountMicroUsdt), walletAddress: row.walletAddress, createdAt: row.createdAt, confirmedAt: row.confirmedAt })), nextCursor: rows.length > 50 ? nextCursor(rows[49]!.createdAt, rows[49]!.id) : null });
+    } catch (error) { next(error); }
   });
 
   router.get('/barcodes', async (request, response, next) => {

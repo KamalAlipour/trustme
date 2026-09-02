@@ -175,6 +175,37 @@ enum IdentityProvider {
   APPLE
 }
 
+enum MemberWalletKind {
+  EXTERNAL
+  IN_APP
+  SMART_ACCOUNT
+}
+
+enum EscrowEventKind {
+  DEPOSIT
+  SETTLE
+  UNLOAD
+}
+
+enum PayCodeStatus {
+  ACTIVE
+  USED
+  EXPIRED
+  CANCELLED
+}
+
+enum EscrowSettlementStatus {
+  PENDING
+  CONFIRMED
+  FAILED
+}
+
+enum EscrowUnloadStatus {
+  PENDING
+  CONFIRMED
+  FAILED
+}
+
 model User {
   id                   String              @id @default(uuid()) @db.Uuid
   phoneNumber          String?             @unique
@@ -227,6 +258,13 @@ model User {
   identityReviews      IdentityReview[]
   identityCaptureSessions IdentityCaptureSession[]
   balanceDisclosureRequests BalanceDisclosureRequest[]
+  wallets              MemberWallet[]
+  escrowBalance        EscrowBalance?
+  payCodes             PayCode[]
+  buyerSettlements     EscrowSettlement[] @relation("EscrowSettlementBuyer")
+  merchantSettlements  EscrowSettlement[] @relation("EscrowSettlementMerchant")
+  unloads              EscrowUnload[]
+  escrowChainEvents    EscrowChainEvent[]
 
   @@index([pinResetQuarantineUntil])
   @@index([isDemo])
@@ -445,8 +483,98 @@ model Transaction {
   originalRefunds       RefundRequest[]   @relation("OriginalRefundTransaction")
   refundRequest         RefundRequest?    @relation("RefundTransaction")
   aidDisbursement       AidRequest?       @relation("AidDisbursementTransaction")
+  escrowSettlement      EscrowSettlement?
 
   @@index([userId, createdAt])
+}
+
+model MemberWallet {
+  id         String           @id @default(uuid()) @db.Uuid
+  userId     String           @db.Uuid
+  address    String           @unique
+  kind       MemberWalletKind
+  chainId    Int
+  isPrimary  Boolean          @default(true)
+  createdAt  DateTime         @default(now())
+  user       User             @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+}
+
+model EscrowBalance {
+  userId            String   @id @db.Uuid
+  lockedMicroUsdt   BigInt   @default(0)
+  reservedMicroUsdt BigInt   @default(0)
+  lastEventAt       DateTime?
+  user              User     @relation(fields: [userId], references: [id])
+}
+
+model EscrowChainEvent {
+  id              String          @id @default(uuid()) @db.Uuid
+  kind            EscrowEventKind
+  txHash          String
+  logIndex        Int
+  blockNumber     BigInt
+  walletAddress   String
+  amountMicroUsdt BigInt
+  ref             String?
+  userId          String?         @db.Uuid
+  createdAt       DateTime        @default(now())
+  user            User?           @relation(fields: [userId], references: [id])
+
+  @@unique([txHash, logIndex])
+  @@index([walletAddress])
+}
+
+model PayCode {
+  id                 String        @id @default(uuid()) @db.Uuid
+  buyerId            String        @db.Uuid
+  codeHash           String
+  maxAmountMicroUsdt BigInt
+  expiresAt          DateTime
+  status             PayCodeStatus @default(ACTIVE)
+  wrongAttempts      Int           @default(0)
+  createdAt          DateTime      @default(now())
+  usedAt             DateTime?
+  buyer              User          @relation(fields: [buyerId], references: [id])
+
+  @@index([buyerId, status])
+  @@index([expiresAt, status])
+}
+
+model EscrowSettlement {
+  id              String                 @id @default(uuid()) @db.Uuid
+  buyerId         String                 @db.Uuid
+  merchantId      String                 @db.Uuid
+  payCodeId       String                 @unique @db.Uuid
+  amountMicroUsdt BigInt
+  ref             String                 @unique
+  externalRef     String?                @unique
+  status          EscrowSettlementStatus @default(PENDING)
+  transactionId   String?                @unique @db.Uuid
+  chainTxHash     String?
+  lastError       String?
+  attempts        Int                    @default(0)
+  createdAt       DateTime               @default(now())
+  confirmedAt     DateTime?
+  buyer           User                   @relation("EscrowSettlementBuyer", fields: [buyerId], references: [id])
+  merchant        User                   @relation("EscrowSettlementMerchant", fields: [merchantId], references: [id])
+  transaction     Transaction?           @relation(fields: [transactionId], references: [id])
+}
+
+model EscrowUnload {
+  id              String             @id @default(uuid()) @db.Uuid
+  userId          String             @db.Uuid
+  walletAddress   String
+  amountMicroUsdt BigInt
+  ref             String             @unique
+  status          EscrowUnloadStatus @default(PENDING)
+  chainTxHash     String?
+  lastError       String?
+  attempts        Int                @default(0)
+  createdAt       DateTime           @default(now())
+  confirmedAt     DateTime?
+  user            User               @relation(fields: [userId], references: [id])
 }
 
 model SystemSetting {

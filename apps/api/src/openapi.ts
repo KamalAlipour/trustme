@@ -68,6 +68,25 @@ export const openapiDocument = {
     '/v1/me/pin': { post: { responses: { '204': { description: 'PIN changed' } } } },
     '/v1/me/email': { post: { responses: { '202': { description: 'Email verification requested' }, '503': { description: 'Email delivery unavailable' } } } },
     '/v1/me/email/verify': { post: { responses: { '200': { description: 'Verified member profile' } } } },
+    '/v1/me/escrow/config': { get: { responses: { '200': { description: 'Escrow contract and wallet configuration' } } } },
+    '/v1/me/wallets': {
+      get: { responses: { '200': { description: 'Registered member wallets' }, '503': { description: 'Escrow is not configured' } } },
+      post: { responses: { '201': { description: 'Primary wallet registered' }, '409': { description: 'Wallet belongs to another member' }, '503': { description: 'Escrow is not configured' } } },
+    },
+    '/v1/me/escrow': { get: { responses: { '200': { description: 'Member prepaid escrow balance' }, '503': { description: 'Escrow is not configured' } } } },
+    '/v1/me/escrow/pay-codes': {
+      post: { responses: { '201': { description: 'Payment code created without returning its plaintext code' }, '400': { description: 'Invalid payment code or amount' }, '503': { description: 'Escrow is not configured' } } },
+    },
+    '/v1/me/escrow/pay-codes/active': { get: { responses: { '200': { description: 'Active payment code metadata' }, '503': { description: 'Escrow is not configured' } } } },
+    '/v1/me/escrow/pay-codes/{id}': { delete: { responses: { '204': { description: 'Payment code cancelled' }, '404': { description: 'Payment code not found' } } } },
+    '/v1/me/escrow/settlements': {
+      get: { responses: { '200': { description: 'Merchant escrow settlement history' } } },
+      post: { responses: { '201': { description: 'Escrow settlement queued' }, '503': { description: 'Escrow is not configured' } } },
+    },
+    '/v1/me/escrow/unloads': {
+      get: { responses: { '200': { description: 'Escrow unload history' } } },
+      post: { responses: { '201': { description: 'Escrow unload queued' }, '503': { description: 'Escrow is not configured' } } },
+    },
     '/v1/me/devices': { get: { responses: { '200': { description: 'Member devices' } } } },
     '/v1/me/devices/{id}': { delete: { responses: { '204': { description: 'Device revoked' }, '403': { description: 'Forbidden' } } } },
     '/v1/me/logout': { post: { responses: { '204': { description: 'Current device revoked' } } } },

@@ -161,6 +161,7 @@ export function createApp(dependencies: ApiDependencies): express.Express {
       'passwordHash',
       'privateKey',
       'HOT_WALLET_PRIVATE_KEY',
+      'ESCROW_SETTLER_KEY',
       'ADMIN_JWT_SECRET',
       'MEMBER_JWT_SECRET',
       'authorization',

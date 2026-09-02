@@ -36,6 +36,10 @@ const config = {
   nodeEnv: 'test',
   polygonRpcUrl: 'http://127.0.0.1:8545',
   usdtContractAddress: getAddress(`0x${'99'.repeat(20)}`),
+  escrowChainId: 137,
+  escrowContractAddress: undefined,
+  walletConnectProjectId: undefined,
+  web3AuthClientId: undefined,
   hotWalletAddress: getAddress(`0x${'aa'.repeat(20)}`),
   port: 3100,
   bodyLimit: '32kb',
@@ -189,7 +193,7 @@ beforeAll(async () => {
   await prisma.$connect();
 });
 beforeEach(async () => {
-  await prisma.$executeRawUnsafe('TRUNCATE TABLE "BalanceDisclosureRequest", "MediaAsset", "IdentityReview", "IdentityCaptureSession", "RefundRequest", "AidRequest", "CharityAgent", "Charity", "AdminAuditLog", "AdminUser", "Withdrawal", "EscrowHold", "EmailVerification", "MemberDevice", "Contact", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User", "ChainCursor", "SystemSetting" CASCADE');
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "EscrowChainEvent", "EscrowUnload", "EscrowSettlement", "PayCode", "EscrowBalance", "MemberWallet", "BalanceDisclosureRequest", "MediaAsset", "IdentityReview", "IdentityCaptureSession", "RefundRequest", "AidRequest", "CharityAgent", "Charity", "AdminAuditLog", "AdminUser", "Withdrawal", "EscrowHold", "EmailVerification", "MemberDevice", "Contact", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User", "ChainCursor", "SystemSetting" CASCADE');
   await prisma.systemSetting.createMany({ data: [
     { key: 'WITHDRAWAL_BASE_FEE_BPS', value: '100' },
     { key: 'WITHDRAWAL_MIN_FEE_USDT', value: '0.20' },
@@ -206,6 +210,21 @@ describe('member API', () => {
   const nationalCode = '3141592659';
   const mismatchingNationalCode = '2718281820';
   const identityConfig = { shahkarApiToken: 'test-shahkar-token', identityHashPepper: 'identity-test-pepper-that-is-at-least-32-characters' };
+
+  it('disables prepaid escrow operations when no contract is configured', async () => {
+    const { app } = appFixture();
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+15550000001', barcodeId: 'escrow-disabled' });
+    const accessToken = await memberToken(app, '+15550000001');
+    const configResult = await request(app).get('/v1/me/escrow/config').set('Authorization', `Bearer ${accessToken}`);
+    expect(configResult.status).toBe(200);
+    expect(configResult.body).toMatchObject({ enabled: false, contractAddress: null, chainId: 137, decimals: 6 });
+    const walletResult = await request(app).post('/v1/me/wallets').set('Authorization', `Bearer ${accessToken}`).send({
+      address: `0x${'11'.repeat(20)}`,
+      kind: 'EXTERNAL',
+    });
+    expect(walletResult.status).toBe(503);
+    expect(walletResult.body).toEqual({ error: 'escrow_not_configured' });
+  });
 
   it('returns 503 when identity verification is not configured', async () => {
     const { app } = appFixture();

@@ -2,9 +2,10 @@ import { beforeAll, afterAll, beforeEach, describe, expect, it, vi } from 'vites
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { HDNodeWallet, id, Transaction, zeroPadValue, getAddress } from 'ethers';
+import { HDNodeWallet, id, Interface, Transaction, zeroPadValue, getAddress } from 'ethers';
 import { AccountType, Asset, DepositSweepStatus, PrismaClient, WithdrawalStatus } from '@trustme/db';
-import { postDeposit, readDemoCirculation, requestWithdrawal } from '@trustme/core';
+import { postDeposit, readDemoCirculation, requestWithdrawal, trustCouponEscrowAbi } from '@trustme/core';
+import { decodeEscrowLog } from '../src/escrow-ingest.js';
 import { churnDemoCoupons } from '../src/demo-churn.js';
 import { confirmWithdrawal, dispatchWithdrawal } from '../src/dispatch.js';
 import { ingestOnce } from '../src/ingest.js';
@@ -97,13 +98,29 @@ beforeAll(async () => {
   await prisma.$connect();
 });
 beforeEach(async () => {
-  await prisma.$executeRawUnsafe('TRUNCATE TABLE "MediaAsset", "RefundRequest", "AidRequest", "CharityAgent", "Charity", "AdminAuditLog", "AdminUser", "Withdrawal", "DepositSweep", "EscrowHold", "EmailVerification", "MemberDevice", "Contact", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User", "ChainCursor" CASCADE');
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "EscrowChainEvent", "EscrowUnload", "EscrowSettlement", "PayCode", "EscrowBalance", "MemberWallet", "MediaAsset", "RefundRequest", "AidRequest", "CharityAgent", "Charity", "AdminAuditLog", "AdminUser", "Withdrawal", "DepositSweep", "EscrowHold", "EmailVerification", "MemberDevice", "Contact", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User", "ChainCursor" CASCADE');
 });
 afterAll(async () => {
   await prisma.$disconnect();
 });
 
 describe('chain ingest', () => {
+  it('decodes escrow event logs', () => {
+    const iface = new Interface(trustCouponEscrowAbi);
+    const event = iface.getEvent('Deposited');
+    if (event === null) throw new Error('missing Deposited event');
+    const encoded = iface.encodeEventLog(event, ['0x0000000000000000000000000000000000000001', 123n, 123n]);
+    const decoded = decodeEscrowLog({
+      address: '0x0000000000000000000000000000000000000002',
+      topics: encoded.topics,
+      data: encoded.data,
+      blockNumber: 1,
+      transactionHash: '0xabc',
+      index: 0,
+    });
+    expect(decoded?.amountMicroUsdt).toBe(123n);
+    expect(decoded?.walletAddress).toBe('0x0000000000000000000000000000000000000001');
+  });
   it('processes confirmed deposits and replays idempotently', async () => {
     const fixtureAccounts = await fixture();
     const provider = new FakeChainProvider({

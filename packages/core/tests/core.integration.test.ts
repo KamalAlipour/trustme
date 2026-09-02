@@ -1,5 +1,5 @@
 import { beforeAll, afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { PrismaClient, AccountType, Asset, EscrowStatus, TransactionStatus, WithdrawalStatus } from '@trustme/db';
+import { PrismaClient, AccountType, Asset, EscrowEventKind, EscrowStatus, TransactionStatus, WithdrawalStatus } from '@trustme/db';
 import {
   calculateSolvency,
   issueDemoCoupons,
@@ -16,6 +16,11 @@ import {
   releaseEscrow,
   requestWithdrawal,
   transferCoupons,
+  applyEscrowChainEvent,
+  confirmSettlement,
+  createPayCode,
+  failSettlement,
+  settleWithPayCode,
 } from '../src/index.js';
 
 const prisma = new PrismaClient();
@@ -50,7 +55,7 @@ beforeAll(async () => {
   await prisma.$connect();
 });
 beforeEach(async () => {
-  await prisma.$executeRawUnsafe('TRUNCATE TABLE "MediaAsset", "RefundRequest", "AidRequest", "CharityAgent", "Charity", "AdminAuditLog", "AdminUser", "Withdrawal", "EscrowHold", "EmailVerification", "MemberDevice", "Contact", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User" CASCADE');
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "EscrowChainEvent", "EscrowUnload", "EscrowSettlement", "PayCode", "EscrowBalance", "MemberWallet", "MediaAsset", "RefundRequest", "AidRequest", "CharityAgent", "Charity", "AdminAuditLog", "AdminUser", "Withdrawal", "EscrowHold", "EmailVerification", "MemberDevice", "Contact", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User" CASCADE');
 });
 afterAll(async () => {
   await prisma.$disconnect();
@@ -407,5 +412,51 @@ describe('money and ledger domain', () => {
       await reconcileDemoIssuance(tx, 2n);
     })).rejects.toThrow('previous issuance');
     expect((await prisma.ledgerAccount.findUniqueOrThrow({ where: { id: demoIssuance.id } })).balance).toBe(-8n);
+  });
+});
+
+describe('prepaid USDT escrow', () => {
+  it('locks out a pay code after three wrong attempts and rejects expiry/over-amount', async () => {
+    const fixtureAccounts = await fixture(2);
+    const users = await prisma.user.findMany({ orderBy: { barcodeId: 'asc' } });
+    await prisma.escrowBalance.create({ data: { userId: users[0]!.id, lockedMicroUsdt: 2_000_000n } });
+    const code = await createPayCode(prisma, { buyerId: users[0]!.id, code: '1234', maxAmountMicroUsdt: 1_000_000n, expiresAt: new Date(Date.now() + 60_000) });
+    for (let attempt = 0; attempt < 3; attempt += 1) await expect(settleWithPayCode(prisma, { merchantId: users[1]!.id, buyerBarcodeId: users[0]!.barcodeId, code: '0000', amountMicroUsdt: 100_000n })).rejects.toThrow();
+    expect((await prisma.payCode.findUniqueOrThrow({ where: { id: code.id } })).status).toBe('CANCELLED');
+    await expect(createPayCode(prisma, { buyerId: users[0]!.id, code: '1111', maxAmountMicroUsdt: 2_000_001n, expiresAt: new Date(Date.now() + 60_000) })).rejects.toThrow();
+    const expired = await createPayCode(prisma, { buyerId: users[0]!.id, code: '2222', maxAmountMicroUsdt: 100_000n, expiresAt: new Date(Date.now() + 60_000) });
+    await prisma.payCode.update({ where: { id: expired.id }, data: { expiresAt: new Date(Date.now() - 1_000) } });
+    await expect(settleWithPayCode(prisma, { merchantId: users[1]!.id, buyerBarcodeId: users[0]!.barcodeId, code: '2222', amountMicroUsdt: 100_000n })).rejects.toThrow(/expired/);
+    expect(fixtureAccounts.users).toHaveLength(2);
+  });
+
+  it('prevents double spend, confirms idempotently, and releases reservation on failure', async () => {
+    const fixtureAccounts = await fixture(2);
+    const users = await prisma.user.findMany({ orderBy: { barcodeId: 'asc' } });
+    await prisma.escrowBalance.create({ data: { userId: users[0]!.id, lockedMicroUsdt: 2_000_000n } });
+    await createPayCode(prisma, { buyerId: users[0]!.id, code: '1234', maxAmountMicroUsdt: 1_000_000n, expiresAt: new Date(Date.now() + 60_000) });
+    const result = await settleWithPayCode(prisma, { merchantId: users[1]!.id, buyerBarcodeId: users[0]!.barcodeId, code: '1234', amountMicroUsdt: 1_000_000n });
+    await expect(createPayCode(prisma, { buyerId: users[0]!.id, code: '5678', maxAmountMicroUsdt: 1_000_001n, expiresAt: new Date(Date.now() + 60_000) })).rejects.toThrow();
+    const confirmed = await confirmSettlement(prisma, { ref: result.settlement.ref, txHash: '0xsettle' });
+    expect((await confirmSettlement(prisma, { ref: result.settlement.ref, txHash: '0xother' })).id).toBe(confirmed.id);
+    expect((await prisma.escrowBalance.findUniqueOrThrow({ where: { userId: users[0]!.id } })).lockedMicroUsdt).toBe(1_000_000n);
+    expect(fixtureAccounts.issuance).toBeTruthy();
+    await createPayCode(prisma, { buyerId: users[0]!.id, code: '9999', maxAmountMicroUsdt: 500_000n, expiresAt: new Date(Date.now() + 60_000) });
+    const pending = await settleWithPayCode(prisma, { merchantId: users[1]!.id, buyerBarcodeId: users[0]!.barcodeId, code: '9999', amountMicroUsdt: 500_000n });
+    const failed = await failSettlement(prisma, { settlementId: pending.settlement.id, error: 'retryable failure' });
+    expect(failed.status).toBe('FAILED');
+    expect((await prisma.escrowBalance.findUniqueOrThrow({ where: { userId: users[0]!.id } })).reservedMicroUsdt).toBe(0n);
+  });
+
+  it('records chain events idempotently and preserves unknown deposits', async () => {
+    const fixtureAccounts = await fixture(1);
+    const user = await prisma.user.findFirstOrThrow();
+    const wallet = await prisma.memberWallet.create({ data: { userId: user.id, address: '0x0000000000000000000000000000000000000001', kind: 'EXTERNAL', chainId: 137 } });
+    const event = { kind: EscrowEventKind.DEPOSIT, txHash: '0xdeposit', logIndex: 0, blockNumber: 1n, walletAddress: wallet.address, amountMicroUsdt: 123n };
+    await applyEscrowChainEvent(prisma, event);
+    await applyEscrowChainEvent(prisma, event);
+    expect(await prisma.escrowChainEvent.count()).toBe(1);
+    expect((await prisma.escrowBalance.findUniqueOrThrow({ where: { userId: user.id } })).lockedMicroUsdt).toBe(123n);
+    expect(fixtureAccounts.users).toHaveLength(1);
   });
 });
