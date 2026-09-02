@@ -17,6 +17,7 @@ export const fa: Translations = {
   shareBarcode: 'اشتراک‌گذاری بارکد',
   barcodeShareUnavailable: 'اشتراک‌گذاری در این دستگاه در دسترس نیست.',
   pin: 'رمز چهار رقمی',
+  pinIsSet: 'برای این حساب یک رمز چهاررقمی ثبت شده است.',
   confirmPin: 'تکرار رمز',
   displayName: 'نام نمایشی',
   email: 'ایمیل',

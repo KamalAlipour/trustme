@@ -15,6 +15,7 @@ export const en = {
   shareBarcode: 'Share barcode',
   barcodeShareUnavailable: 'Sharing is unavailable on this device.',
   pin: 'Four-digit PIN',
+  pinIsSet: 'A four-digit PIN is set for this account.',
   confirmPin: 'Confirm PIN',
   displayName: 'Display name',
   email: 'Email',

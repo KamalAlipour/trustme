@@ -29,6 +29,7 @@ export default function Profile() {
   const [pin, setPin] = useState('');
   const [email, setEmail] = useState('');
   const [emailCode, setEmailCode] = useState('');
+  const [emailCodeSent, setEmailCodeSent] = useState(false);
   const [newPhone, setNewPhone] = useState('');
   const [phonePin, setPhonePin] = useState('');
   const [phoneBusy, setPhoneBusy] = useState(false);
@@ -36,6 +37,7 @@ export default function Profile() {
   const [phoneError, setPhoneError] = useState('');
   const [currentPin, setCurrentPin] = useState('');
   const [newPin, setNewPin] = useState('');
+  const [pinEditing, setPinEditing] = useState(false);
   const [nationalCode, setNationalCode] = useState('');
   const [country, setCountry] = useState('');
   const [countryLoading, setCountryLoading] = useState(false);
@@ -53,6 +55,8 @@ export default function Profile() {
   const [emailError, setEmailError] = useState('');
   const [emailBusy, setEmailBusy] = useState<'send' | 'verify' | null>(null);
   const previousLanguage = useRef(language);
+  const displayNamePrefilled = useRef(false);
+  const current = member.data;
   const emailIsValid = isValidEmail(email);
   const emailCodeIsValid = isValidEmailCode(emailCode);
   const updateWithdrawAmount = (value: string) => {
@@ -72,6 +76,13 @@ export default function Profile() {
       previousLanguage.current = language;
     }
   }, [language, t]);
+  useEffect(() => {
+    if (displayNamePrefilled.current) return;
+    const name = current?.displayName;
+    if (name === undefined || name === null) return;
+    setDisplayName(name);
+    displayNamePrefilled.current = true;
+  }, [current?.displayName]);
   useEffect(() => {
     const amount = withdrawAmount.trim();
     if (amount.length === 0) {
@@ -122,7 +133,7 @@ export default function Profile() {
       const message = await submitEmailAction('send', email, async (value) => {
         await request('/v1/me/email', { method: 'POST', body: { email: value } });
       }, t);
-      if (message !== null) setEmailFeedback(message);
+      if (message !== null) { setEmailFeedback(message); setEmailCodeSent(true); }
     } catch (cause) { setEmailError(cause instanceof ApiError ? cause.message : t.unknownError); } finally { setEmailBusy(null); }
   };
   const savePhone = async () => {
@@ -147,12 +158,12 @@ export default function Profile() {
       const message = await submitEmailAction('verify', emailCode, async (value) => {
         await request('/v1/me/email/verify', { method: 'POST', body: { code: value } });
       }, t);
-      if (message !== null) { setEmailCode(''); setEmailFeedback(message); await invalidate(); }
+      if (message !== null) { setEmailCode(''); setEmailFeedback(message); setEmailCodeSent(false); await invalidate(); }
     } catch (cause) { setEmailError(cause instanceof ApiError ? cause.message : t.unknownError); } finally { setEmailBusy(null); }
   };
   const changePin = async () => {
     setError(''); setNotice('');
-    try { await request('/v1/me/pin', { method: 'POST', body: { currentPin, newPin } }); setCurrentPin(''); setNewPin(''); setNotice(t.pinChanged); } catch (cause) { setError(cause instanceof ApiError ? cause.message : t.unknownError); }
+    try { await request('/v1/me/pin', { method: 'POST', body: { currentPin, newPin } }); setCurrentPin(''); setNewPin(''); setNotice(t.pinChanged); setPinEditing(false); } catch (cause) { setError(cause instanceof ApiError ? cause.message : t.unknownError); }
   };
   const enableBiometric = async () => {
     setError(''); setNotice('');
@@ -194,7 +205,6 @@ export default function Profile() {
       setCountryLoading(false);
     }
   };
-  const current = member.data;
   const selectedCountry = country || current?.country || '';
   const filteredCountries = ISO_ALPHA2_COUNTRIES.filter(({ code, name }) => {
     const query = countrySearch.trim().toLowerCase();
@@ -289,16 +299,34 @@ export default function Profile() {
         <TextInput value={email} onChangeText={(value) => { setEmail(value); setEmailFeedback(''); setEmailError(''); }} placeholder={t.email} style={styles.input} keyboardType="email-address" autoCapitalize="none" />
         {!emailIsValid && email.trim().length > 0 ? <Text style={styles.danger}>{t.invalidEmail}</Text> : null}
         <Pressable disabled={!emailIsValid || emailBusy !== null} onPress={() => void requestEmail()} style={[styles.secondaryButton, !emailIsValid || emailBusy !== null ? styles.buttonDisabled : null]}><Text style={styles.secondaryButtonText}>{emailBusy === 'send' ? t.sendingEmailCode : t.sendCode}</Text></Pressable>
-        <TextInput value={emailCode} onChangeText={(value) => setEmailCode(value.replace(/\D/g, '').slice(0, 6))} placeholder={t.sixDigitCode} style={styles.input} keyboardType="number-pad" />
-        <Pressable disabled={!emailCodeIsValid || emailBusy !== null} onPress={() => void verifyEmail()} style={[styles.secondaryButton, !emailCodeIsValid || emailBusy !== null ? styles.buttonDisabled : null]}><Text style={styles.secondaryButtonText}>{emailBusy === 'verify' ? t.verifyingEmail : t.verify}</Text></Pressable>
+        {emailCodeSent ? <>
+          <TextInput value={emailCode} onChangeText={(value) => setEmailCode(value.replace(/\D/g, '').slice(0, 6))} placeholder={t.sixDigitCode} style={styles.input} keyboardType="number-pad" />
+          <Pressable disabled={!emailCodeIsValid || emailBusy !== null} onPress={() => void verifyEmail()} style={[styles.secondaryButton, !emailCodeIsValid || emailBusy !== null ? styles.buttonDisabled : null]}><Text style={styles.secondaryButtonText}>{emailBusy === 'verify' ? t.verifyingEmail : t.verify}</Text></Pressable>
+        </> : null}
         {emailFeedback ? <Text style={styles.notice}>{emailFeedback}</Text> : null}
         {emailError ? <Text style={styles.danger}>{emailError}</Text> : null}
       </View>
       <View style={styles.card}>
         <Text style={styles.heading}>{t.pin}</Text>
-        <TextInput value={currentPin} onChangeText={(value) => setCurrentPin(value.replace(/\D/g, '').slice(0, 4))} placeholder={t.currentPin} style={styles.input} keyboardType="number-pad" secureTextEntry />
-        <TextInput value={newPin} onChangeText={(value) => setNewPin(value.replace(/\D/g, '').slice(0, 4))} placeholder={t.newPin} style={styles.input} keyboardType="number-pad" secureTextEntry />
-        <Pressable onPress={() => void changePin()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.changePin}</Text></Pressable>
+        {pinEditing ? <>
+          <TextInput value={currentPin} onChangeText={(value) => setCurrentPin(value.replace(/\D/g, '').slice(0, 4))} placeholder={t.currentPin} style={styles.input} keyboardType="number-pad" secureTextEntry />
+          <TextInput value={newPin} onChangeText={(value) => setNewPin(value.replace(/\D/g, '').slice(0, 4))} placeholder={t.newPin} style={styles.input} keyboardType="number-pad" secureTextEntry />
+          <Pressable
+            disabled={currentPin.length !== 4 || newPin.length !== 4}
+            onPress={() => void changePin()}
+            style={[styles.button, currentPin.length !== 4 || newPin.length !== 4 ? styles.buttonDisabled : null]}
+          >
+            <Text style={styles.buttonText}>{t.changePin}</Text>
+          </Pressable>
+          <Pressable onPress={() => { setCurrentPin(''); setNewPin(''); setPinEditing(false); }} style={styles.secondaryButton}>
+            <Text style={styles.secondaryButtonText}>{t.cancel}</Text>
+          </Pressable>
+        </> : <>
+          <Text style={styles.notice}>{t.pinIsSet}</Text>
+          <Pressable onPress={() => setPinEditing(true)} style={styles.secondaryButton}>
+            <Text style={styles.secondaryButtonText}>{t.changePin}</Text>
+          </Pressable>
+        </>}
       </View>
       <View style={styles.card}>
         <Text style={styles.heading}>{t.devices}</Text>
