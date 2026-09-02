@@ -1,17 +1,18 @@
 import React, { useEffect, useState } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
 import { Pressable, Share, Text, TextInput, View } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 import { ApiError, request } from '../../src/api/client';
 import { useSession } from '../../src/auth/session';
 import { Page, LoadingScreen } from '../../src/components/Screen';
-import { useBalance, useDisclosures, useEscrowBalance, useEscrowConfig, useInvalidateMoney, useMember } from '../../src/hooks';
+import { useBalance, useDisclosures, useEscrowConfig, useInvalidateMoney, useMember } from '../../src/hooks';
 import { useTranslation } from '../../src/i18n';
 import { randomFourDigitCode } from '../../src/lib/code';
 import { formatEscrowCountdown } from '../../src/lib/escrow';
 import { mapApiError } from '../../src/lib/errors';
-import { formatCoupons, formatMicroUsdt } from '../../src/lib/format';
+import { formatCoupons } from '../../src/lib/format';
 import { colors, styles } from '../../src/styles';
 
 function formatDisclosureCountdown(expiresAt: string, now: number): string {
@@ -29,7 +30,6 @@ export default function Home() {
   const disclosures = useDisclosures();
   const escrowConfig = useEscrowConfig();
   const escrowEnabled = escrowConfig.data?.enabled === true;
-  const escrowBalance = useEscrowBalance(escrowEnabled);
   const invalidate = useInvalidateMoney();
   const params = useLocalSearchParams<{ barcodeId?: string; field?: string }>();
   const [amount, setAmount] = useState('');
@@ -156,7 +156,13 @@ export default function Home() {
   };
   return (
     <Page>
-      <View style={styles.row}><Text style={styles.title}>{t.home}</Text><Pressable onPress={() => router.push('/contacts')}><Text style={styles.secondaryButtonText}>{t.contacts}</Text></Pressable></View>
+      <View style={styles.row}>
+        <Text style={styles.title}>{t.home}</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+          <Pressable onPress={() => router.push('/contacts')}><Text style={styles.secondaryButtonText}>{t.contacts}</Text></Pressable>
+          {escrowEnabled ? <Pressable accessibilityRole="button" accessibilityLabel={t.escrow.title} onPress={() => router.push('/tether')}><Ionicons name="wallet-outline" size={28} color={colors.ink} /></Pressable> : null}
+        </View>
+      </View>
       {disclosures.data?.items.map((disclosure) => (
         <View key={disclosure.id} style={styles.card}>
           <Text style={styles.heading}>{t.balanceDisclosureTitle}</Text>
@@ -210,11 +216,6 @@ export default function Home() {
         </Pressable>
         {barcodeShareError ? <Text style={styles.danger}>{barcodeShareError}</Text> : null}
       </View> : null}
-      {escrowEnabled ? <Pressable onPress={() => router.push('/tether')} style={styles.card}>
-        <Text style={styles.heading}>{t.escrow.title}</Text>
-        <Text style={styles.muted}>{t.escrow.locked}: {formatMicroUsdt(escrowBalance.data?.lockedMicroUsdt ?? '0', language)} USDT</Text>
-        <Text style={styles.muted}>{t.escrow.available}: {formatMicroUsdt(escrowBalance.data?.availableMicroUsdt ?? '0', language)} USDT</Text>
-      </Pressable> : null}
       <View style={styles.card}>
         <Text style={styles.heading}>{merchant ? t.payMerchant : t.send}</Text>
         <TextInput value={barcodeId} onChangeText={setBarcodeId} placeholder={t.barcode} style={styles.input} />
