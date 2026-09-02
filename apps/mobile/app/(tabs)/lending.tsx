@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Modal, Pressable, Text, TextInput, View } from 'react-native';
 import { request, ApiError } from '../../src/api/client';
 import { useSession } from '../../src/auth/session';
-import { useLoans, useInvalidateMoney, useContacts } from '../../src/hooks';
+import { useLoans, useInvalidateMoney } from '../../src/hooks';
 import { Page, LoadingScreen } from '../../src/components/Screen';
 import { randomFourDigitCode } from '../../src/lib/code';
 import { greaterThan, nextInstallmentAmount } from '../../src/lib/coupons';
@@ -11,30 +11,19 @@ import { useTranslation } from '../../src/i18n';
 import { styles } from '../../src/styles';
 import { CharitySection } from '../../src/components/CharitySection';
 import { HeaderIcons } from '../../src/components/HeaderIcons';
+import { CreditRequestForm } from '../../src/components/CreditRequestForm';
 
 export default function Lending() {
   const { t, direction, language } = useTranslation();
   const loans = useLoans();
-  const contacts = useContacts();
   const invalidate = useInvalidateMoney();
   const { member, getStepUpPin } = useSession();
-  const [principal, setPrincipal] = useState('');
-  const [installments, setInstallments] = useState([{ dueAt: new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10), amountCoupons: '' }]);
-  const [selectedGuarantors, setSelectedGuarantors] = useState<string[]>([]);
   const [codes, setCodes] = useState<Record<string, string>>({});
   const [pins, setPins] = useState<Record<string, string>>({});
   const [repaymentAmounts, setRepaymentAmounts] = useState<Record<string, string>>({});
   const [revealedCode, setRevealedCode] = useState<string | null>(null);
   const [error, setError] = useState('');
   if (loans.isLoading) return <LoadingScreen />;
-  const submitLoan = async () => {
-    if (selectedGuarantors.length === 0) { setError(t.loanMinimumGuarantor); return; }
-    try {
-      const rows = installments.map((installment) => ({ dueAt: new Date(`${installment.dueAt}T23:59:59.000Z`).toISOString(), amountCoupons: installment.amountCoupons || principal }));
-      await request('/v1/me/loans', { method: 'POST', body: { principalCoupons: principal, installments: rows, guarantors: selectedGuarantors.map((barcodeId) => ({ barcodeId, amountCoupons: principal })) } });
-      setPrincipal(''); setSelectedGuarantors([]); setInstallments([{ dueAt: new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10), amountCoupons: '' }]); await invalidate();
-    } catch (cause) { setError(cause instanceof ApiError ? cause.message : t.unknownError); }
-  };
   const repay = async (loanId: string, amount: string) => {
     if (!isPositiveCoupons(amount)) { setError(t.repaymentPositive); return; }
     const loan = loans.data?.items.find((item) => item.id === loanId);
@@ -62,23 +51,7 @@ export default function Lending() {
   return (
     <Page>
       <View style={styles.row}><Text style={styles.title}>{t.lending}</Text><HeaderIcons /></View>
-      <View style={styles.card}>
-        <Text style={styles.heading}>{t.loanRequest}</Text>
-        <TextInput value={principal} onChangeText={(value) => setPrincipal(value.replace(/\D/g, ''))} placeholder={t.amount} style={styles.input} keyboardType="number-pad" />
-        {installments.map((installment, index) => <View key={`${index}-${installment.dueAt}`} style={{ gap: 8 }}>
-          <Text style={styles.muted}>{t.installment(index)}</Text>
-          <TextInput value={installment.amountCoupons} onChangeText={(value) => setInstallments((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, amountCoupons: value.replace(/\D/g, '') } : row))} placeholder={t.installmentAmount} style={styles.input} keyboardType="number-pad" />
-          <TextInput value={installment.dueAt} onChangeText={(value) => setInstallments((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, dueAt: value } : row))} placeholder={t.dueDate} style={styles.input} />
-        </View>)}
-        <Pressable onPress={() => setInstallments([...installments, { dueAt: new Date(Date.now() + (installments.length + 1) * 30 * 86400000).toISOString().slice(0, 10), amountCoupons: '' }])} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.addInstallment}</Text></Pressable>
-        <Text style={styles.muted}>{t.guarantors}</Text>
-        {(contacts.data?.items ?? []).map((contact) => {
-          const selected = selectedGuarantors.includes(contact.barcodeId);
-          return <Pressable key={contact.id} onPress={() => setSelectedGuarantors(selected ? selectedGuarantors.filter((barcodeId) => barcodeId !== contact.barcodeId) : [...selectedGuarantors, contact.barcodeId])}><Text style={{ ...styles.text, color: selected ? '#216E4E' : undefined }}>{selected ? '✅ ' : '◻️ '}{contact.alias} ({contact.displayName ?? contact.barcodeId})</Text></Pressable>;
-        })}
-        <Pressable onPress={() => void submitLoan()} style={styles.button}><Text style={styles.buttonText}>{t.submitRequest}</Text></Pressable>
-        {error ? <Text style={styles.danger}>{error}</Text> : null}
-      </View>
+      <CreditRequestForm operationError={error} />
       {(loans.data?.items ?? []).map((loan) => (
         <View key={loan.id} style={styles.card}>
           <Text style={styles.heading}>{t.loanTitle(formatCoupons(loan.principalCoupons, language))}</Text>
