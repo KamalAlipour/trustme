@@ -321,6 +321,7 @@ export const en = {
     topUpAmount: 'USDT amount',
     topUpButton: 'Lock USDT in escrow',
     topUpSubmitted: 'Top-up submitted. Confirmation takes a moment before the balance appears.',
+    publicRpcUnavailable: 'The operator has not configured a public RPC endpoint yet. In-app wallet top-ups are unavailable until it is configured.',
     insufficientUsdt: 'The wallet does not have enough USDT.',
     insufficientGas: 'The wallet does not have enough POL for gas.',
     confirmationNotice: 'On-chain confirmation takes a moment. This balance updates after the event is ingested.',

@@ -323,6 +323,7 @@ export const fa: Translations = {
     topUpAmount: 'مقدار USDT',
     topUpButton: 'قفل کردن USDT در امانت',
     topUpSubmitted: 'افزایش موجودی ارسال شد. پیش از نمایش موجودی، تأیید کمی زمان می‌برد.',
+    publicRpcUnavailable: 'اپراتور هنوز نقطه پایانی RPC عمومی را تنظیم نکرده است. تا زمان تنظیم آن، افزایش موجودی با کیف پول درون‌برنامه‌ای در دسترس نیست.',
     insufficientUsdt: 'USDT کافی در کیف پول وجود ندارد.',
     insufficientGas: 'POL کافی برای کارمزد شبکه وجود ندارد.',
     confirmationNotice: 'تأیید زنجیره کمی زمان می‌برد. موجودی پس از دریافت رویداد به‌روزرسانی می‌شود.',

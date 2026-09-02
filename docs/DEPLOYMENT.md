@@ -18,6 +18,9 @@ npx tsx scripts/deploy-escrow.ts
 
 `ESCROW_CONTRACT_ADDRESS`, `ESCROW_CHAIN_ID`, `USDT_CONTRACT_ADDRESS`,
 `WALLETCONNECT_PROJECT_ID`, and `WEB3AUTH_CLIENT_ID` are API settings.
+`ESCROW_PUBLIC_RPC_URL` is an optional API setting exposed as `rpcUrl` to the
+mobile app. It must be a public RPC endpoint without an embedded API key,
+because the app receives this value and users can inspect it.
 `ESCROW_CONTRACT_ADDRESS` and `ESCROW_SETTLER_KEY` are worker settings. The
 settler key is worker-only and must never be copied into API configuration,
 logs, or responses. The deployer key is used only by the deployment script.

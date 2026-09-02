@@ -461,7 +461,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       contractAddress: dependencies.config.escrowContractAddress ?? null,
       chainId: dependencies.config.escrowChainId,
       usdtAddress: dependencies.config.usdtContractAddress,
-      rpcUrl: dependencies.config.polygonRpcUrl,
+      rpcUrl: dependencies.config.escrowPublicRpcUrl ?? null,
       decimals: 6,
       walletConnectProjectId: dependencies.config.walletConnectProjectId ?? null,
       web3AuthClientId: dependencies.config.web3AuthClientId ?? null,
