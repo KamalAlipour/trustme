@@ -5,10 +5,10 @@ import QRCode from 'react-native-qrcode-svg';
 import { ApiError, request } from '../../src/api/client';
 import { useSession } from '../../src/auth/session';
 import { Page, LoadingScreen } from '../../src/components/Screen';
-import { useBalance, useDisclosures, useInvalidateMoney, useMember } from '../../src/hooks';
+import { useBalance, useDisclosures, useEscrowBalance, useEscrowConfig, useInvalidateMoney, useMember } from '../../src/hooks';
 import { useTranslation } from '../../src/i18n';
 import { randomFourDigitCode } from '../../src/lib/code';
-import { formatCoupons } from '../../src/lib/format';
+import { formatCoupons, formatMicroUsdt } from '../../src/lib/format';
 import { colors, styles } from '../../src/styles';
 
 function formatDisclosureCountdown(expiresAt: string, now: number): string {
@@ -24,6 +24,8 @@ export default function Home() {
   const profile = useMember();
   const balance = useBalance();
   const disclosures = useDisclosures();
+  const escrowConfig = useEscrowConfig();
+  const escrowBalance = useEscrowBalance(escrowConfig.data?.enabled === true);
   const invalidate = useInvalidateMoney();
   const params = useLocalSearchParams<{ barcodeId?: string }>();
   const [amount, setAmount] = useState('');
@@ -99,6 +101,11 @@ export default function Home() {
         <Text style={{ ...styles.title, fontSize: 34 }}>{formatCoupons(balance.data?.coupons ?? '0', language)}</Text>
         <Text style={styles.muted}>{member?.displayName ?? profile.data?.displayName ?? ''}</Text>
       </View>
+      {escrowConfig.data?.enabled ? <Pressable onPress={() => router.push('/tether')} style={styles.card}>
+        <Text style={styles.heading}>{t.escrow.title}</Text>
+        <Text style={styles.muted}>{t.escrow.locked}: {formatMicroUsdt(escrowBalance.data?.lockedMicroUsdt ?? '0', language)} USDT</Text>
+        <Text style={styles.muted}>{t.escrow.available}: {formatMicroUsdt(escrowBalance.data?.availableMicroUsdt ?? '0', language)} USDT</Text>
+      </Pressable> : null}
       {member?.isRestricted ? <View style={styles.card}><Text style={styles.danger}>{t.restricted}</Text><Text style={styles.text}>{t.restrictedExplanation}</Text></View> : null}
       {ownBarcodeId ? <View style={styles.card}>
         <Text style={styles.heading}>{t.myBarcode}</Text>
