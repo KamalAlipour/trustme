@@ -391,3 +391,26 @@ Web Apple sign-in requires the Services ID to be set as
 `EXPO_PUBLIC_APPLE_WEB_CLIENT_ID` at web export time and appended to the API's
 `APPLE_OAUTH_AUDIENCES`. The web origin must also be registered as the domain
 and return URL for the Services ID in the Apple Developer portal.
+
+## Web publication
+
+Publish the web app with `ops/publish-web.sh`. It reads the public build
+configuration from `/etc/trustme/trustme-web.env` (override with
+`TRUSTME_WEB_ENV_FILE`) containing:
+
+```
+EXPO_PUBLIC_API_URL=
+EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID=
+EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID=
+EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID=
+EXPO_PUBLIC_APPLE_WEB_CLIENT_ID=
+```
+
+The script requires all five values, then rejects any build containing
+`import.meta` and any build missing one of the four client IDs before
+activation. It atomically activates the staged result at
+`/var/www/trustcoupon-web` and retains the previous root as a timestamped
+`.prev-*` directory. `TRUSTME_WEB_ROOT` and
+`TRUSTME_WEB_PREVIOUS_RETENTION` override the target and number of retained
+copies. To roll back, move the active root aside and move the desired retained
+`.prev-*` directory into its place.
