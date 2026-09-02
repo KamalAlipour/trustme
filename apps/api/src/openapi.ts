@@ -102,11 +102,121 @@ export const openapiDocument = {
     '/v1/me/wallets/{id}': { delete: { responses: { '204': { description: 'Wallet removed' }, '404': { description: 'Wallet not found' }, '409': { description: 'Wallet cannot be removed while escrow is locked or pending' } } } },
     '/v1/me/escrow': { get: { responses: { '200': { description: 'Member prepaid escrow balance' }, '503': { description: 'Escrow is not configured' } } } },
     '/v1/me/escrow/pay-codes': {
-      post: { responses: { '201': { description: 'Payment code created without returning its plaintext code' }, '400': { description: 'Invalid payment code or amount' }, '503': { description: 'Escrow is not configured' } } },
+      post: {
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['code', 'pin'],
+                properties: {
+                  code: { type: 'string', pattern: '^\\d{4}$' },
+                  maxAmount: { type: 'string' },
+                  merchantBarcodeId: { type: 'string' },
+                  amount: { type: 'string' },
+                  amountCoupons: { type: 'string', pattern: '^[1-9][0-9]*$' },
+                  pin: { type: 'string', pattern: '^\\d{4}$' },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          '201': { description: 'Payment code created without returning its plaintext code', content: { 'application/json': { schema: { type: 'object', properties: { id: { type: 'string', format: 'uuid' }, expiresAt: { type: 'string', format: 'date-time' }, maxAmount: { type: 'string' }, amount: { type: 'string', nullable: true }, amountCoupons: { type: 'string', nullable: true }, merchantBarcodeId: { type: 'string', nullable: true } } } } } },
+          '400': { description: 'Invalid payment code or amount' },
+          '503': { description: 'Escrow is not configured' },
+        },
+      },
     },
-    '/v1/me/escrow/pay-codes/active': { get: { responses: { '200': { description: 'Active payment code metadata' }, '503': { description: 'Escrow is not configured' } } } },
-    '/v1/me/escrow/pay-codes/incoming': { get: { responses: { '200': { description: 'Incoming directed payment codes' }, '503': { description: 'Escrow is not configured' } } } },
-    '/v1/me/escrow/pay-codes/{id}': { get: { responses: { '200': { description: 'Buyer payment code status' }, '404': { description: 'Payment code not found' } } }, delete: { responses: { '204': { description: 'Payment code cancelled' }, '404': { description: 'Payment code not found' } } } },
+    '/v1/me/escrow/pay-codes/active': {
+      get: {
+        responses: {
+          '200': {
+            description: 'Active payment code metadata',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  nullable: true,
+                  properties: {
+                    id: { type: 'string', format: 'uuid' },
+                    status: { type: 'string' },
+                    expiresAt: { type: 'string', format: 'date-time' },
+                    maxAmount: { type: 'string' },
+                    amount: { type: 'string', nullable: true },
+                    amountCoupons: { type: 'string', nullable: true },
+                    merchantBarcodeId: { type: 'string', nullable: true },
+                    wrongAttempts: { type: 'integer' },
+                  },
+                },
+              },
+            },
+          },
+          '503': { description: 'Escrow is not configured' },
+        },
+      },
+    },
+    '/v1/me/escrow/pay-codes/incoming': {
+      get: {
+        responses: {
+          '200': {
+            description: 'Incoming directed payment codes',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    items: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        properties: {
+                          id: { type: 'string', format: 'uuid' },
+                          amount: { type: 'string' },
+                          amountCoupons: { type: 'string' },
+                          expiresAt: { type: 'string', format: 'date-time' },
+                          buyerBarcodeId: { type: 'string' },
+                          buyerDisplayName: { type: 'string', nullable: true },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          '503': { description: 'Escrow is not configured' },
+        },
+      },
+    },
+    '/v1/me/escrow/pay-codes/{id}': {
+      get: {
+        responses: {
+          '200': {
+            description: 'Buyer payment code status',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string', format: 'uuid' },
+                    status: { type: 'string' },
+                    amount: { type: 'string', nullable: true },
+                    amountCoupons: { type: 'string', nullable: true },
+                    expiresAt: { type: 'string', format: 'date-time' },
+                    merchantBarcodeId: { type: 'string', nullable: true },
+                    wrongAttempts: { type: 'integer' },
+                  },
+                },
+              },
+            },
+          },
+          '404': { description: 'Payment code not found' },
+        },
+      },
+      delete: { responses: { '204': { description: 'Payment code cancelled' }, '404': { description: 'Payment code not found' } } },
+    },
     '/v1/me/escrow/settlements': {
       get: { responses: { '200': { description: 'Merchant escrow settlement history' } } },
       post: { responses: { '201': { description: 'Escrow settlement queued' }, '503': { description: 'Escrow is not configured' } } },
