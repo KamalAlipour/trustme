@@ -14,6 +14,7 @@ import { formatEscrowCountdown } from '../../src/lib/escrow';
 import { mapApiError } from '../../src/lib/errors';
 import { formatCoupons } from '../../src/lib/format';
 import { colors, styles } from '../../src/styles';
+import { HeaderIcons } from '../../src/components/HeaderIcons';
 
 function formatDisclosureCountdown(expiresAt: string, now: number): string {
   const remainingSeconds = Math.max(0, Math.ceil((new Date(expiresAt).getTime() - now) / 1000));
@@ -158,10 +159,10 @@ export default function Home() {
     <Page>
       <View style={styles.row}>
         <Text style={styles.title}>{t.home}</Text>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+        <HeaderIcons>
           <Pressable accessibilityRole="button" accessibilityLabel={t.contacts} onPress={() => router.push('/contacts')}><Ionicons name="book-outline" size={28} color={colors.ink} /></Pressable>
           {escrowEnabled ? <Pressable accessibilityRole="button" accessibilityLabel={t.escrow.title} onPress={() => router.push('/tether')}><Ionicons name="wallet-outline" size={28} color={colors.ink} /></Pressable> : null}
-        </View>
+        </HeaderIcons>
       </View>
       {disclosures.data?.items.map((disclosure) => (
         <View key={disclosure.id} style={styles.card}>

@@ -10,6 +10,7 @@ import { styles } from '../../src/styles';
 import { RefundSheet } from '../../src/components/RefundSheet';
 import { SellerRefundPanel } from '../../src/components/SellerRefundPanel';
 import { canRequestRefund, refundableRemainder } from '../../src/lib/refunds';
+import { HeaderIcons } from '../../src/components/HeaderIcons';
 
 export default function Purchases() {
   const { t, language } = useTranslation();
@@ -41,7 +42,7 @@ export default function Purchases() {
   const sortLabel = { direction: t.sortDirection, 'date-desc': t.newestFirst, 'date-asc': t.oldestFirst, 'amount-desc': t.highestAmountFirst, 'amount-asc': t.lowestAmountFirst }[sort];
   return (
     <Page>
-      <Text style={styles.title}>{t.purchases}</Text>
+      <View style={styles.row}><Text style={styles.title}>{t.purchases}</Text><HeaderIcons /></View>
       <SellerRefundPanel />
       <TextInput value={search} onChangeText={setSearch} placeholder={t.searchCounterparty} style={styles.input} />
       <Text style={styles.muted}>{t.loadedHistoryOnly}</Text>

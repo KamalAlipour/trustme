@@ -5,17 +5,18 @@ import * as Clipboard from 'expo-clipboard';
 import * as Linking from 'expo-linking';
 import { BrowserProvider, Contract, JsonRpcProvider, MaxUint256, Wallet } from 'ethers';
 import EthereumProvider from '@walletconnect/ethereum-provider';
-import { ApiError, request } from '../src/api/client';
-import type { EscrowConfig, EscrowSettlement, EscrowWallet } from '../src/api/types';
-import { useEscrowBalance, useEscrowConfig, useEscrowSettlements, useEscrowUnloads, useInvalidateMoney } from '../src/hooks';
+import { ApiError, LockedError, request } from '../src/api/client';
+import type { EscrowConfig, EscrowSettlement, EscrowWallet, WithdrawalQuote } from '../src/api/types';
+import { useAvailability, useBalance, useEscrowBalance, useEscrowConfig, useEscrowSettlements, useEscrowUnloads, useInvalidateMoney } from '../src/hooks';
 import { useSession } from '../src/auth/session';
 import { Page, LoadingScreen } from '../src/components/Screen';
 import { useTranslation } from '../src/i18n';
 import { clearEscrowMnemonic, createInAppWallet, readEscrowMnemonic, saveEscrowMnemonic } from '../src/lib/escrow-wallet';
 import { isValidRecoveryPhrase, normalizeRecoveryPhrase, parseRecoveryPhrase, parseUsdtAmount, randomVerificationWordIndices, shouldApproveAllowance, verifyMnemonicWords, withWalletConnectDeadline } from '../src/lib/escrow';
-import { formatDate, formatMicroUsdt } from '../src/lib/format';
+import { formatCoupons, formatDate, formatMicroUsdt } from '../src/lib/format';
 import { mapApiError } from '../src/lib/errors';
 import { colors, styles } from '../src/styles';
+import { HeaderIcons } from '../src/components/HeaderIcons';
 
 const ERC20_ABI = [
   'function allowance(address owner,address spender) view returns (uint256)',
@@ -59,6 +60,8 @@ export default function Tether() {
   const balance = useEscrowBalance(enabled);
   const settlements = useEscrowSettlements(enabled);
   const unloads = useEscrowUnloads(enabled);
+  const moneyBalance = useBalance();
+  const availability = useAvailability();
   const invalidate = useInvalidateMoney();
   const [wallet, setWallet] = useState<EscrowWallet | null>(null);
   const [draftWords, setDraftWords] = useState<string[] | null>(null);
@@ -72,11 +75,18 @@ export default function Tether() {
   const [walletConnectSession, setWalletConnectSession] = useState<WalletConnectSession | null>(null);
   const [topUpAmount, setTopUpAmount] = useState('');
   const [unloadAmount, setUnloadAmount] = useState('');
+  const [withdrawAmount, setWithdrawAmount] = useState('');
+  const [destination, setDestination] = useState('');
+  const [pin, setPin] = useState('');
   const unloadPrefilled = useRef(false);
   const connectCancel = useRef<((error: Error) => void) | null>(null);
   const [removeWalletConfirm, setRemoveWalletConfirm] = useState(false);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState('');
+  const [eligibleAt, setEligibleAt] = useState<string | null>(null);
+  const [withdrawalQuote, setWithdrawalQuote] = useState<WithdrawalQuote | null>(null);
+  const [withdrawalQuoteError, setWithdrawalQuoteError] = useState('');
+  const [withdrawalQuoteLoading, setWithdrawalQuoteLoading] = useState(false);
 
 
   useEffect(() => {
@@ -89,6 +99,35 @@ export default function Tether() {
     setUnloadAmount(formatMicroUsdt(available, 'en'));
     unloadPrefilled.current = true;
   }, [balance.data?.availableMicroUsdt]);
+  useEffect(() => {
+    const amount = withdrawAmount.trim();
+    if (amount.length === 0) {
+      setWithdrawalQuote(null);
+      setWithdrawalQuoteError('');
+      setWithdrawalQuoteLoading(false);
+      return;
+    }
+    setWithdrawalQuote(null);
+    setWithdrawalQuoteError('');
+    setWithdrawalQuoteLoading(true);
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void request<WithdrawalQuote>(`/v1/me/withdrawals/quote?couponsGross=${encodeURIComponent(amount)}`)
+        .then((quote) => {
+          if (!cancelled) setWithdrawalQuote(quote);
+        })
+        .catch((cause: unknown) => {
+          if (!cancelled) setWithdrawalQuoteError(cause instanceof ApiError ? cause.message : t.quoteUnavailable);
+        })
+        .finally(() => {
+          if (!cancelled) setWithdrawalQuoteLoading(false);
+        });
+    }, 350);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [withdrawAmount, t]);
 
   const shortAddress = useMemo(() => wallet === null ? '' : `${wallet.address.slice(0, 6)}…${wallet.address.slice(-4)}`, [wallet]);
   const availableMicroUsdt = BigInt(balance.data?.availableMicroUsdt ?? '0');
@@ -98,7 +137,7 @@ export default function Tether() {
   }, [recoveryPhrase]);
   if (config.isLoading) return <LoadingScreen />;
   if (!config.data?.enabled) {
-    return <Page><Pressable onPress={() => router.back()}><Text style={styles.secondaryButtonText}>{t.escrow.back}</Text></Pressable><Text style={styles.title}>{t.escrow.title}</Text><Text style={styles.muted}>{t.comingSoon}</Text></Page>;
+    return <Page><View style={styles.row}><Pressable onPress={() => router.back()}><Text style={styles.secondaryButtonText}>{t.escrow.back}</Text></Pressable><Text style={styles.title}>{t.escrow.title}</Text><HeaderIcons /></View><Text style={styles.muted}>{t.comingSoon}</Text></Page>;
   }
 
   const displayError = (cause: unknown, fallback = t.unknownError): string => {
@@ -304,6 +343,30 @@ export default function Tether() {
       await invalidate();
     });
   };
+  const updateWithdrawAmount = (value: string) => {
+    const amount = value.replace(/\D/g, '');
+    setWithdrawAmount(amount);
+    setWithdrawalQuote(null);
+    setWithdrawalQuoteError('');
+    setWithdrawalQuoteLoading(amount.length > 0);
+  };
+  const withdraw = async () => {
+    setMessage('');
+    try {
+      const stepUp = pin || await getStepUpPin();
+      if (!stepUp) {
+        setMessage(t.operationPinRequired);
+        return;
+      }
+      const withdrawal = await request<{ eligibleAt: string }>('/v1/me/withdrawals', { method: 'POST', body: { destinationAddress: destination, couponsGross: withdrawAmount, pin: stepUp } });
+      setPin('');
+      setEligibleAt(withdrawal.eligibleAt);
+      setMessage(t.withdrawalSubmitted);
+      await invalidate();
+    } catch (cause) {
+      setMessage(cause instanceof LockedError ? `${cause.message} (${t.lockedSeconds(cause.retryAfter)})` : cause instanceof ApiError ? cause.message : t.unknownError);
+    }
+  };
   const copyAddress = async () => {
     if (wallet !== null) {
       await Clipboard.setStringAsync(wallet.address);
@@ -318,7 +381,7 @@ export default function Tether() {
 
   return (
     <Page>
-      <View style={styles.row}><Pressable onPress={() => router.back()}><Text style={styles.secondaryButtonText}>{t.escrow.back}</Text></Pressable><Text style={styles.title}>{t.escrow.title}</Text></View>
+      <View style={styles.row}><Pressable onPress={() => router.back()}><Text style={styles.secondaryButtonText}>{t.escrow.back}</Text></Pressable><Text style={styles.title}>{t.escrow.title}</Text><HeaderIcons /></View>
       <View style={styles.card}>
         <Text style={styles.heading}>{t.escrow.locked}</Text>
         <Text style={styles.title}>{formatMicroUsdt(balance.data?.lockedMicroUsdt ?? '0', language)} USDT</Text>
@@ -354,6 +417,32 @@ export default function Tether() {
         <Pressable onPress={useFullAvailable} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.escrow.useFullAvailable}</Text></Pressable>
         <Pressable disabled={busy !== ''} onPress={() => void requestUnload()} style={[styles.button, busy !== '' ? styles.buttonDisabled : null]}><Text style={styles.buttonText}>{t.escrow.unloadButton}</Text></Pressable></> : null}
         {(unloads.data?.items ?? []).slice(0, 3).map((item) => <Text key={item.id} style={item.status === 'CONFIRMED' ? styles.notice : item.status === 'FAILED' ? styles.danger : styles.muted}>{item.status === 'CONFIRMED' ? t.escrow.unloadConfirmed : item.status === 'FAILED' ? t.escrow.unloadFailed : t.escrow.unloadPending}: {item.amount} USDT</Text>)}
+      </View> : null}
+
+      <View style={styles.card}>
+        <Text style={styles.heading}>{t.depositAddress}</Text>
+        <Text selectable style={styles.text}>{moneyBalance.data?.depositAddress ?? t.notAssigned}</Text>
+      </View>
+
+      {availability.data && BigInt(availability.data.availableToWithdrawCoupons) > 0n ? <View style={styles.card}>
+        <Text style={styles.heading}>{t.withdrawal}</Text>
+        <Text style={styles.muted}>{t.withdrawCreditExplainer}</Text>
+        <Text style={styles.text}>{t.totalCollateral}: {formatCoupons(availability.data.totalCollateralCoupons, language)}</Text>
+        <Text style={styles.text}>{t.lockedGuarantee}: {formatCoupons(availability.data.lockedGuaranteeCoupons, language)}</Text>
+        <Text style={styles.text}>{t.debt}: {formatCoupons(availability.data.outstandingDebtCoupons, language)}</Text>
+        <Text style={styles.heading}>{t.availableToWithdraw}: {formatCoupons(availability.data.availableToWithdrawCoupons, language)}</Text>
+        {availability.data.blockers.map((blocker) => <Text key={blocker} style={styles.danger}>{blocker === 'identity_unverified' ? t.identityWithdrawalRequired : blocker}</Text>)}
+        <TextInput value={withdrawAmount} onChangeText={updateWithdrawAmount} placeholder={t.amount} style={styles.input} keyboardType="number-pad" />
+        {withdrawalQuoteLoading ? <Text style={styles.muted}>{t.quoteLoading}</Text> : null}
+        {withdrawalQuoteError ? <Text style={styles.danger}>{withdrawalQuoteError}</Text> : null}
+        {withdrawalQuote ? <>
+          <Text style={styles.text}>{t.platformFee}: {formatMicroUsdt(withdrawalQuote.feeMicroUsdt, language)} USDT</Text>
+          <Text style={styles.heading}>{t.amountReceived}: {formatMicroUsdt(withdrawalQuote.netMicroUsdt, language)} USDT</Text>
+        </> : null}
+        <TextInput value={destination} onChangeText={setDestination} placeholder={t.destinationAddress} style={styles.input} />
+        <TextInput value={pin} onChangeText={(value) => setPin(value.replace(/\D/g, '').slice(0, 4))} placeholder={t.pin} style={styles.input} keyboardType="number-pad" secureTextEntry />
+        <Pressable disabled={withdrawalQuote === null || withdrawalQuoteLoading} onPress={() => void withdraw()} style={styles.button}><Text style={styles.buttonText}>{t.submitWithdrawal}</Text></Pressable>
+        {eligibleAt ? <Text style={styles.muted}>{t.eligibleAt}: {formatDate(eligibleAt, language)}</Text> : null}
       </View> : null}
 
       <View style={styles.card}>
