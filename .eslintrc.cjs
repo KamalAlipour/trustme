@@ -6,4 +6,11 @@ module.exports = {
   plugins: ['@typescript-eslint'],
   extends: ['eslint:recommended', 'plugin:@typescript-eslint/recommended', 'prettier'],
   ignorePatterns: ['dist', 'node_modules', 'packages/db/prisma/generated', 'apps/mobile/babel.config.js'],
+  overrides: [
+    {
+      files: ['apps/mobile/metro.config.js'],
+      parserOptions: { project: null },
+      rules: { '@typescript-eslint/no-require-imports': 'off' },
+    },
+  ],
 };
