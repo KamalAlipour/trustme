@@ -27,11 +27,11 @@ export default function TabsLayout() {
       headerShown: false,
       tabBarActiveTintColor: colors.primary,
       tabBarInactiveTintColor: colors.muted,
-      tabBarLabelStyle: { fontSize: 14, fontWeight: '700' },
+      tabBarLabelStyle: { fontSize: 16, fontWeight: '700' },
       tabBarStyle: {
-        height: 68,
+        height: 82,
         paddingTop: 8,
-        paddingBottom: 8,
+        paddingBottom: 12,
         borderTopWidth: 1,
         borderTopColor: colors.border,
         backgroundColor: colors.card,
@@ -39,18 +39,22 @@ export default function TabsLayout() {
     }}>
       <Tabs.Screen name="index" options={{
         title: t.home,
+        tabBarLabel: t.tabHome,
         tabBarIcon: ({ color, size }) => <Ionicons name="home-outline" color={color} size={size} />,
       }} />
       <Tabs.Screen name="purchases" options={{
         title: t.purchases,
+        tabBarLabel: t.tabPurchases,
         tabBarIcon: ({ color, size }) => <Ionicons name="receipt-outline" color={color} size={size} />,
       }} />
       <Tabs.Screen name="lending" options={{
         title: t.lending,
+        tabBarLabel: t.tabLending,
         tabBarIcon: ({ color, size }) => <Ionicons name="cash-outline" color={color} size={size} />,
       }} />
       <Tabs.Screen name="profile" options={{
         title: t.profile,
+        tabBarLabel: t.tabProfile,
         tabBarIcon: ({ color, size }) => <Ionicons name="person-outline" color={color} size={size} />,
       }} />
     </Tabs>

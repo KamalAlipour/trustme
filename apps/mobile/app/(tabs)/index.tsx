@@ -99,7 +99,7 @@ export default function Home() {
       <Pressable onPress={() => router.push('/barcodes')} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.barcodeSearch}</Text></Pressable>
       <View style={styles.card}>
         <Text style={styles.muted}>{t.balance}</Text>
-        <Text style={{ ...styles.title, fontSize: 34 }}>{formatCoupons(balance.data?.coupons ?? '0', language)}</Text>
+        <Text style={{ ...styles.title, fontSize: 40 }}>{formatCoupons(balance.data?.coupons ?? '0', language)}</Text>
         <Text style={styles.muted}>{member?.displayName ?? profile.data?.displayName ?? ''}</Text>
       </View>
       {escrowConfig.data?.enabled ? <Pressable onPress={() => router.push('/tether')} style={styles.card}>
