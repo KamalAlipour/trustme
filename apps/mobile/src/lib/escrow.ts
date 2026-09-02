@@ -1,6 +1,5 @@
 import { getRandomBytesAsync } from 'expo-crypto';
 import { Mnemonic } from 'ethers';
-import type { EscrowSettlement } from '../api/types';
 
 const MICRO_USDT = 1_000_000n;
 
@@ -65,10 +64,4 @@ export function parseRecoveryPhrase(value: string): string {
   const phrase = normalizeRecoveryPhrase(value);
   if (!Mnemonic.isValidMnemonic(phrase)) throw new Error('invalid recovery phrase');
   return phrase;
-}
-
-export function selectBuyerSettlementConfirmation(settlements: EscrowSettlement[], createdAt: number): EscrowSettlement | null {
-  return settlements
-    .filter((settlement) => settlement.role === 'BUYER' && settlement.status !== 'FAILED' && new Date(settlement.createdAt).getTime() >= createdAt)
-    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())[0] ?? null;
 }

@@ -99,12 +99,14 @@ export const openapiDocument = {
       get: { responses: { '200': { description: 'Registered member wallets' }, '503': { description: 'Escrow is not configured' } } },
       post: { responses: { '201': { description: 'Primary wallet registered' }, '409': { description: 'Wallet belongs to another member' }, '503': { description: 'Escrow is not configured' } } },
     },
+    '/v1/me/wallets/{id}': { delete: { responses: { '204': { description: 'Wallet removed' }, '404': { description: 'Wallet not found' }, '409': { description: 'Wallet cannot be removed while escrow is locked or pending' } } } },
     '/v1/me/escrow': { get: { responses: { '200': { description: 'Member prepaid escrow balance' }, '503': { description: 'Escrow is not configured' } } } },
     '/v1/me/escrow/pay-codes': {
       post: { responses: { '201': { description: 'Payment code created without returning its plaintext code' }, '400': { description: 'Invalid payment code or amount' }, '503': { description: 'Escrow is not configured' } } },
     },
     '/v1/me/escrow/pay-codes/active': { get: { responses: { '200': { description: 'Active payment code metadata' }, '503': { description: 'Escrow is not configured' } } } },
-    '/v1/me/escrow/pay-codes/{id}': { delete: { responses: { '204': { description: 'Payment code cancelled' }, '404': { description: 'Payment code not found' } } } },
+    '/v1/me/escrow/pay-codes/incoming': { get: { responses: { '200': { description: 'Incoming directed payment codes' }, '503': { description: 'Escrow is not configured' } } } },
+    '/v1/me/escrow/pay-codes/{id}': { get: { responses: { '200': { description: 'Buyer payment code status' }, '404': { description: 'Payment code not found' } } }, delete: { responses: { '204': { description: 'Payment code cancelled' }, '404': { description: 'Payment code not found' } } } },
     '/v1/me/escrow/settlements': {
       get: { responses: { '200': { description: 'Merchant escrow settlement history' } } },
       post: { responses: { '201': { description: 'Escrow settlement queued' }, '503': { description: 'Escrow is not configured' } } },

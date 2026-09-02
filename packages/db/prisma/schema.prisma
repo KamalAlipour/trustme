@@ -260,7 +260,8 @@ model User {
   balanceDisclosureRequests BalanceDisclosureRequest[]
   wallets              MemberWallet[]
   escrowBalance        EscrowBalance?
-  payCodes             PayCode[]
+  payCodes             PayCode[]          @relation("PayCodeBuyer")
+  payCodesToCollect    PayCode[]          @relation("PayCodeMerchant")
   buyerSettlements     EscrowSettlement[] @relation("EscrowSettlementBuyer")
   merchantSettlements  EscrowSettlement[] @relation("EscrowSettlementMerchant")
   unloads              EscrowUnload[]
@@ -530,17 +531,21 @@ model EscrowChainEvent {
 model PayCode {
   id                 String        @id @default(uuid()) @db.Uuid
   buyerId            String        @db.Uuid
+  merchantId         String?       @db.Uuid
   codeHash           String
+  amountMicroUsdt    BigInt?
   maxAmountMicroUsdt BigInt
   expiresAt          DateTime
   status             PayCodeStatus @default(ACTIVE)
   wrongAttempts      Int           @default(0)
   createdAt          DateTime      @default(now())
   usedAt             DateTime?
-  buyer              User          @relation(fields: [buyerId], references: [id])
+  buyer              User          @relation("PayCodeBuyer", fields: [buyerId], references: [id])
+  merchant           User?         @relation("PayCodeMerchant", fields: [merchantId], references: [id])
 
   @@index([buyerId, status])
   @@index([expiresAt, status])
+  @@index([merchantId, status, expiresAt])
 }
 
 model EscrowSettlement {
