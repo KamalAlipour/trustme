@@ -2,10 +2,11 @@ import React from 'react';
 import { Pressable, Text, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { requestRecordingPermissionsAsync, useAudioPlayer, useAudioRecorder, useAudioRecorderState } from 'expo-audio';
+import { Ionicons } from '@expo/vector-icons';
 import { BrowserFileSystemUnavailableError, uploadMedia } from '../api/media';
 import type { MediaAsset, MediaKind } from '../api/types';
 import { useTranslation } from '../i18n';
-import { styles } from '../styles';
+import { colors, styles } from '../styles';
 
 type EvidenceItem = { localUri: string; kind: MediaKind; mimeType: string; media: MediaAsset | null; state: 'uploading' | 'ready' | 'failed' };
 
@@ -76,14 +77,52 @@ export function EvidencePicker({ mediaIds, onChange }: { mediaIds: string[]; onC
   return (
     <View style={styles.card}>
       <Text style={styles.heading}>{t.evidence}</Text>
-      <View style={styles.row}>
-        <Pressable disabled={items.length >= 10} onPress={() => void toggleRecording()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{recorderState.isRecording ? t.stopRecordingDuration(Math.floor(recorderState.durationMillis / 1000)) : t.captureAudio}</Text></Pressable>
-        <Pressable disabled={items.length >= 10} onPress={() => void pick('IMAGE', 'library')} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.captureImage}</Text></Pressable>
-        <Pressable disabled={items.length >= 10} onPress={() => void pick('VIDEO', 'library')} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.captureVideo}</Text></Pressable>
-      </View>
-      <View style={styles.row}>
-        <Pressable disabled={items.length >= 10} onPress={() => void pick('IMAGE', 'camera')} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.captureCameraImage}</Text></Pressable>
-        <Pressable disabled={items.length >= 10} onPress={() => void pick('VIDEO', 'camera')} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.captureCameraVideo}</Text></Pressable>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 24, paddingVertical: 4 }}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t.captureAudio}
+          disabled={items.length >= 10}
+          onPress={() => void toggleRecording()}
+        >
+          <Ionicons
+            name={recorderState.isRecording ? 'stop-circle' : 'mic-outline'}
+            size={30}
+            color={recorderState.isRecording ? colors.danger : items.length >= 10 ? colors.muted : colors.primary}
+          />
+          {recorderState.isRecording ? <Text style={styles.muted}>{t.stopRecordingDuration(Math.floor(recorderState.durationMillis / 1000))}</Text> : null}
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t.captureImage}
+          disabled={items.length >= 10}
+          onPress={() => void pick('IMAGE', 'library')}
+        >
+          <Ionicons name="images-outline" size={30} color={items.length >= 10 ? colors.muted : colors.primary} />
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t.captureVideo}
+          disabled={items.length >= 10}
+          onPress={() => void pick('VIDEO', 'library')}
+        >
+          <Ionicons name="film-outline" size={30} color={items.length >= 10 ? colors.muted : colors.primary} />
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t.captureCameraImage}
+          disabled={items.length >= 10}
+          onPress={() => void pick('IMAGE', 'camera')}
+        >
+          <Ionicons name="camera-outline" size={30} color={items.length >= 10 ? colors.muted : colors.primary} />
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t.captureCameraVideo}
+          disabled={items.length >= 10}
+          onPress={() => void pick('VIDEO', 'camera')}
+        >
+          <Ionicons name="videocam-outline" size={30} color={items.length >= 10 ? colors.muted : colors.primary} />
+        </Pressable>
       </View>
       {items.map((item, index) => <View key={`${item.localUri}-${index}`} style={styles.row}>
         <Text style={item.state === 'failed' ? styles.danger : styles.muted}>{item.state === 'uploading' ? t.uploading : item.state === 'failed' ? t.uploadFailed : t.uploaded}</Text>
