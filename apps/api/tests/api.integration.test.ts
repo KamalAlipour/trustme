@@ -602,11 +602,12 @@ describe('member API', () => {
 
   it('creates and reuses Google identities and requires first-time PIN setup', async () => {
     const { app } = appFixture(undefined, undefined, {}, true, {
-      verifyGoogleIdToken: async () => ({ subject: 'google-subject', email: 'social@example.com' }),
+      verifyGoogleIdToken: async () => ({ subject: 'google-subject', email: 'social@example.com', emailVerified: true }),
     });
     const first = await request(app).post('/v1/auth/google').set('x-device-label', 'Google device').send({ idToken: 'verified-token' });
     expect(first.status).toBe(200);
     expect(first.body.member).toMatchObject({ phone: null, email: 's****@example.com' });
+    expect(await prisma.user.findUniqueOrThrow({ where: { email: 'social@example.com' } })).toMatchObject({ emailVerifiedAt: expect.any(Date) });
     expect(await prisma.userIdentity.count()).toBe(1);
     expect((await request(app).get('/v1/me/security-setup').set('Authorization', `Bearer ${first.body.tokens.accessToken}`)).body.remaining).toEqual(['pin', 'biometric_enrolment']);
 
@@ -627,7 +628,7 @@ describe('member API', () => {
 
   it('does not auto-link a social identity by email', async () => {
     const { app } = appFixture(undefined, undefined, {}, true, {
-      verifyAppleIdToken: async () => ({ subject: 'apple-subject', email: 'taken@example.com' }),
+      verifyAppleIdToken: async () => ({ subject: 'apple-subject', email: 'taken@example.com', emailVerified: false }),
     });
     const existing = await request(app).post('/v1/auth/register').send({ phone: '+1555000990', pin: '2468', email: 'taken@example.com' });
     expect(existing.status).toBe(201);
@@ -637,6 +638,53 @@ describe('member API', () => {
     expect(social.body.member.email).toBeNull();
     const identity = await prisma.userIdentity.findUniqueOrThrow({ where: { provider_subject: { provider: 'APPLE', subject: 'apple-subject' } } });
     expect(identity.email).toBe('taken@example.com');
+  });
+
+  it('does not mark an unverified Apple email as verified', async () => {
+    const { app } = appFixture(undefined, undefined, {}, true, {
+      verifyAppleIdToken: async () => ({ subject: 'apple-unverified', email: 'apple@example.com', emailVerified: false }),
+    });
+    const social = await request(app).post('/v1/auth/apple').send({ idToken: 'verified-token', displayName: 'Apple Member' });
+    expect(social.status).toBe(200);
+    expect(await prisma.user.findUniqueOrThrow({ where: { email: 'apple@example.com' } })).toMatchObject({ emailVerifiedAt: null });
+  });
+
+  it('does not mark an Apple account without an email as verified', async () => {
+    const { app } = appFixture(undefined, undefined, {}, true, {
+      verifyAppleIdToken: async () => ({ subject: 'apple-no-email', email: null, emailVerified: false }),
+    });
+    const social = await request(app).post('/v1/auth/apple').send({ idToken: 'verified-token', displayName: 'Apple Member' });
+    expect(social.status).toBe(200);
+    const identity = await prisma.userIdentity.findFirstOrThrow({
+      where: { provider: 'APPLE', subject: 'apple-no-email' },
+    });
+    expect(await prisma.user.findUniqueOrThrow({ where: { id: identity.userId } })).toMatchObject({ email: null, emailVerifiedAt: null });
+  });
+
+  it('backfills verification for an existing matching social account', async () => {
+    const { app } = appFixture(undefined, undefined, {}, true, {
+      verifyGoogleIdToken: async () => ({ subject: 'google-backfill', email: 'backfill@example.com', emailVerified: true }),
+    });
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000991', barcodeId: 'social-backfill' });
+    const user = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000991' } });
+    await prisma.user.update({ where: { id: user.id }, data: { email: 'backfill@example.com' } });
+    await prisma.userIdentity.create({ data: { userId: user.id, provider: 'GOOGLE', subject: 'google-backfill', email: 'backfill@example.com' } });
+    const social = await request(app).post('/v1/auth/google').send({ idToken: 'verified-token' });
+    expect(social.status).toBe(200);
+    expect(await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).toMatchObject({ email: 'backfill@example.com', emailVerifiedAt: expect.any(Date) });
+  });
+
+  it('does not backfill verification when an existing social account email differs', async () => {
+    const { app } = appFixture(undefined, undefined, {}, true, {
+      verifyGoogleIdToken: async () => ({ subject: 'google-mismatch', email: 'claims@example.com', emailVerified: true }),
+    });
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000992', barcodeId: 'social-mismatch' });
+    const user = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000992' } });
+    await prisma.user.update({ where: { id: user.id }, data: { email: 'stored@example.com' } });
+    await prisma.userIdentity.create({ data: { userId: user.id, provider: 'GOOGLE', subject: 'google-mismatch', email: 'claims@example.com' } });
+    const social = await request(app).post('/v1/auth/google').send({ idToken: 'verified-token' });
+    expect(social.status).toBe(200);
+    expect(await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).toMatchObject({ email: 'stored@example.com', emailVerifiedAt: null });
   });
 
   it('returns provider_disabled when a provider has no configured audiences', async () => {

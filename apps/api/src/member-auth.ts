@@ -259,7 +259,21 @@ async function socialTokenResponse(
       },
     },
   });
-  if (existing) return tokenResponse(prisma, config, existing.userId, label);
+  if (existing) {
+    if (claims.emailVerified && claims.email !== null) {
+      await withSerializableRetry(prisma, async (tx) => {
+        const user = await tx.user.findUnique({
+          where: { id: existing.userId },
+          select: { email: true, emailVerifiedAt: true },
+        });
+        if (user === null || user.email !== claims.email || user.emailVerifiedAt !== null) return;
+        const now = new Date();
+        await tx.user.update({ where: { id: existing.userId }, data: { emailVerifiedAt: now } });
+        await recomputeSecuritySetupCompletion(tx, existing.userId, config.requireEmailVerification);
+      });
+    }
+    return tokenResponse(prisma, config, existing.userId, label);
+  }
   let omitEmail = false;
   for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
@@ -269,7 +283,10 @@ async function socialTokenResponse(
         const created = await createUserWithAccounts(tx, config, {
           phoneNumber: null,
           ...(displayName === undefined ? {} : { displayName }),
-          ...(claims.email === null || emailTaken || omitEmail ? {} : { email: claims.email }),
+          ...(claims.email === null || emailTaken || omitEmail ? {} : {
+            email: claims.email,
+            ...(claims.emailVerified ? { emailVerifiedAt: new Date() } : {}),
+          }),
           barcodeId: generateBarcodeId(),
         });
         await tx.userIdentity.create({

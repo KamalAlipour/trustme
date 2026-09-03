@@ -5,6 +5,7 @@ export type SocialProvider = 'GOOGLE' | 'APPLE';
 export type VerifiedSocialClaims = {
   subject: string;
   email: string | null;
+  emailVerified: boolean;
 };
 export type MemberIdTokenVerifier = (idToken: string, audiences: readonly string[]) => Promise<VerifiedSocialClaims>;
 
@@ -26,14 +27,14 @@ export function validateGoogleClaims(claims: JWTPayload, audiences: readonly str
   if (!hasAudience(claims, audiences)) throw new HttpError(401, 'invalid Google identity token');
   if (typeof claims.sub !== 'string' || claims.sub.length === 0) throw new HttpError(401, 'invalid Google identity token');
   if (claims.email !== undefined && claims.email_verified !== true) throw new HttpError(401, 'invalid Google identity token');
-  return { subject: claims.sub, email: normalizedEmail(claims) };
+  return { subject: claims.sub, email: normalizedEmail(claims), emailVerified: claims.email !== undefined && claims.email_verified === true };
 }
 
 export function validateAppleClaims(claims: JWTPayload, audiences: readonly string[]): VerifiedSocialClaims {
   if (claims.iss !== 'https://appleid.apple.com') throw new HttpError(401, 'invalid Apple identity token');
   if (!hasAudience(claims, audiences)) throw new HttpError(401, 'invalid Apple identity token');
   if (typeof claims.sub !== 'string' || claims.sub.length === 0) throw new HttpError(401, 'invalid Apple identity token');
-  return { subject: claims.sub, email: normalizedEmail(claims) };
+  return { subject: claims.sub, email: normalizedEmail(claims), emailVerified: claims.email !== undefined && (claims.email_verified === true || claims.email_verified === 'true') };
 }
 
 export async function verifyGoogleIdToken(idToken: string, audiences: readonly string[]): Promise<VerifiedSocialClaims> {

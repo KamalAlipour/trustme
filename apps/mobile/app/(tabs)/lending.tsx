@@ -10,6 +10,7 @@ import { formatCoupons, formatDate } from '../../src/lib/format';
 import { useTranslation } from '../../src/i18n';
 import { styles } from '../../src/styles';
 import { CharitySection } from '../../src/components/CharitySection';
+import { HeaderIcons } from '../../src/components/HeaderIcons';
 
 export default function Lending() {
   const { t, direction, language } = useTranslation();
@@ -60,7 +61,7 @@ export default function Lending() {
   };
   return (
     <Page>
-      <Text style={styles.title}>{t.lending}</Text>
+      <View style={styles.row}><Text style={styles.title}>{t.lending}</Text><HeaderIcons /></View>
       <View style={styles.card}>
         <Text style={styles.heading}>{t.loanRequest}</Text>
         <TextInput value={principal} onChangeText={(value) => setPrincipal(value.replace(/\D/g, ''))} placeholder={t.amount} style={styles.input} keyboardType="number-pad" />

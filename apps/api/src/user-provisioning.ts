@@ -17,6 +17,7 @@ export type UserProvisioningInput = {
   aliasName?: string;
   displayName?: string;
   email?: string;
+  emailVerifiedAt?: Date;
   pinHash?: string;
   pinUpdatedAt?: Date;
   isDemo?: boolean;
@@ -46,6 +47,7 @@ export async function createUserWithAccounts(
       ...(input.aliasName === undefined ? {} : { aliasName: input.aliasName }),
       ...(input.displayName === undefined ? {} : { displayName: input.displayName }),
       ...(input.email === undefined ? {} : { email: input.email }),
+      ...(input.emailVerifiedAt === undefined ? {} : { emailVerifiedAt: input.emailVerifiedAt }),
       ...(input.pinHash === undefined ? {} : { pinHash: input.pinHash }),
       ...(input.pinUpdatedAt === undefined ? {} : { pinUpdatedAt: input.pinUpdatedAt }),
       ...(input.isDemo === undefined ? {} : { isDemo: input.isDemo }),

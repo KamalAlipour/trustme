@@ -6,6 +6,7 @@ import { useContacts, useInvalidateMoney } from '../src/hooks';
 import { Page } from '../src/components/Screen';
 import { useTranslation } from '../src/i18n';
 import { styles } from '../src/styles';
+import { HeaderIcons } from '../src/components/HeaderIcons';
 
 export default function Contacts() {
   const { t } = useTranslation();
@@ -26,7 +27,7 @@ export default function Contacts() {
   };
   return (
     <Page>
-      <View style={styles.row}><Text style={styles.title}>{t.contacts}</Text><Pressable onPress={() => router.back()}><Text style={styles.secondaryButtonText}>{t.closeButton}</Text></Pressable></View>
+      <View style={styles.row}><HeaderIcons /><Text style={styles.title}>{t.contacts}</Text><Pressable onPress={() => router.back()}><Text style={styles.secondaryButtonText}>{t.closeButton}</Text></Pressable></View>
       <TextInput value={query} onChangeText={setQuery} placeholder={t.search} style={styles.input} />
       <Pressable onPress={() => setSort(sort === 'alias' ? 'recent' : 'alias')} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{sort === 'alias' ? t.sortByActivity : t.sortByName}</Text></Pressable>
       {(contacts.data?.items ?? []).map((contact) => <View key={contact.id} style={styles.card}>

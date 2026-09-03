@@ -9,7 +9,7 @@ describe('social identity claim validation', () => {
       sub: 'google-subject',
       email: 'Member@Example.com',
       email_verified: true,
-    }, ['google-client'])).toEqual({ subject: 'google-subject', email: 'member@example.com' });
+    }, ['google-client'])).toEqual({ subject: 'google-subject', email: 'member@example.com', emailVerified: true });
   });
 
   it('accepts the alternate Google issuer and audience arrays', () => {
@@ -17,7 +17,7 @@ describe('social identity claim validation', () => {
       iss: 'accounts.google.com',
       aud: ['other-client', 'google-client'],
       sub: 'google-subject',
-    }, ['google-client'])).toEqual({ subject: 'google-subject', email: null });
+    }, ['google-client'])).toEqual({ subject: 'google-subject', email: null, emailVerified: false });
   });
 
   it('rejects wrong issuers, unknown audiences, and missing subjects', () => {
@@ -32,7 +32,13 @@ describe('social identity claim validation', () => {
   });
 
   it('allows Apple claims without an email', () => {
-    expect(validateAppleClaims({ iss: 'https://appleid.apple.com', aud: 'as.komasi.trustcoupon', sub: 'apple-subject' }, ['as.komasi.trustcoupon'])).toEqual({ subject: 'apple-subject', email: null });
+    expect(validateAppleClaims({ iss: 'https://appleid.apple.com', aud: 'as.komasi.trustcoupon', sub: 'apple-subject' }, ['as.komasi.trustcoupon'])).toEqual({ subject: 'apple-subject', email: null, emailVerified: false });
+  });
+
+  it('recognises Apple email verification booleans and strings', () => {
+    expect(validateAppleClaims({ iss: 'https://appleid.apple.com', aud: 'as.komasi.trustcoupon', sub: 'apple-boolean', email: 'boolean@example.com', email_verified: true }, ['as.komasi.trustcoupon']).emailVerified).toBe(true);
+    expect(validateAppleClaims({ iss: 'https://appleid.apple.com', aud: 'as.komasi.trustcoupon', sub: 'apple-string', email: 'string@example.com', email_verified: 'true' }, ['as.komasi.trustcoupon']).emailVerified).toBe(true);
+    expect(validateAppleClaims({ iss: 'https://appleid.apple.com', aud: 'as.komasi.trustcoupon', sub: 'apple-unverified', email: 'unverified@example.com', email_verified: false }, ['as.komasi.trustcoupon']).emailVerified).toBe(false);
   });
 
   it('validates Apple issuer and audience', () => {
