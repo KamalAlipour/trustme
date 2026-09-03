@@ -84,7 +84,24 @@ export type AidRequest = {
 export type Contact = { id: string; alias: string; barcodeId: string; displayName: string | null; lastActivityAt: string | null; createdAt: string };
 export type LoanInstallment = { id: string; sequence: number; dueAt: string; amountCoupons: string; paidCoupons: string; paidAt: string | null };
 export type Guarantee = { id: string; loanId: string; guarantorId: string; amountCoupons: string; status: string; wrongAttempts: number; lockedAt: string | null; activatedAt: string | null; resolvedAt: string | null; guarantor?: { displayName: string | null; barcodeId: string } };
-export type Loan = { id: string; borrowerId: string; lenderId: string | null; principalCoupons: string; outstandingCoupons: string; status: string; createdAt: string; fundedAt: string | null; settledAt: string | null; installments: LoanInstallment[]; guarantees: Guarantee[] };
+export type Loan = {
+  id: string;
+  borrowerId: string;
+  lenderId: string | null;
+  requestedLenderId: string | null;
+  requestedLender: { displayName: string | null; barcodeId: string } | null;
+  borrower: { displayName: string | null; barcodeId: string } | null;
+  description: string | null;
+  principalCoupons: string;
+  outstandingCoupons: string;
+  status: string;
+  createdAt: string;
+  fundedAt: string | null;
+  settledAt: string | null;
+  mediaIds: string[];
+  installments: LoanInstallment[];
+  guarantees: Guarantee[];
+};
 export type WithdrawalAvailability = {
   lockedGuaranteeCoupons: string;
   outstandingDebtCoupons: string;

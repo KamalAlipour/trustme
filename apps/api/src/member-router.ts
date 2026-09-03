@@ -29,6 +29,7 @@ import {
   cancelGuarantee,
   createEscrowHold,
   createLoanRequest,
+  disburseLoan,
   decimalFromMicroUsdt,
   evmAddressSchema,
   fourDigitCodeSchema,
@@ -97,10 +98,14 @@ const loanInstallmentSchema = z.object({ dueAt: z.string().datetime(), amountCou
 const loanGuarantorSchema = z.object({ barcodeId: barcodeIdSchema, amountCoupons: couponsSchema });
 const loanSchema = z.object({
   principalCoupons: couponsSchema,
+  sourceBarcodeId: z.string().trim().min(1),
+  description: z.string().trim().min(1).optional(),
+  mediaIds: z.array(z.string().uuid()).max(10).optional(),
   installments: z.array(loanInstallmentSchema).min(1),
   guarantors: z.array(loanGuarantorSchema).min(1),
 });
 const repaymentSchema = z.object({ amountCoupons: couponsSchema, idempotencyKey: z.string().min(1) });
+const disbursementSchema = z.object({ pin: fourDigitCodeSchema });
 const codeSchema = z.object({ code: fourDigitCodeSchema });
 const emailCodeSchema = z.object({ code: z.string().regex(/^\d{6}$/, 'code must be exactly six digits') });
 const approvalSchema = z.object({ code: fourDigitCodeSchema, pin: fourDigitCodeSchema });
@@ -254,12 +259,17 @@ function serializeLoan(loan: {
   id: string;
   borrowerId: string;
   lenderId: string | null;
+  requestedLenderId?: string | null;
+  requestedLender?: { displayName: string | null; barcodeId: string } | null;
+  borrower?: { displayName: string | null; barcodeId: string } | null;
   principalCoupons: bigint;
   outstandingCoupons: bigint;
+  description?: string | null;
   status: string;
   createdAt: Date;
   fundedAt: Date | null;
   settledAt: Date | null;
+  media?: Array<{ id: string }>;
   installments: Array<{ id: string; sequence: number; dueAt: Date; amountCoupons: bigint; paidCoupons: bigint; paidAt: Date | null }>;
   guarantees: Array<{ id: string; loanId: string; guarantorId: string; amountCoupons: bigint; status: string; wrongAttempts: number; lockedAt: Date | null; activatedAt: Date | null; resolvedAt: Date | null; guarantor: { displayName: string | null; barcodeId: string } }>;
 }) {
@@ -267,12 +277,17 @@ function serializeLoan(loan: {
     id: loan.id,
     borrowerId: loan.borrowerId,
     lenderId: loan.lenderId,
+    requestedLenderId: loan.requestedLenderId ?? null,
+    requestedLender: loan.requestedLender ?? null,
+    borrower: loan.borrower ?? null,
     principalCoupons: loan.principalCoupons.toString(),
     outstandingCoupons: loan.outstandingCoupons.toString(),
+    description: loan.description ?? null,
     status: loan.status,
     createdAt: loan.createdAt,
     fundedAt: loan.fundedAt,
     settledAt: loan.settledAt,
+    mediaIds: loan.media?.map((asset) => asset.id) ?? [],
     installments: loan.installments.map((installment) => ({
       id: installment.id,
       sequence: installment.sequence,
@@ -1412,8 +1427,14 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
     try {
       const userId = memberClaims(request).sub;
       const loans = await prisma.loan.findMany({
-        where: { OR: [{ borrowerId: userId }, { lenderId: userId }] },
-        include: { installments: true, guarantees: { include: { guarantor: { select: { displayName: true, barcodeId: true } } } } },
+        where: { OR: [{ borrowerId: userId }, { lenderId: userId }, { requestedLenderId: userId }] },
+        include: {
+          borrower: { select: { displayName: true, barcodeId: true } },
+          requestedLender: { select: { displayName: true, barcodeId: true } },
+          media: { select: { id: true } },
+          installments: true,
+          guarantees: { include: { guarantor: { select: { displayName: true, barcodeId: true } } } },
+        },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       });
       response.json({ items: loans.map(serializeLoan) });
@@ -1426,17 +1447,56 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
     try {
       const body = loanSchema.parse(request.body);
       const guarantors = await Promise.all(body.guarantors.map(async (guarantor) => ({ guarantorId: (await userByBarcode(prisma, guarantor.barcodeId)).id, amountCoupons: parseCoupons(guarantor.amountCoupons) })));
+      const source = await userByBarcode(prisma, body.sourceBarcodeId);
       const requested = await createLoanRequest(prisma, {
         borrowerId: memberClaims(request).sub,
+        requestedLenderId: source.id,
         principalCoupons: parseCoupons(body.principalCoupons),
+        ...(body.description === undefined ? {} : { description: body.description }),
+        ...(body.mediaIds === undefined ? {} : { mediaIds: body.mediaIds }),
         installments: body.installments.map((installment) => ({ dueAt: new Date(installment.dueAt), amountCoupons: parseCoupons(installment.amountCoupons) })),
         guarantors,
       });
       const loan = await prisma.loan.findUniqueOrThrow({
         where: { id: requested.id },
-        include: { installments: true, guarantees: { include: { guarantor: { select: { displayName: true, barcodeId: true } } } } },
+        include: {
+          borrower: { select: { displayName: true, barcodeId: true } },
+          requestedLender: { select: { displayName: true, barcodeId: true } },
+          media: { select: { id: true } },
+          installments: true,
+          guarantees: { include: { guarantor: { select: { displayName: true, barcodeId: true } } } },
+        },
       });
       response.status(201).json(serializeLoan(loan));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/loans/:id/disburse', async (request, response, next) => {
+    try {
+      const body = disbursementSchema.parse(request.body);
+      const userId = memberClaims(request).sub;
+      const loan = await prisma.loan.findUniqueOrThrow({ where: { id: pathId(request.params.id) } });
+      if (loan.requestedLenderId !== userId) forbidden();
+      await verifyMemberPin(prisma, userId, body.pin);
+      await disburseLoan(prisma, {
+        loanId: loan.id,
+        lenderId: userId,
+        lenderAccountId: (await couponAccount(prisma, userId)).id,
+        borrowerAccountId: (await couponAccount(prisma, loan.borrowerId)).id,
+      });
+      const disbursed = await prisma.loan.findUniqueOrThrow({
+        where: { id: loan.id },
+        include: {
+          borrower: { select: { displayName: true, barcodeId: true } },
+          requestedLender: { select: { displayName: true, barcodeId: true } },
+          media: { select: { id: true } },
+          installments: true,
+          guarantees: { include: { guarantor: { select: { displayName: true, barcodeId: true } } } },
+        },
+      });
+      response.json(serializeLoan(disbursed));
     } catch (error) {
       next(error);
     }

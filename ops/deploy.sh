@@ -23,6 +23,7 @@ while (($# > 0)); do
 done
 
 release_root="${TRUSTME_RELEASE_ROOT:-/opt/trustme/releases}"
+release_retention="${TRUSTME_RELEASE_RETENTION:-5}"
 current_link="${TRUSTME_CURRENT_LINK:-/opt/trustme/current}"
 previous_link="${release_root}/previous"
 repo_cache="${TRUSTME_REPO_CACHE:-/opt/trustme/repository.git}"
@@ -30,6 +31,10 @@ repo_url="${TRUSTME_REPOSITORY_URL:-}"
 release=""
 old_release=""
 require_value TRUSTME_REPOSITORY_URL
+[[ "$release_retention" =~ ^[1-9][0-9]*$ ]] || {
+  printf 'TRUSTME_RELEASE_RETENTION must be a positive integer\n' >&2
+  exit 2
+}
 MARKER_PATH="${FAILOVER_MARKER_PATH:-/etc/trustme/FAILED_OVER}"
 shared_root="${TRUSTME_SHARED_ROOT:-/opt/trustme/shared}"
 trustme_home="${shared_root}/home"
@@ -100,4 +105,15 @@ fi
 if [[ ! -e "$MARKER_PATH" ]]; then
   systemctl start trustme-worker.service
 fi
+current_target="$(readlink -f "$current_link" 2>/dev/null || true)"
+previous_target="$(readlink -f "$previous_link" 2>/dev/null || true)"
+mapfile -t releases < <(find "$release_root" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -rn | awk '{ $1=""; sub(/^ /, ""); print }')
+kept=0
+for candidate in "${releases[@]}"; do
+  kept=$((kept + 1))
+  if ((kept <= release_retention)) || [[ "$candidate" == "$current_target" || "$candidate" == "$previous_target" ]]; then
+    continue
+  fi
+  rm -rf -- "$candidate"
+done
 printf 'deployed %s to %s\n' "$commit" "$release"
