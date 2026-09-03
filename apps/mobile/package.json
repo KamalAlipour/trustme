@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@expo/metro-runtime": "~5.0.5",
+    "@fingerprintjs/fingerprintjs": "5.2.0",
     "@react-native-async-storage/async-storage": "2.1.2",
     "@tanstack/react-query": "5.66.8",
     "@walletconnect/ethereum-provider": "2.23.10",
