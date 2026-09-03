@@ -59,7 +59,7 @@ function useConfiguredCors(app: express.Express, allowedOrigins: string[]): void
       return;
     }
     response.setHeader('Access-Control-Allow-Origin', origin);
-    response.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Device-Label');
+    response.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Device-Label, X-Installation-Id');
     response.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
     response.setHeader('Vary', 'Origin');
     if (request.method === 'OPTIONS') {

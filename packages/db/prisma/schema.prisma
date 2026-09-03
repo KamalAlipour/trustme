@@ -358,6 +358,7 @@ model UserIdentity {
 model MemberDevice {
   id               String    @id @default(uuid()) @db.Uuid
   userId           String    @db.Uuid
+  installationId   String?
   label            String
   refreshTokenHash String    @unique
   createdAt        DateTime  @default(now())
@@ -368,6 +369,7 @@ model MemberDevice {
   user             User      @relation(fields: [userId], references: [id])
 
   @@index([userId, revokedAt])
+  @@index([userId, installationId])
 }
 
 model EmailVerification {

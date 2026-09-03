@@ -8,7 +8,7 @@ import { createLoanRequest, postDeposit } from '@trustme/core';
 import { createApp, type ApiDependencies } from '../src/app.js';
 import { HttpError } from '../src/http-error.js';
 import { provisionUser } from '../src/user-provisioning.js';
-import { createMemberJwt } from '../src/member-auth.js';
+import { createMemberJwt, verifyMemberJwt } from '../src/member-auth.js';
 import { createAdminJwt } from '../src/admin-auth.js';
 import type { AdminChainProvider } from '../src/admin.js';
 import { hashIdentityValue } from '../src/identity.js';
@@ -624,6 +624,68 @@ describe('member API', () => {
       .set('Authorization', `Bearer ${first.body.tokens.accessToken}`)
       .send({ pin: '2468' });
     expect(duplicate.status).toBe(409);
+  });
+
+  it('reuses one active device row for repeated logins from one installation', async () => {
+    const { app } = appFixture();
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000130', barcodeId: 'installation-same' });
+    const user = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000130' } });
+    await prisma.user.update({ where: { id: user.id }, data: { pinHash: await bcrypt.hash('2468', 12) } });
+
+    const first = await request(app).post('/v1/auth/login').set('x-installation-id', 'installation-one').send({ phone: '+1555000130', pin: '2468' });
+    const firstDevice = await prisma.memberDevice.findFirstOrThrow({ where: { userId: user.id } });
+    const firstHash = firstDevice.refreshTokenHash;
+    const second = await request(app).post('/v1/auth/login').set('x-installation-id', 'installation-one').send({ phone: '+1555000130', pin: '2468' });
+    const activeDevices = await prisma.memberDevice.findMany({ where: { userId: user.id, revokedAt: null } });
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(activeDevices).toHaveLength(1);
+    expect(verifyMemberJwt(second.body.tokens.accessToken, config.memberJwtSecret)?.sid).toBe(firstDevice.id);
+    expect(activeDevices[0]?.refreshTokenHash).not.toBe(firstHash);
+  });
+
+  it('creates separate device rows for different installations', async () => {
+    const { app } = appFixture();
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000131', barcodeId: 'installation-diff' });
+    const user = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000131' } });
+    await prisma.user.update({ where: { id: user.id }, data: { pinHash: await bcrypt.hash('2468', 12) } });
+
+    const first = await request(app).post('/v1/auth/login').set('x-installation-id', 'installation-one').send({ phone: '+1555000131', pin: '2468' });
+    const second = await request(app).post('/v1/auth/login').set('x-installation-id', 'installation-two').send({ phone: '+1555000131', pin: '2468' });
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(await prisma.memberDevice.count({ where: { userId: user.id, revokedAt: null } })).toBe(2);
+  });
+
+  it('creates a new device row when logins omit an installation ID', async () => {
+    const { app } = appFixture();
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000132', barcodeId: 'installation-none' });
+    const user = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000132' } });
+    await prisma.user.update({ where: { id: user.id }, data: { pinHash: await bcrypt.hash('2468', 12) } });
+
+    const first = await request(app).post('/v1/auth/login').send({ phone: '+1555000132', pin: '2468' });
+    const second = await request(app).post('/v1/auth/login').send({ phone: '+1555000132', pin: '2468' });
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(await prisma.memberDevice.count({ where: { userId: user.id, revokedAt: null } })).toBe(2);
+  });
+
+  it('preserves the installation ID while rotating a refresh session', async () => {
+    const { app } = appFixture();
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000133', barcodeId: 'installation-refresh' });
+    const user = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000133' } });
+    await prisma.user.update({ where: { id: user.id }, data: { pinHash: await bcrypt.hash('2468', 12) } });
+
+    const login = await request(app).post('/v1/auth/login').set('x-installation-id', 'installation-one').send({ phone: '+1555000133', pin: '2468' });
+    const original = await prisma.memberDevice.findFirstOrThrow({ where: { userId: user.id, revokedAt: null } });
+    const rotated = await request(app).post('/v1/auth/refresh').send({ refreshToken: login.body.tokens.refreshToken });
+    const replacement = await prisma.memberDevice.findUniqueOrThrow({ where: { id: (await prisma.memberDevice.findUniqueOrThrow({ where: { id: original.id } })).replacedById as string } });
+
+    expect(rotated.status).toBe(200);
+    expect(replacement.installationId).toBe('installation-one');
   });
 
   it('does not auto-link a social identity by email', async () => {

@@ -6,10 +6,17 @@ const PIN_KEY = 'trustcoupon.pin';
 const SESSION_MARKER_KEY = 'trustcoupon.session';
 const MANIFESTO_SEEN_KEY = 'trustcoupon.manifestoSeen';
 const LANGUAGE_KEY = 'trustcoupon.language';
+const INSTALLATION_ID_KEY = 'trustcoupon.installationId';
 const options = { requireAuthentication: true, keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY };
 let webRefreshToken: string | null = null;
 let webPin: string | null = null;
 let webSessionMarker = false;
+let fallbackInstallationId: string | null = null;
+
+function generateInstallationId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
 
 function readManifestoFlag(): string | null {
   if (typeof window === 'undefined') return null;
@@ -66,6 +73,27 @@ export async function readRefreshToken(): Promise<string | null> {
 export async function readPin(): Promise<string | null> {
   const pin = isWebPlatform() ? webPin : await SecureStore.getItemAsync(PIN_KEY, options);
   return pin === '' ? null : pin;
+}
+
+export async function readInstallationId(): Promise<string> {
+  if (isWebPlatform()) {
+    try {
+      if (typeof window === 'undefined') throw new Error('localStorage unavailable');
+      const stored = window.localStorage.getItem(INSTALLATION_ID_KEY);
+      if (stored !== null) return stored;
+      const generated = generateInstallationId();
+      window.localStorage.setItem(INSTALLATION_ID_KEY, generated);
+      return generated;
+    } catch {
+      fallbackInstallationId ??= generateInstallationId();
+      return fallbackInstallationId;
+    }
+  }
+  const stored = await SecureStore.getItemAsync(INSTALLATION_ID_KEY);
+  if (stored !== null) return stored;
+  const generated = generateInstallationId();
+  await SecureStore.setItemAsync(INSTALLATION_ID_KEY, generated);
+  return generated;
 }
 
 export async function clearCredentials(): Promise<void> {

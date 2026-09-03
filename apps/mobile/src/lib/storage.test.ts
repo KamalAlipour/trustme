@@ -10,7 +10,7 @@ const platform = vi.hoisted(() => ({ OS: 'ios' as string }));
 vi.mock('expo-secure-store', () => secureStore);
 vi.mock('react-native', () => ({ Platform: platform }));
 
-import { clearCredentials, hasSeenManifesto, hasStoredCredentials, markManifestoSeen, readPin, readRefreshToken, saveCredentials, saveCredentialsWithoutPin, saveRefreshToken } from './storage';
+import { clearCredentials, hasSeenManifesto, hasStoredCredentials, markManifestoSeen, readInstallationId, readPin, readRefreshToken, saveCredentials, saveCredentialsWithoutPin, saveRefreshToken } from './storage';
 
 describe('secure credential storage', () => {
   beforeEach(() => {
@@ -84,5 +84,27 @@ describe('secure credential storage', () => {
     localStorage.getItem.mockReturnValue('1');
     expect(await hasSeenManifesto()).toBe(true);
     expect(secureStore.setItemAsync).not.toHaveBeenCalled();
+  });
+
+  it('generates and reuses a web installation ID', async () => {
+    platform.OS = 'web';
+    let stored: string | null = null;
+    const localStorage = {
+      getItem: vi.fn<(key: string) => string | null>(() => stored),
+      setItem: vi.fn((_key: string, value: string) => { stored = value; }),
+    };
+    vi.stubGlobal('window', { localStorage });
+    const first = await readInstallationId();
+    const second = await readInstallationId();
+    expect(first).toMatch(/^[A-Za-z0-9_-]{8,64}$/);
+    expect(second).toBe(first);
+    expect(localStorage.setItem).toHaveBeenCalledWith('trustcoupon.installationId', first);
+  });
+
+  it('persists a native installation ID without protected storage options', async () => {
+    secureStore.getItemAsync.mockImplementation(async (key: string) => key === 'trustcoupon.installationId' ? null : 'refresh');
+    const installationId = await readInstallationId();
+    expect(installationId).toMatch(/^[A-Za-z0-9_-]{8,64}$/);
+    expect(secureStore.setItemAsync).toHaveBeenCalledWith('trustcoupon.installationId', installationId);
   });
 });
