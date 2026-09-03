@@ -127,9 +127,12 @@ export async function createLoanRequest(
   prisma: PrismaClient,
   input: {
     borrowerId: string;
+    requestedLenderId?: string;
     principalCoupons: bigint;
     installments: readonly LoanInstallmentInput[];
     guarantors: readonly LoanGuarantorInput[];
+    description?: string;
+    mediaIds?: readonly string[];
   },
 ) {
   if (input.principalCoupons <= 0n) throw new DomainError('loan principal must be positive');
@@ -151,10 +154,23 @@ export async function createLoanRequest(
     if (guarantor.amountCoupons <= 0n) throw new DomainError('guarantee amount must be positive');
     if (guarantor.guarantorId === input.borrowerId) throw new DomainError('borrower cannot guarantee their own loan');
   }
+  if (input.guarantors.reduce((total, guarantor) => total + guarantor.amountCoupons, 0n) < input.principalCoupons) {
+    throw new DomainError('guarantees must cover the loan principal');
+  }
+  if (input.requestedLenderId === input.borrowerId) throw new DomainError('loan source cannot be the borrower');
+  const mediaIds = [...new Set(input.mediaIds ?? [])];
+  if (mediaIds.length > 10) throw new DomainError('no more than 10 media assets may be attached');
   const loanId = randomUUID();
   return withSerializableRetry(prisma, async (tx) => {
     await assertNotRestricted(tx, input.borrowerId);
     await assertNoPinResetQuarantine(tx, input.borrowerId);
+    if (input.requestedLenderId !== undefined) {
+      await assertSameDemoSide(tx, input.borrowerId, input.requestedLenderId);
+      await assertNotRestricted(tx, input.requestedLenderId);
+      await assertNoPinResetQuarantine(tx, input.requestedLenderId);
+      const availability = await readWithdrawalAvailabilityInTransaction(tx, input.requestedLenderId, { requireIdentityVerification: false });
+      if (availability.balanceCoupons < input.principalCoupons) throw new DomainError('loan source has insufficient balance');
+    }
     for (const guarantorId of [...guarantorIds].sort()) {
       await assertSameDemoSide(tx, input.borrowerId, guarantorId);
       await assertNotRestricted(tx, guarantorId);
@@ -164,7 +180,9 @@ export async function createLoanRequest(
       data: {
         id: loanId,
         borrowerId: input.borrowerId,
+        ...(input.requestedLenderId === undefined ? {} : { requestedLenderId: input.requestedLenderId }),
         principalCoupons: input.principalCoupons,
+        ...(input.description === undefined ? {} : { description: input.description.trim() }),
         installments: {
           create: input.installments.map((installment, index) => ({
             sequence: index + 1,
@@ -181,6 +199,18 @@ export async function createLoanRequest(
       },
       include: { installments: true, guarantees: true },
     });
+    if (mediaIds.length > 0) {
+      const found = await tx.mediaAsset.findMany({
+        where: { id: { in: mediaIds }, ownerId: input.borrowerId, refundRequestId: null, aidRequestId: null, loanId: null },
+        select: { id: true },
+      });
+      if (found.length !== mediaIds.length) throw new DomainError('invalid media asset');
+      const attached = await tx.mediaAsset.updateMany({
+        where: { id: { in: mediaIds }, ownerId: input.borrowerId, refundRequestId: null, aidRequestId: null, loanId: null },
+        data: { loanId: loan.id },
+      });
+      if (attached.count !== mediaIds.length) throw new DomainError('invalid media asset');
+    }
     return loan;
   });
 }
@@ -287,6 +317,9 @@ export async function disburseLoan(
     await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "Loan" WHERE "id" = ${input.loanId}::uuid FOR UPDATE`);
     const loan = await tx.loan.findUniqueOrThrow({ where: { id: input.loanId } });
     if (loan.status !== LoanStatus.REQUESTED) throw new DomainError('loan is not awaiting disbursement');
+    if (loan.requestedLenderId !== null && input.lenderId !== loan.requestedLenderId) {
+      throw new DomainError('loan was requested from a different source');
+    }
     if (input.lenderId === loan.borrowerId) throw new DomainError('lender cannot be the borrower');
     await assertSameDemoSide(tx, input.lenderId, loan.borrowerId);
     await assertNotRestricted(tx, input.lenderId);

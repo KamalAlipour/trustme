@@ -12,6 +12,7 @@ import { styles } from '../../src/styles';
 import { CharitySection } from '../../src/components/CharitySection';
 import { HeaderIcons } from '../../src/components/HeaderIcons';
 import { CreditRequestForm } from '../../src/components/CreditRequestForm';
+import { EvidenceViewer } from '../../src/components/EvidenceViewer';
 
 export default function Lending() {
   const { t, direction, language } = useTranslation();
@@ -48,10 +49,29 @@ export default function Lending() {
       await invalidate();
     } catch (cause) { setError(cause instanceof ApiError ? cause.message : t.unknownError); }
   };
+  const fund = async (loanId: string) => {
+    try {
+      const pin = await getStepUpPin();
+      if (pin === null) return;
+      await request(`/v1/me/loans/${loanId}/disburse`, { method: 'POST', body: { pin } });
+      await invalidate();
+    } catch (cause) { setError(cause instanceof ApiError ? cause.message : t.unknownError); }
+  };
+  const sourceRequests = (loans.data?.items ?? []).filter((loan) => loan.requestedLenderId === member?.id && loan.status === 'REQUESTED');
   return (
     <Page>
       <View style={styles.row}><Text style={styles.title}>{t.lending}</Text><HeaderIcons /></View>
       <CreditRequestForm />
+      {sourceRequests.length > 0 ? <View style={styles.card}>
+        <Text style={styles.heading}>{t.loanSourceRequests}</Text>
+        {sourceRequests.map((loan) => <View key={loan.id} style={{ gap: 8 }}>
+          <Text style={styles.text}>{t.borrower}: {loan.borrower?.displayName ?? loan.borrower?.barcodeId ?? loan.borrowerId}</Text>
+          <Text style={styles.text}>{t.loanTitle(formatCoupons(loan.principalCoupons, language))}</Text>
+          {loan.description ? <Text style={styles.text}>{loan.description}</Text> : null}
+          <EvidenceViewer ids={loan.mediaIds} />
+          <Pressable onPress={() => void fund(loan.id)} style={styles.button}><Text style={styles.buttonText}>{t.fundLoan}</Text></Pressable>
+        </View>)}
+      </View> : null}
       {(loans.data?.items ?? []).map((loan) => (
         <View key={loan.id} style={styles.card}>
           <Text style={styles.heading}>{t.loanTitle(formatCoupons(loan.principalCoupons, language))}</Text>

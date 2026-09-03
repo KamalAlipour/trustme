@@ -1078,6 +1078,7 @@ describe('member API', () => {
     const guarantorToken = await memberToken(app, guarantor.phoneNumber);
     const loanResponse = await request(app).post('/v1/me/loans').set('Authorization', `Bearer ${borrowerToken}`).send({
       principalCoupons: '2',
+      sourceBarcodeId: lender.barcodeId,
       installments: [{ amountCoupons: '2', dueAt: new Date(Date.now() + 86_400_000).toISOString() }],
       guarantors: [{ barcodeId: guarantor.barcodeId, amountCoupons: '2' }],
     });
@@ -1268,6 +1269,66 @@ describe('member API', () => {
     expect((await request(app).post(`/v1/me/guarantees/${guarantee.id}/decline`).set('Authorization', `Bearer ${tokenA}`)).status).toBe(403);
     expect((await request(app).post(`/v1/me/guarantees/${guarantee.id}/activate`).set('Authorization', `Bearer ${tokenB}`).send({ code: '1234' })).status).toBe(403);
     expect((await request(app).post(`/v1/me/loans/${loan.id}/repay`).set('Authorization', `Bearer ${tokenC}`).send({ amountCoupons: '1', idempotencyKey: 'wrong-repay' })).status).toBe(403);
+  });
+
+  it('creates and disburses a source-directed member loan after guarantee activation', async () => {
+    const { app } = appFixture();
+    const borrower = await request(app).post('/v1/auth/register').send({ phone: '+1555000400', pin: '2468' });
+    const source = await request(app).post('/v1/auth/register').send({ phone: '+1555000401', pin: '2468' });
+    const guarantor = await request(app).post('/v1/auth/register').send({ phone: '+1555000402', pin: '2468' });
+    expect(borrower.status).toBe(201);
+    expect(source.status).toBe(201);
+    expect(guarantor.status).toBe(201);
+    await completeMemberSetup('+1555000400');
+    await completeMemberSetup('+1555000401');
+    await completeMemberSetup('+1555000402');
+    const systems = await addSystemAccounts();
+    await account(AccountType.GUARANTEE_LOCK, Asset.COUPON);
+    const sourceUser = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000401' } });
+    const sourceAccount = await prisma.ledgerAccount.findFirstOrThrow({ where: { userId: sourceUser.id, type: AccountType.USER_COUPON, asset: Asset.COUPON } });
+    await postDeposit(prisma, {
+      externalRef: 'source-directed-loan-fund',
+      userId: sourceUser.id,
+      userCouponAccountId: sourceAccount.id,
+      externalOnchainAccountId: systems.external.id,
+      vaultAccountId: systems.vault.id,
+      issuanceAccountId: systems.issuance.id,
+      amountMicroUsdt: 1_000_000n,
+    });
+    const guarantorUser = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000402' } });
+    const guarantorAccount = await prisma.ledgerAccount.findFirstOrThrow({ where: { userId: guarantorUser.id, type: AccountType.USER_COUPON, asset: Asset.COUPON } });
+    await postDeposit(prisma, {
+      externalRef: 'source-directed-loan-guarantor-fund',
+      userId: guarantorUser.id,
+      userCouponAccountId: guarantorAccount.id,
+      externalOnchainAccountId: systems.external.id,
+      vaultAccountId: systems.vault.id,
+      issuanceAccountId: systems.issuance.id,
+      amountMicroUsdt: 1_000_000n,
+    });
+    const borrowerToken = await memberToken(app, '+1555000400');
+    const sourceToken = await memberToken(app, '+1555000401');
+    const guarantorToken = await memberToken(app, '+1555000402');
+    const created = await request(app).post('/v1/me/loans').set('Authorization', `Bearer ${borrowerToken}`).send({
+      principalCoupons: '50',
+      sourceBarcodeId: source.body.member.barcodeId,
+      description: 'Emergency household expenses',
+      installments: [{ dueAt: new Date(Date.now() + 86_400_000).toISOString(), amountCoupons: '50' }],
+      guarantors: [{ barcodeId: guarantor.body.member.barcodeId, amountCoupons: '50' }],
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.requestedLenderId).toBe(sourceUser.id);
+    expect(created.body.description).toBe('Emergency household expenses');
+    const guaranteeId = created.body.guarantees[0].id as string;
+    const approved = await request(app).post(`/v1/me/guarantees/${guaranteeId}/approve`).set('Authorization', `Bearer ${guarantorToken}`).send({ code: '1234', pin: '2468' });
+    expect(approved.status, JSON.stringify(approved.body)).toBe(200);
+    const activated = await request(app).post(`/v1/me/guarantees/${guaranteeId}/activate`).set('Authorization', `Bearer ${borrowerToken}`).send({ code: '1234' });
+    expect(activated.status).toBe(200);
+    const disbursed = await request(app).post(`/v1/me/loans/${created.body.id}/disburse`).set('Authorization', `Bearer ${sourceToken}`).send({ pin: '2468' });
+    expect(disbursed.status).toBe(200);
+    expect(disbursed.body.status).toBe('ACTIVE');
+    expect(disbursed.body.lenderId).toBe(sourceUser.id);
+    expect(await prisma.transaction.count({ where: { type: 'LOAN_DISBURSE', externalRef: `loan:${created.body.id}:disburse` } })).toBe(1);
   });
 
   it('generates a barcode when omitted while preserving caller-supplied values', async () => {

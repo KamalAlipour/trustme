@@ -89,6 +89,59 @@ beforeEach(async () => {
 afterAll(async () => prisma.$disconnect());
 
 describe('lending domain', () => {
+  it('rejects a requested source that is the borrower', async () => {
+    const fixture = await setup();
+    await expect(createLoanRequest(prisma, {
+      borrowerId: fixture.borrower.id,
+      requestedLenderId: fixture.borrower.id,
+      principalCoupons: 10n,
+      installments: [{ amountCoupons: 10n, dueAt: new Date(Date.now() + 86_400_000) }],
+      guarantors: [{ guarantorId: fixture.guarantorA.id, amountCoupons: 10n }],
+    })).rejects.toThrow('loan source cannot be the borrower');
+  });
+
+  it('rejects guarantees that do not cover the loan principal', async () => {
+    const fixture = await setup();
+    await expect(createLoanRequest(prisma, {
+      borrowerId: fixture.borrower.id,
+      principalCoupons: 10n,
+      installments: [{ amountCoupons: 10n, dueAt: new Date(Date.now() + 86_400_000) }],
+      guarantors: [{ guarantorId: fixture.guarantorA.id, amountCoupons: 9n }],
+    })).rejects.toThrow('guarantees must cover the loan principal');
+  });
+
+  it('rejects a requested source without enough available balance', async () => {
+    const fixture = await setup();
+    const source = await user('empty-source');
+    await expect(createLoanRequest(prisma, {
+      borrowerId: fixture.borrower.id,
+      requestedLenderId: source.id,
+      principalCoupons: 1n,
+      installments: [{ amountCoupons: 1n, dueAt: new Date(Date.now() + 86_400_000) }],
+      guarantors: [{ guarantorId: fixture.guarantorA.id, amountCoupons: 1n }],
+    })).rejects.toThrow('loan source has insufficient balance');
+  });
+
+  it('rejects disbursement by a lender other than the requested source', async () => {
+    const fixture = await setup();
+    const loan = await createLoanRequest(prisma, {
+      borrowerId: fixture.borrower.id,
+      requestedLenderId: fixture.lender.id,
+      principalCoupons: 1n,
+      installments: [{ amountCoupons: 1n, dueAt: new Date(Date.now() + 86_400_000) }],
+      guarantors: [{ guarantorId: fixture.guarantorA.id, amountCoupons: 1n }],
+    });
+    const guarantee = loan.guarantees[0]!;
+    await approveGuarantee(prisma, { guaranteeId: guarantee.id, code: '1234', guarantorAccountId: fixture.guarantorA.account.id, guaranteeLockAccountId: fixture.lock.id });
+    await activateGuarantee(prisma, { guaranteeId: guarantee.id, code: '1234' });
+    await expect(disburseLoan(prisma, {
+      loanId: loan.id,
+      lenderId: fixture.guarantorB.id,
+      lenderAccountId: fixture.guarantorB.account.id,
+      borrowerAccountId: fixture.borrower.account.id,
+    })).rejects.toThrow('loan was requested from a different source');
+  });
+
   it('rejects mixed demo and real transfers, escrows, loans, and withdrawals', async () => {
     const fixture = await setup();
     const demo = await user('demo', true);
@@ -129,7 +182,7 @@ describe('lending domain', () => {
         { amountCoupons: 400n, dueAt: new Date(Date.now() + 172_800_000) },
       ],
       guarantors: [
-        { guarantorId: fixture.guarantorA.id, amountCoupons: 300n },
+        { guarantorId: fixture.guarantorA.id, amountCoupons: 400n },
         { guarantorId: fixture.guarantorB.id, amountCoupons: 200n },
       ],
     });
@@ -192,13 +245,13 @@ describe('lending domain', () => {
     expect(await prisma.loan.findUniqueOrThrow({ where: { id: loan.id } })).toMatchObject({ status: LoanStatus.DEFAULTED, outstandingCoupons: 0n });
   });
 
-  it('repays residual debt after a partial default claim', async () => {
+  it('settles debt after a fully covered default claim', async () => {
     const fixture = await setup();
     const loan = await createLoanRequest(prisma, {
       borrowerId: fixture.borrower.id,
       principalCoupons: 5n,
       installments: [{ amountCoupons: 5n, dueAt: new Date(Date.now() + 86_400_000) }],
-      guarantors: [{ guarantorId: fixture.guarantorA.id, amountCoupons: 1n }],
+      guarantors: [{ guarantorId: fixture.guarantorA.id, amountCoupons: 5n }],
     });
     const guarantee = loan.guarantees[0]!;
     await prisma.loanInstallment.updateMany({ where: { loanId: loan.id }, data: { dueAt: new Date(Date.now() - 1_000) } });
@@ -207,18 +260,11 @@ describe('lending domain', () => {
     await disburseLoan(prisma, { loanId: loan.id, lenderId: fixture.lender.id, lenderAccountId: fixture.lender.account.id, borrowerAccountId: fixture.borrower.account.id });
     await claimGuarantees(prisma, { loanId: loan.id, lenderAccountId: fixture.lender.account.id });
     await expect(readWithdrawalAvailability(prisma, fixture.borrower.id)).resolves.toMatchObject({
-      blockers: ['unresolved_claim'],
-      outstandingDebtCoupons: 4n,
-    });
-    await repayLoan(prisma, {
-      loanId: loan.id,
-      amountCoupons: 4n,
-      borrowerAccountId: fixture.borrower.account.id,
-      lenderAccountId: fixture.lender.account.id,
-      externalRef: 'repay:defaulted-residual',
+      blockers: [],
+      outstandingDebtCoupons: 0n,
     });
     await expect(prisma.loan.findUniqueOrThrow({ where: { id: loan.id } })).resolves.toMatchObject({
-      status: LoanStatus.SETTLED,
+      status: LoanStatus.DEFAULTED,
       outstandingCoupons: 0n,
     });
   });
@@ -229,19 +275,19 @@ describe('lending domain', () => {
       borrowerId: fixture.guarantorA.id,
       principalCoupons: 2n,
       installments: [{ amountCoupons: 2n, dueAt: new Date(Date.now() + 86_400_000) }],
-      guarantors: [{ guarantorId: fixture.guarantorB.id, amountCoupons: 1n }],
+      guarantors: [{ guarantorId: fixture.guarantorB.id, amountCoupons: 2n }],
     });
     const secondLoan = await createLoanRequest(prisma, {
       borrowerId: fixture.guarantorB.id,
       principalCoupons: 2n,
       installments: [{ amountCoupons: 2n, dueAt: new Date(Date.now() + 86_400_000) }],
-      guarantors: [{ guarantorId: fixture.guarantorA.id, amountCoupons: 1n }],
+      guarantors: [{ guarantorId: fixture.guarantorA.id, amountCoupons: 2n }],
     });
     const thirdLoan = await createLoanRequest(prisma, {
       borrowerId: fixture.borrower.id,
       principalCoupons: 2n,
       installments: [{ amountCoupons: 2n, dueAt: new Date(Date.now() + 86_400_000) }],
-      guarantors: [{ guarantorId: fixture.guarantorA.id, amountCoupons: 1n }],
+      guarantors: [{ guarantorId: fixture.guarantorA.id, amountCoupons: 2n }],
     });
     const firstGuarantee = firstLoan.guarantees[0]!;
     const secondGuarantee = secondLoan.guarantees[0]!;
@@ -256,7 +302,7 @@ describe('lending domain', () => {
       borrowerId: fixture.guarantorA.id,
       principalCoupons: 1n,
       installments: [{ amountCoupons: 1n, dueAt: new Date(Date.now() + 86_400_000) }],
-      guarantors: [{ guarantorId: fixture.guarantorB.id, amountCoupons: 1n }],
+      guarantors: [{ guarantorId: fixture.guarantorB.id, amountCoupons: 5n }],
     })).rejects.toThrow('account is restricted');
     await expect(approveGuarantee(prisma, {
       guaranteeId: thirdGuarantee.id,
@@ -286,7 +332,7 @@ describe('lending domain', () => {
     })).resolves.toMatchObject({ status: LoanStatus.SETTLED });
   });
 
-  it('rejects withdrawals independently for pending codes and unresolved claims', async () => {
+  it('allows withdrawals after a fully covered claim settles debt', async () => {
     const fixture = await setup();
     await createEscrowHold(prisma, {
       senderId: fixture.guarantorA.id,
@@ -303,7 +349,7 @@ describe('lending domain', () => {
       borrowerId: fixture.borrower.id,
       principalCoupons: 5n,
       installments: [{ amountCoupons: 5n, dueAt: new Date(Date.now() + 86_400_000) }],
-      guarantors: [{ guarantorId: fixture.guarantorB.id, amountCoupons: 1n }],
+      guarantors: [{ guarantorId: fixture.guarantorB.id, amountCoupons: 5n }],
     });
     const guarantee = loan.guarantees[0]!;
     await prisma.loanInstallment.updateMany({ where: { loanId: loan.id }, data: { dueAt: new Date(Date.now() - 1_000) } });
@@ -321,7 +367,7 @@ describe('lending domain', () => {
       borrowerAccountId: fixture.borrower.account.id,
     });
     await claimGuarantees(prisma, { loanId: loan.id, lenderAccountId: fixture.lender.account.id });
-    await expect(requestWithdrawal(prisma, withdrawalInput(fixture, fixture.borrower))).rejects.toThrow('withdrawal blocked by unresolved claim');
+    await expect(requestWithdrawal(prisma, withdrawalInput(fixture, fixture.borrower))).resolves.toBeDefined();
   });
 
   it('persists the configured withdrawal cooldown exactly', async () => {

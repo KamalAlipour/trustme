@@ -1,12 +1,13 @@
 import React from 'react';
 import { Pressable, Text, TextInput, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { request } from '../../src/api/client';
 import type { TransactionsPage } from '../../src/api/types';
 import { Page, LoadingScreen, ErrorMessage } from '../../src/components/Screen';
 import { formatCoupons, formatDate } from '../../src/lib/format';
 import { useTranslation } from '../../src/i18n';
-import { styles } from '../../src/styles';
+import { colors, styles } from '../../src/styles';
 import { RefundSheet } from '../../src/components/RefundSheet';
 import { SellerRefundPanel } from '../../src/components/SellerRefundPanel';
 import { canRequestRefund, refundableRemainder } from '../../src/lib/refunds';
@@ -40,13 +41,25 @@ export default function Purchases() {
     });
   const nextSort = { direction: 'date-desc', 'date-desc': 'date-asc', 'date-asc': 'amount-desc', 'amount-desc': 'amount-asc', 'amount-asc': 'direction' } as const;
   const sortLabel = { direction: t.sortDirection, 'date-desc': t.newestFirst, 'date-asc': t.oldestFirst, 'amount-desc': t.highestAmountFirst, 'amount-asc': t.lowestAmountFirst }[sort];
+  const sortIcon: 'arrow-up' | 'arrow-down' | 'swap-vertical' = sort === 'direction' ? 'swap-vertical' : sort === 'date-asc' || sort === 'amount-asc' ? 'arrow-up' : 'arrow-down';
   return (
     <Page>
       <View style={styles.row}><Text style={styles.title}>{t.purchases}</Text><HeaderIcons /></View>
       <SellerRefundPanel />
       <TextInput value={search} onChangeText={setSearch} placeholder={t.searchCounterparty} style={styles.input} />
       <Text style={styles.muted}>{t.loadedHistoryOnly}</Text>
-      <Pressable onPress={() => setSort(nextSort[sort])} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{sortLabel}</Text></Pressable>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={sortLabel}
+        onPress={() => setSort(nextSort[sort])}
+        style={{ ...styles.row, justifyContent: 'space-between', paddingVertical: 8 }}
+      >
+        <Text style={styles.heading}>{t.transactions}</Text>
+        <View style={styles.row}>
+          <Text style={styles.muted}>{sortLabel}</Text>
+          <Ionicons name={sortIcon} size={24} color={colors.primary} />
+        </View>
+      </Pressable>
       {items.length === 0 ? <Text style={styles.muted}>{t.noTransactions}</Text> : items.map((item) => (
         <View key={item.id} style={styles.card}>
           <View style={styles.row}>

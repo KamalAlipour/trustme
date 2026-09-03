@@ -242,6 +242,7 @@ model User {
   withdrawals          Withdrawal[]
   borrowerLoans        Loan[]              @relation("LoanBorrower")
   lenderLoans          Loan[]              @relation("LoanLender")
+  requestedLenderLoans Loan[]              @relation("LoanRequestedLender")
   guarantees           Guarantee[]
   contacts             Contact[]           @relation("ContactOwner")
   contactedBy          Contact[]           @relation("ContactTarget")
@@ -638,22 +639,27 @@ model Loan {
   id                        String            @id @default(uuid()) @db.Uuid
   borrowerId                String            @db.Uuid
   lenderId                  String?           @db.Uuid
+  requestedLenderId         String?           @db.Uuid
   principalCoupons          BigInt
   outstandingCoupons        BigInt            @default(0)
+  description               String?
   status                    LoanStatus        @default(REQUESTED)
   createdAt                 DateTime          @default(now())
   fundedAt                  DateTime?
   settledAt                 DateTime?
   borrower                  User              @relation("LoanBorrower", fields: [borrowerId], references: [id])
   lender                    User?             @relation("LoanLender", fields: [lenderId], references: [id])
+  requestedLender           User?             @relation("LoanRequestedLender", fields: [requestedLenderId], references: [id])
   installments              LoanInstallment[]
   guarantees                Guarantee[]
   aidRequests               AidRequest[]
+  media                     MediaAsset[]
   disbursement              Transaction?      @relation("LoanDisbursement", fields: [disbursementTransactionId], references: [id])
   disbursementTransactionId String?           @unique @db.Uuid
 
   @@index([borrowerId, status])
   @@index([lenderId, status])
+  @@index([requestedLenderId, status])
 }
 
 model LoanInstallment {
@@ -701,12 +707,14 @@ model MediaAsset {
   storageKey      String         @unique
   refundRequestId String?        @db.Uuid
   aidRequestId    String?        @db.Uuid
+  loanId          String?        @db.Uuid
   captureSessionId String?        @db.Uuid
   captureStep     IdentityCaptureStep?
   createdAt       DateTime       @default(now())
   owner           User           @relation(fields: [ownerId], references: [id])
   refundRequest   RefundRequest? @relation(fields: [refundRequestId], references: [id])
   aidRequest      AidRequest?    @relation(fields: [aidRequestId], references: [id])
+  loan            Loan?          @relation(fields: [loanId], references: [id])
   captureSession  IdentityCaptureSession? @relation(fields: [captureSessionId], references: [id], onDelete: SetNull)
   identityReviewDocuments IdentityReview[] @relation("IdentityReviewDocument")
   identityReviewSelfies   IdentityReview[] @relation("IdentityReviewSelfie")
@@ -714,6 +722,7 @@ model MediaAsset {
   @@index([ownerId, createdAt])
   @@index([refundRequestId])
   @@index([aidRequestId])
+  @@index([loanId])
   @@index([captureSessionId, captureStep])
   @@unique([captureSessionId, captureStep])
 }

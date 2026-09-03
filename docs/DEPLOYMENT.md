@@ -159,7 +159,10 @@ could still sign.
 `ops/deploy.sh` accepts `--ref`, fetches that ref into a TrustMe-only mirror,
 creates a timestamped release under `/opt/trustme/releases`, runs `npm ci` and
 the workspace build, and runs Prisma migrations unless `--no-migrate` is
-specified. It swaps `/opt/trustme/current` atomically.
+specified. It swaps `/opt/trustme/current` atomically and retains the newest
+five releases by default. Set `TRUSTME_RELEASE_RETENTION` to override the
+number retained; the active `current` and rollback `previous` releases are
+always preserved.
 
 The safe restart order is worker stop, migration, API/admin restart, then
 worker start. On a standby the marker prevents the worker from starting.
