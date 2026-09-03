@@ -41,7 +41,7 @@ export default function Purchases() {
     });
   const nextSort = { direction: 'date-desc', 'date-desc': 'date-asc', 'date-asc': 'amount-desc', 'amount-desc': 'amount-asc', 'amount-asc': 'direction' } as const;
   const sortLabel = { direction: t.sortDirection, 'date-desc': t.newestFirst, 'date-asc': t.oldestFirst, 'amount-desc': t.highestAmountFirst, 'amount-asc': t.lowestAmountFirst }[sort];
-  const sortIcon: 'arrow-up' | 'arrow-down' = sort === 'date-asc' || sort === 'amount-asc' ? 'arrow-up' : 'arrow-down';
+  const sortIcon: 'arrow-up' | 'arrow-down' | 'swap-vertical' = sort === 'direction' ? 'swap-vertical' : sort === 'date-asc' || sort === 'amount-asc' ? 'arrow-up' : 'arrow-down';
   return (
     <Page>
       <View style={styles.row}><Text style={styles.title}>{t.purchases}</Text><HeaderIcons /></View>

@@ -221,7 +221,6 @@ export const fa: Translations = {
   loanSourceRequired: 'بارکد عضو تأمین‌کننده را وارد یا اسکن کنید.',
   sourceBarcode: 'بارکد عضو تأمین‌کننده',
   loanAmountRequired: 'مبلغ مثبت وام را وارد کنید.',
-  loanGuaranteesInsufficient: 'مجموع پوشش ضامن‌ها باید مبلغ درخواستی را پوشش دهد.',
   repaymentPositive: 'مقدار بازپرداخت باید مثبت باشد.',
   repaymentExceedsDebt: 'مقدار بازپرداخت از بدهی بیشتر است.',
   loanRequest: 'درخواست وام',

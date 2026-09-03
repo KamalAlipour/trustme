@@ -42,8 +42,6 @@ export function CreditRequestForm() {
     if (sourceBarcodeId.trim() === '') { setError(t.loanSourceRequired); return; }
     if (selectedGuarantors.length === 0) { setError(t.loanMinimumGuarantor); return; }
     if (!/^[1-9]\d*$/.test(amount)) { setError(t.loanAmountRequired); return; }
-    const guaranteeCoverage = BigInt(amount) * BigInt(selectedGuarantors.length);
-    if (guaranteeCoverage < BigInt(amount)) { setError(t.loanGuaranteesInsufficient); return; }
     try {
       const rows = installments.map((installment) => ({ dueAt: new Date(`${installment.dueAt}T23:59:59.000Z`).toISOString(), amountCoupons: installment.amountCoupons || amount }));
       await request('/v1/me/loans', { method: 'POST', body: { principalCoupons: amount, sourceBarcodeId: sourceBarcodeId.trim(), description: description.trim() || undefined, mediaIds, installments: rows, guarantors: selectedGuarantors.map((barcodeId) => ({ barcodeId, amountCoupons: amount })) } });
@@ -68,7 +66,7 @@ export function CreditRequestForm() {
       <Text style={styles.muted}>{t.requestFrom}</Text>
       <TextInput value={sourceBarcodeId} onChangeText={(value) => { setSourceBarcodeId(value); setCharityId(''); }} placeholder={t.sourceBarcode} style={styles.input} />
       <Pressable onPress={() => router.push({ pathname: '/scan', params: { returnTo: '/(tabs)/lending', field: 'source' } })} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.scanQr}</Text></Pressable>
-      {(charities.data?.items ?? []).map((charity) => <Pressable key={charity.id} onPress={() => { setSelectedGuarantors([]); setCharityId(charity.id); }}>
+      {(charities.data?.items ?? []).map((charity) => <Pressable key={charity.id} onPress={() => { setSelectedGuarantors([]); setSourceBarcodeId(''); setCharityId(charity.id); }}>
         <Text style={{ ...styles.text, color: charity.id === charityId ? '#216E4E' : undefined }}>{charity.id === charityId ? '✅ ' : '◻️ '}{charity.name}</Text>
         <Text style={styles.muted}>{t.asCharity}</Text>
         {charity.description ? <Text style={styles.muted}>{charity.description}</Text> : null}

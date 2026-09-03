@@ -219,7 +219,6 @@ export const en = {
   loanSourceRequired: 'Enter or scan a member source barcode.',
   sourceBarcode: 'Source member barcode',
   loanAmountRequired: 'Enter a positive loan amount.',
-  loanGuaranteesInsufficient: 'Guarantor coverage must cover the requested amount.',
   repaymentPositive: 'The repayment amount must be positive.',
   repaymentExceedsDebt: 'The repayment amount exceeds the outstanding debt.',
   loanRequest: 'Loan request',
