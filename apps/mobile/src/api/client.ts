@@ -1,5 +1,5 @@
 import { Platform } from 'react-native';
-import { clearCredentials, readRefreshToken, saveRefreshToken } from '../lib/storage';
+import { clearCredentials, readInstallationId, readRefreshToken, saveRefreshToken } from '../lib/storage';
 import { deviceLabelFrom } from '../lib/device-label';
 import type { AuthResponse, SecuritySetup, Tokens } from './types';
 
@@ -72,9 +72,10 @@ async function refreshSession(): Promise<RefreshResult> {
   refreshFlight = (async () => {
     const refreshToken = await readRefreshToken();
     if (refreshToken === null) throw new ApiError(401, { error: 'secure session unavailable' });
+    const installationId = await readInstallationId();
     const response = await fetch(`${API_BASE_URL}/v1/auth/refresh`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-device-label': DEVICE_LABEL },
+      headers: { 'content-type': 'application/json', 'x-device-label': DEVICE_LABEL, 'x-installation-id': installationId },
       body: JSON.stringify({ refreshToken }),
     });
     const body = await parseResponse(response) as { tokens?: Tokens; member?: AuthResponse['member']; error?: string; retryAfter?: number };
@@ -110,7 +111,8 @@ function isFormData(body: unknown): body is FormData {
 async function authenticatedFetch(path: string, options: RequestOptions = {}): Promise<Response> {
   const auth = options.auth ?? 'member';
   if (auth === 'member' && accessToken === null) await refreshSession();
-  const headers: Record<string, string> = { accept: 'application/json', 'x-device-label': DEVICE_LABEL };
+  const installationId = await readInstallationId();
+  const headers: Record<string, string> = { accept: 'application/json', 'x-device-label': DEVICE_LABEL, 'x-installation-id': installationId };
   if (options.body !== undefined && !isFormData(options.body)) headers['content-type'] = 'application/json';
   if (auth === 'member' && accessToken !== null) headers.authorization = `Bearer ${accessToken}`;
   const response = await fetch(`${API_BASE_URL}${path}`, {

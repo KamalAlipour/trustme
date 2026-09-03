@@ -261,34 +261,6 @@ export default function Profile() {
         </>}
       </View>
       <View style={styles.card}>
-        <Text style={styles.heading}>{t.devices}</Text>
-        <Text style={styles.muted}>{t.devicesExplainer}</Text>
-        {(devices.data?.items ?? []).map((device) => (
-          <View key={device.id} style={{ gap: 8 }}>
-            <Text style={styles.text}>{device.label === 'Unknown device' ? t.deviceUnknown : device.label}</Text>
-            {device.current ? <Text style={styles.notice}>{t.currentDevice}</Text> : null}
-            <Pressable onPress={() => setExpandedDeviceId((expanded) => expanded === device.id ? null : device.id)} style={styles.secondaryButton}>
-              <Text style={styles.secondaryButtonText}>{t.deviceDetails}</Text>
-            </Pressable>
-            {expandedDeviceId === device.id ? <>
-              <Text style={styles.muted}>{t.deviceLastSeen}: {formatDate(device.lastSeenAt, language)}</Text>
-              <Text style={styles.muted}>{t.deviceSignedInAt}: {formatDate(device.createdAt, language)}</Text>
-            </> : null}
-            {!device.current ? pendingDeviceId === device.id ? <>
-              <Text style={styles.danger}>{t.deviceSignOutConfirm}</Text>
-              <Pressable onPress={() => void signOutDevice(device.id)} style={styles.button}>
-                <Text style={styles.buttonText}>{t.deviceSignOut}</Text>
-              </Pressable>
-              <Pressable onPress={() => setPendingDeviceId(null)} style={styles.secondaryButton}>
-                <Text style={styles.secondaryButtonText}>{t.cancel}</Text>
-              </Pressable>
-            </> : <Pressable onPress={() => setPendingDeviceId(device.id)} style={styles.secondaryButton}>
-              <Text style={styles.secondaryButtonText}>{t.deviceSignOut}</Text>
-            </Pressable> : null}
-          </View>
-        ))}
-      </View>
-      <View style={styles.card}>
         <Text style={styles.heading}>{t.identityVerification}</Text>
         <Text style={styles.muted}>{t.country}</Text>
         <Pressable disabled={identityStatus === 'VERIFIED'} onPress={() => setCountryPickerOpen(true)} style={styles.input}><Text style={selectedCountry ? styles.text : styles.muted}>{selectedCountry || t.selectCountry}</Text></Pressable>
@@ -323,6 +295,34 @@ export default function Profile() {
           />
           <Pressable disabled={identityLoading || nationalCode.length !== 10} onPress={() => void verifyIdentity()} style={styles.button}><Text style={styles.buttonText}>{t.verifyIdentity}</Text></Pressable>
         </> : null}
+      </View>
+      <View style={styles.card}>
+        <Text style={styles.heading}>{t.devices}</Text>
+        <Text style={styles.muted}>{t.devicesExplainer}</Text>
+        {(devices.data?.items ?? []).map((device) => (
+          <View key={device.id} style={{ gap: 8 }}>
+            <Text style={styles.text}>{device.label === 'Unknown device' ? t.deviceUnknown : device.label}</Text>
+            {device.current ? <Text style={styles.notice}>{t.currentDevice}</Text> : null}
+            <Pressable onPress={() => setExpandedDeviceId((expanded) => expanded === device.id ? null : device.id)} style={styles.secondaryButton}>
+              <Text style={styles.secondaryButtonText}>{t.deviceDetails}</Text>
+            </Pressable>
+            {expandedDeviceId === device.id ? <>
+              <Text style={styles.muted}>{t.deviceLastSeen}: {formatDate(device.lastSeenAt, language)}</Text>
+              <Text style={styles.muted}>{t.deviceSignedInAt}: {formatDate(device.createdAt, language)}</Text>
+            </> : null}
+            {!device.current ? pendingDeviceId === device.id ? <>
+              <Text style={styles.danger}>{t.deviceSignOutConfirm}</Text>
+              <Pressable onPress={() => void signOutDevice(device.id)} style={styles.button}>
+                <Text style={styles.buttonText}>{t.deviceSignOut}</Text>
+              </Pressable>
+              <Pressable onPress={() => setPendingDeviceId(null)} style={styles.secondaryButton}>
+                <Text style={styles.secondaryButtonText}>{t.cancel}</Text>
+              </Pressable>
+            </> : <Pressable onPress={() => setPendingDeviceId(device.id)} style={styles.secondaryButton}>
+              <Text style={styles.secondaryButtonText}>{t.deviceSignOut}</Text>
+            </Pressable> : null}
+          </View>
+        ))}
       </View>
       {notice ? <Text style={styles.notice}>{notice}</Text> : null}
       {error ? <Text style={styles.danger}>{error}</Text> : null}

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const storage = vi.hoisted(() => ({
   clearCredentials: vi.fn(async () => undefined),
+  readInstallationId: vi.fn(async () => 'installation-id'),
   readRefreshToken: vi.fn(async (): Promise<string | null> => 'refresh-old'),
   saveRefreshToken: vi.fn(async () => undefined),
   saveCredentials: vi.fn(async () => undefined),
@@ -37,7 +38,17 @@ describe('mobile API client', () => {
     const [first, second] = await Promise.all([request<{ ok: boolean }>('/resource'), request<{ ok: boolean }>('/resource')]);
     expect(first.ok).toBe(true);
     expect(second.ok).toBe(true);
-    expect(fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/v1/auth/refresh'))).toHaveLength(1);
+    const refreshCalls = fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/v1/auth/refresh'));
+    expect(refreshCalls).toHaveLength(1);
+    expect((refreshCalls[0]?.[1] as RequestInit).headers).toMatchObject({
+      'x-device-label': expect.any(String),
+      'x-installation-id': 'installation-id',
+    });
+    const resourceCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/resource'));
+    expect((resourceCall?.[1] as RequestInit).headers).toMatchObject({
+      'x-device-label': expect.any(String),
+      'x-installation-id': 'installation-id',
+    });
   });
 
   it('clears both secure-store values after a failed refresh', async () => {

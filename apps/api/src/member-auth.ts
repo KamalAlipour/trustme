@@ -28,6 +28,7 @@ export type MemberAuthDependencies = {
 const dummyPinHash = bcrypt.hash(randomBytes(32).toString('hex'), 12);
 const genericLoginError = new HttpError(401, 'invalid phone or PIN');
 const emailCodePattern = /^\d{6}$/;
+const installationIdPattern = /^[A-Za-z0-9_-]{8,64}$/;
 const registerSchema = z.object({
   phone: phoneNumberSchema,
   pin: fourDigitCodeSchema,
@@ -39,6 +40,9 @@ const loginSchema = z.object({ phone: phoneNumberSchema, pin: fourDigitCodeSchem
 function emailValue(value: unknown): string {
   if (typeof value !== 'string' || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value.trim())) throw new HttpError(400, 'invalid email');
   return value.trim().toLowerCase();
+}
+function installationIdFrom(request: Request): string | null {
+  return request.header('x-installation-id') ?? null;
 }
 function base64url(value: string): string { return Buffer.from(value).toString('base64url'); }
 function signature(value: string, secret: string): string { return createHmac('sha256', secret).update(value).digest('base64url'); }
@@ -232,14 +236,41 @@ export async function verifyMemberPin(prisma: PrismaClient, userId: string, pin:
   throw genericLoginError;
 }
 
-async function createSession(prisma: PrismaClient, config: ApiConfig, userId: string, label: string) {
+async function createSession(prisma: PrismaClient, config: ApiConfig, userId: string, label: string, installationId: string | null) {
   const refreshToken = randomBytes(32).toString('base64url');
   const refreshExpiresAt = new Date(Date.now() + config.memberRefreshTtlDays * 86_400_000);
-  const device = await prisma.memberDevice.create({ data: { userId, label, refreshTokenHash: createHash('sha256').update(refreshToken).digest('hex'), expiresAt: refreshExpiresAt } });
+  const normalizedInstallationId = installationId !== null && installationIdPattern.test(installationId) ? installationId : null;
+  const device = await withSerializableRetry(prisma, async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${userId}::uuid FOR UPDATE`;
+    const existing = normalizedInstallationId === null ? null : await tx.memberDevice.findFirst({
+      where: { userId, installationId: normalizedInstallationId, revokedAt: null, replacedById: null },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (existing !== null) {
+      return tx.memberDevice.update({
+        where: { id: existing.id },
+        data: {
+          refreshTokenHash: createHash('sha256').update(refreshToken).digest('hex'),
+          label,
+          expiresAt: refreshExpiresAt,
+          lastSeenAt: new Date(),
+        },
+      });
+    }
+    return tx.memberDevice.create({
+      data: {
+        userId,
+        ...(normalizedInstallationId === null ? {} : { installationId: normalizedInstallationId }),
+        label,
+        refreshTokenHash: createHash('sha256').update(refreshToken).digest('hex'),
+        expiresAt: refreshExpiresAt,
+      },
+    });
+  });
   return { accessToken: createMemberJwt(userId, device.id, config.memberJwtSecret, config.memberJwtTtlSeconds), expiresAt: new Date(Date.now() + config.memberJwtTtlSeconds * 1000), refreshToken, refreshExpiresAt };
 }
-async function tokenResponse(prisma: PrismaClient, config: ApiConfig, userId: string, label: string) {
-  const tokens = await createSession(prisma, config, userId, label);
+async function tokenResponse(prisma: PrismaClient, config: ApiConfig, userId: string, label: string, installationId: string | null) {
+  const tokens = await createSession(prisma, config, userId, label, installationId);
   return { tokens, member: serializeMember(await prisma.user.findUniqueOrThrow({ where: { id: userId } })) };
 }
 
@@ -249,6 +280,7 @@ async function socialTokenResponse(
   claims: VerifiedSocialClaims,
   displayName: string | undefined,
   label: string,
+  installationId: string | null,
 ) {
   const { prisma, config } = dependencies;
   const existing = await prisma.userIdentity.findUnique({
@@ -272,7 +304,7 @@ async function socialTokenResponse(
         await recomputeSecuritySetupCompletion(tx, existing.userId, config.requireEmailVerification);
       });
     }
-    return tokenResponse(prisma, config, existing.userId, label);
+    return tokenResponse(prisma, config, existing.userId, label, installationId);
   }
   let omitEmail = false;
   for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -299,7 +331,7 @@ async function socialTokenResponse(
         });
         return created;
       });
-      return tokenResponse(prisma, config, user.id, label);
+      return tokenResponse(prisma, config, user.id, label, installationId);
     } catch (error) {
       if (isEmailUniqueViolation(error) && claims.email !== null && !omitEmail) {
         omitEmail = true;
@@ -392,7 +424,7 @@ export function createMemberAuthRouter(dependencies: MemberAuthDependencies): ex
       if (body.email !== undefined && config.emailDelivery !== 'none') {
         await issueEmailCode(prisma, config, sender, logEmailCode, user.id, body.email, EmailVerificationPurpose.VERIFY_EMAIL);
       }
-      response.status(201).json(await tokenResponse(prisma, config, user.id, request.header('x-device-label') ?? 'Unknown device'));
+      response.status(201).json(await tokenResponse(prisma, config, user.id, request.header('x-device-label') ?? 'Unknown device', installationIdFrom(request)));
     } catch (error) { next(isBarcodeUniqueViolation(error) ? new HttpError(409, 'could not allocate member barcode') : error); }
   });
   router.post('/login', limiter, async (request, response, next) => {
@@ -401,7 +433,7 @@ export function createMemberAuthRouter(dependencies: MemberAuthDependencies): ex
       const user = await prisma.user.findUnique({ where: { phoneNumber: body.phone } });
       if (!user) { await bcrypt.compare(body.pin, await dummyPinHash); throw genericLoginError; }
       await verifyMemberPin(prisma, user.id, body.pin);
-      response.json(await tokenResponse(prisma, config, user.id, request.header('x-device-label') ?? 'Unknown device'));
+      response.json(await tokenResponse(prisma, config, user.id, request.header('x-device-label') ?? 'Unknown device', installationIdFrom(request)));
     } catch (error) { next(error); }
   });
   const socialLogin = (provider: 'GOOGLE' | 'APPLE') => async (request: express.Request, response: express.Response, next: express.NextFunction) => {
@@ -425,6 +457,7 @@ export function createMemberAuthRouter(dependencies: MemberAuthDependencies): ex
         claims,
         provider === 'APPLE' ? body.displayName : undefined,
         request.header('x-device-label') ?? 'Unknown device',
+        installationIdFrom(request),
       ));
     } catch (error) { next(error); }
   };
@@ -450,6 +483,7 @@ export function createMemberAuthRouter(dependencies: MemberAuthDependencies): ex
           data: {
             userId: device.userId,
             label: device.label,
+            installationId: device.installationId,
             refreshTokenHash: createHash('sha256').update(refreshToken).digest('hex'),
             expiresAt: refreshExpiresAt,
           },
@@ -502,7 +536,7 @@ export function createMemberAuthRouter(dependencies: MemberAuthDependencies): ex
         prisma.user.update({ where: { id: user.id }, data: { pinHash: await bcrypt.hash(pin, 12), pinUpdatedAt: new Date(), pinAttempts: 0, pinLockCount: 0, pinLockedUntil: null, pinResetQuarantineUntil: new Date(Date.now() + config.pinResetQuarantineHours * 60 * 60 * 1000), biometricEnrolledAt: null, setupAcknowledgedAt: null, securitySetupCompletedAt: null } }),
         prisma.memberDevice.updateMany({ where: { userId: user.id, revokedAt: null }, data: { revokedAt: new Date() } }),
       ]);
-      response.json(await tokenResponse(prisma, config, user.id, request.header('x-device-label') ?? 'Unknown device'));
+      response.json(await tokenResponse(prisma, config, user.id, request.header('x-device-label') ?? 'Unknown device', installationIdFrom(request)));
     } catch (error) { next(error); }
   });
   return router;

@@ -7,10 +7,14 @@ const secureStore = vi.hoisted(() => ({
   deleteItemAsync: vi.fn(async () => undefined),
 }));
 const platform = vi.hoisted(() => ({ OS: 'ios' as string }));
+const fingerprint = vi.hoisted(() => ({
+  load: vi.fn(async () => ({ get: vi.fn(async () => ({ visitorId: 'fingerprint-visitor-id' })) })),
+}));
 vi.mock('expo-secure-store', () => secureStore);
 vi.mock('react-native', () => ({ Platform: platform }));
+vi.mock('@fingerprintjs/fingerprintjs', () => ({ default: fingerprint }));
 
-import { clearCredentials, hasSeenManifesto, hasStoredCredentials, markManifestoSeen, readPin, readRefreshToken, saveCredentials, saveCredentialsWithoutPin, saveRefreshToken } from './storage';
+import { clearCredentials, hasSeenManifesto, hasStoredCredentials, markManifestoSeen, readInstallationId, readPin, readRefreshToken, saveCredentials, saveCredentialsWithoutPin, saveRefreshToken } from './storage';
 
 describe('secure credential storage', () => {
   beforeEach(() => {
@@ -84,5 +88,62 @@ describe('secure credential storage', () => {
     localStorage.getItem.mockReturnValue('1');
     expect(await hasSeenManifesto()).toBe(true);
     expect(secureStore.setItemAsync).not.toHaveBeenCalled();
+  });
+
+  it('generates and reuses a web installation ID', async () => {
+    platform.OS = 'web';
+    let stored: string | null = null;
+    const localStorage = {
+      getItem: vi.fn<(key: string) => string | null>(() => stored),
+      setItem: vi.fn((_key: string, value: string) => { stored = value; }),
+    };
+    vi.stubGlobal('window', { localStorage });
+    const first = await readInstallationId();
+    const second = await readInstallationId();
+    expect(first).toMatch(/^[A-Za-z0-9_-]{8,64}$/);
+    expect(second).toBe(first);
+    expect(localStorage.setItem).toHaveBeenCalledWith('trustcoupon.installationId', first);
+  });
+
+  it('persists a native installation ID without protected storage options', async () => {
+    secureStore.getItemAsync.mockImplementation(async (key: string) => key === 'trustcoupon.installationId' ? null : 'refresh');
+    const installationId = await readInstallationId();
+    expect(installationId).toMatch(/^[A-Za-z0-9_-]{8,64}$/);
+    expect(secureStore.setItemAsync).toHaveBeenCalledWith('trustcoupon.installationId', installationId);
+  });
+
+  it('uses a cookie when localStorage has no installation ID and mirrors it to both storages', async () => {
+    vi.resetModules();
+    platform.OS = 'web';
+    const localStorage = {
+      getItem: vi.fn<(key: string) => string | null>(() => null),
+      setItem: vi.fn(),
+    };
+    vi.stubGlobal('window', { localStorage });
+    vi.stubGlobal('document', { cookie: 'other=value; trustcoupon_installation=cookie-installation-id' });
+    const storage = await import('./storage.js');
+    expect(await storage.readInstallationId()).toBe('cookie-installation-id');
+    expect(localStorage.setItem).toHaveBeenCalledWith('trustcoupon.installationId', 'cookie-installation-id');
+    expect(document.cookie).toBe('trustcoupon_installation=cookie-installation-id; Max-Age=31536000; Path=/; SameSite=Lax');
+    expect(fingerprint.load).not.toHaveBeenCalled();
+  });
+
+  it('uses the FingerprintJS visitor ID when both web storages are empty', async () => {
+    vi.resetModules();
+    platform.OS = 'web';
+    const localStorage = {
+      getItem: vi.fn<(key: string) => string | null>(() => null),
+      setItem: vi.fn(),
+    };
+    vi.stubGlobal('window', { localStorage });
+    vi.stubGlobal('document', { cookie: '' });
+    vi.stubGlobal('location', { protocol: 'https:' });
+    fingerprint.load.mockResolvedValueOnce({ get: vi.fn(async () => ({ visitorId: 'fingerprint-visitor-id' })) });
+    const storage = await import('./storage.js');
+    expect(await storage.readInstallationId()).toBe('fingerprint-visitor-id');
+    expect(await storage.readInstallationId()).toBe('fingerprint-visitor-id');
+    expect(fingerprint.load).toHaveBeenCalledOnce();
+    expect(localStorage.setItem).toHaveBeenCalledWith('trustcoupon.installationId', 'fingerprint-visitor-id');
+    expect(document.cookie).toBe('trustcoupon_installation=fingerprint-visitor-id; Max-Age=31536000; Path=/; SameSite=Lax; Secure');
   });
 });

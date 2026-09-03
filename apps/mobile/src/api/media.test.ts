@@ -6,6 +6,7 @@ vi.mock('expo-file-system', () => fileSystem);
 vi.mock('react-native', () => ({ Platform: platform }));
 vi.mock('../lib/storage', () => ({
   clearCredentials: vi.fn(async () => undefined),
+  readInstallationId: vi.fn(async () => 'installation-id'),
   readRefreshToken: vi.fn(async () => 'refresh'),
   saveRefreshToken: vi.fn(async () => undefined),
 }));
@@ -30,7 +31,7 @@ describe('authenticated media upload', () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ id: 'media-id', kind: 'IMAGE', mimeType: 'image/jpeg', byteSize: 100 }), { status: 201 }));
     await uploadMedia({ uri: 'file:///private/path/photo.jpg', kind: 'IMAGE', mimeType: 'image/jpeg' });
     const [, init] = fetchMock.mock.calls[0] as [RequestInfo | URL, RequestInit];
-    expect(init.headers).toEqual({ accept: 'application/json', authorization: 'Bearer member-token', 'x-device-label': 'iOS app' });
+    expect(init.headers).toEqual({ accept: 'application/json', authorization: 'Bearer member-token', 'x-device-label': 'iOS app', 'x-installation-id': 'installation-id' });
     expect(init.body).toBeInstanceOf(FormData);
     const form = init.body as FormData;
     expect(form.get('kind')).toBe('IMAGE');

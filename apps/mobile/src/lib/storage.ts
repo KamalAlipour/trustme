@@ -1,3 +1,4 @@
+import FingerprintJS from '@fingerprintjs/fingerprintjs';
 import * as SecureStore from 'expo-secure-store';
 import { isWebPlatform } from './platform';
 
@@ -6,10 +7,19 @@ const PIN_KEY = 'trustcoupon.pin';
 const SESSION_MARKER_KEY = 'trustcoupon.session';
 const MANIFESTO_SEEN_KEY = 'trustcoupon.manifestoSeen';
 const LANGUAGE_KEY = 'trustcoupon.language';
+const INSTALLATION_ID_KEY = 'trustcoupon.installationId';
+const INSTALLATION_COOKIE_NAME = 'trustcoupon_installation';
 const options = { requireAuthentication: true, keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY };
 let webRefreshToken: string | null = null;
 let webPin: string | null = null;
 let webSessionMarker = false;
+let fallbackInstallationId: string | null = null;
+let webInstallationIdPromise: Promise<string> | null = null;
+
+function generateInstallationId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
 
 function readManifestoFlag(): string | null {
   if (typeof window === 'undefined') return null;
@@ -66,6 +76,69 @@ export async function readRefreshToken(): Promise<string | null> {
 export async function readPin(): Promise<string | null> {
   const pin = isWebPlatform() ? webPin : await SecureStore.getItemAsync(PIN_KEY, options);
   return pin === '' ? null : pin;
+}
+
+function readInstallationCookie(): string | null {
+  try {
+    if (typeof document === 'undefined') return null;
+    const entry = document.cookie.split(';').map((part) => part.trim()).find((part) => part.startsWith(`${INSTALLATION_COOKIE_NAME}=`));
+    if (!entry) return null;
+    const value = entry.slice(INSTALLATION_COOKIE_NAME.length + 1);
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
+  } catch {
+    return null;
+  }
+}
+
+function writeInstallationCookie(installationId: string): void {
+  if (typeof document === 'undefined') return;
+  const secure = typeof location !== 'undefined' && location.protocol === 'https:' ? '; Secure' : '';
+  document.cookie = `${INSTALLATION_COOKIE_NAME}=${encodeURIComponent(installationId)}; Max-Age=31536000; Path=/; SameSite=Lax${secure}`;
+}
+
+async function resolveWebInstallationId(): Promise<string> {
+  let installationId: string | null = null;
+  try {
+    if (typeof window !== 'undefined') installationId = window.localStorage.getItem(INSTALLATION_ID_KEY);
+  } catch {
+    installationId = null;
+  }
+  installationId ??= readInstallationCookie();
+  if (installationId === null) {
+    try {
+      const agent = await FingerprintJS.load();
+      installationId = (await agent.get()).visitorId;
+    } catch {
+      installationId = fallbackInstallationId ??= generateInstallationId();
+    }
+  }
+  try {
+    if (typeof window !== 'undefined') window.localStorage.setItem(INSTALLATION_ID_KEY, installationId);
+  } catch {
+    fallbackInstallationId ??= installationId;
+  }
+  try {
+    writeInstallationCookie(installationId);
+  } catch {
+    fallbackInstallationId ??= installationId;
+  }
+  return installationId;
+}
+
+export async function readInstallationId(): Promise<string> {
+  if (isWebPlatform()) {
+    webInstallationIdPromise ??= resolveWebInstallationId();
+    return webInstallationIdPromise;
+  }
+  const stored = await SecureStore.getItemAsync(INSTALLATION_ID_KEY);
+  if (stored !== null) return stored;
+  const generated = generateInstallationId();
+  await SecureStore.setItemAsync(INSTALLATION_ID_KEY, generated);
+  return generated;
 }
 
 export async function clearCredentials(): Promise<void> {

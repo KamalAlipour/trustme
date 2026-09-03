@@ -1047,7 +1047,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
   router.get('/devices', async (request, response, next) => {
     try {
       const claims = memberClaims(request);
-      const devices = await prisma.memberDevice.findMany({ where: { userId: claims.sub, revokedAt: null }, orderBy: [{ lastSeenAt: 'desc' }, { id: 'desc' }] });
+      const devices = await prisma.memberDevice.findMany({ where: { userId: claims.sub, revokedAt: null, expiresAt: { gt: new Date() } }, orderBy: [{ lastSeenAt: 'desc' }, { id: 'desc' }] });
       response.json({ items: devices.map((device) => ({ id: device.id, label: device.label, createdAt: device.createdAt, lastSeenAt: device.lastSeenAt, current: device.id === claims.sid })) });
     } catch (error) {
       next(error);
