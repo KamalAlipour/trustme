@@ -2,6 +2,9 @@ export const openapiDocument = {
   openapi: '3.0.3',
   info: { title: 'TrustMe Member API', version: '0.1.0' },
   components: {
+    securitySchemes: {
+      apiKey: { type: 'http', scheme: 'bearer', bearerFormat: 'tck_...' },
+    },
     schemas: {
       ValidationError: {
         type: 'object',
@@ -55,6 +58,18 @@ export const openapiDocument = {
     },
   },
   paths: {
+    '/v1/partner/market-average': {
+      get: {
+        security: [{ apiKey: [] }],
+        responses: { '200': { description: 'Private network commission average' }, '401': { description: 'Unauthorized' }, '403': { description: 'Insufficient scope' } },
+      },
+    },
+    '/v1/partner/reserves': {
+      get: {
+        security: [{ apiKey: [] }],
+        responses: { '200': { description: 'Private reserve figures' }, '401': { description: 'Unauthorized' }, '403': { description: 'Insufficient scope' } },
+      },
+    },
     '/v1/auth/register': { post: { responses: { '201': { description: 'Registered member and tokens' }, '409': { description: 'Phone already registered' } } } },
     '/v1/auth/login': { post: { responses: { '200': { description: 'Member and tokens' }, '401': { description: 'Invalid phone or PIN' }, '423': { description: 'PIN temporarily locked' } } } },
     '/v1/auth/refresh': { post: { responses: { '200': { description: 'Rotated tokens' }, '401': { description: 'Unauthorized' } } } },
@@ -367,6 +382,11 @@ export const openapiDocument = {
       },
     },
     '/admin/overview': { get: { responses: { '200': { description: 'Admin overview' } } } },
+    '/admin/api-keys': {
+      get: { responses: { '200': { description: 'Admin API key list' }, '403': { description: 'Admin role required' } } },
+      post: { responses: { '201': { description: 'Created API key (raw key shown once)' }, '400': { description: 'Invalid API key request' }, '403': { description: 'Admin role required' } } },
+    },
+    '/admin/api-keys/{id}/revoke': { post: { responses: { '200': { description: 'API key revoked' }, '403': { description: 'Admin role required' }, '404': { description: 'API key not found' } } } },
     '/admin/settings': {
       get: { responses: { '200': { description: 'Admin settings' } } },
       patch: { responses: { '200': { description: 'Updated admin settings' } } },
