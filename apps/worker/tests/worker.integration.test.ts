@@ -49,6 +49,7 @@ async function fixture() {
   const vault = await account(AccountType.SYSTEM_VAULT_USDT, Asset.USDT);
   const pending = await account(AccountType.SYSTEM_WITHDRAWAL_PENDING, Asset.USDT);
   const fees = await account(AccountType.SYSTEM_FEE_COLLECTION, Asset.USDT);
+  await account(AccountType.SYSTEM_FEE_COLLECTION, Asset.COUPON);
   const issuance = await account(AccountType.SYSTEM_COUPON_ISSUANCE, Asset.COUPON);
   const onchainLog = {
     address: usdt,

@@ -65,6 +65,14 @@ import {
   revokePurchaseGuarantee,
   settleWithPayCode,
   settleDirectedPayCode,
+  commissionFloorBps,
+  forceAutoResolve,
+  grantRateDiscount,
+  logCommissionStrike,
+  networkAverageRateBps,
+  setCommissionRate,
+  setMarketer,
+  STRIKE_INTERVAL_MS,
 } from '@trustme/core';
 import { DomainError } from '@trustme/core';
 import type { QueueLike } from './app.js';
@@ -135,6 +143,10 @@ const escrowUnloadSchema = z.object({ amount: z.string().min(1), pin: fourDigitC
 const escrowHistoryQuerySchema = z.object({ cursor: z.string().optional() });
 const charityQuerySchema = z.object({ status: z.enum(['PENDING', 'DOCUMENTS_REQUESTED', 'APPROVED', 'GUARANTEED', 'REJECTED']).optional() });
 const aidApprovalSchema = z.object({ approvedCoupons: couponsSchema.optional(), note: z.string().trim().optional(), mode: z.enum(['TRANSFER', 'GUARANTEE']).optional(), pin: fourDigitCodeSchema });
+const commissionRateSchema = z.object({ ratePercent: z.string().regex(/^\d+(?:\.\d{1,2})?$/), pin: fourDigitCodeSchema });
+const marketerSchema = z.object({ barcodeId: barcodeIdSchema, pin: fourDigitCodeSchema });
+const discountSchema = z.object({ sellerBarcodeId: barcodeIdSchema, ratePercent: z.string().regex(/^\d+(?:\.\d{1,2})?$/), pin: fourDigitCodeSchema });
+const commissionActionSchema = z.object({ pin: fourDigitCodeSchema });
 const noteSchema = z.object({ note: z.string().trim().min(1) });
 const idSchema = z.string().uuid();
 
@@ -167,6 +179,13 @@ function shahkarAccess(config: ApiConfig): { shahkar: boolean } {
 
 function parseCoupons(value: string): bigint {
   return BigInt(value);
+}
+
+function parseRateBps(value: string): number {
+  const [whole, fraction = ''] = value.split('.');
+  const bps = Number.parseInt(whole!, 10) * 100 + Number.parseInt(fraction.padEnd(2, '0') || '0', 10);
+  if (!Number.isSafeInteger(bps)) throw new HttpError(400, 'invalid commission rate');
+  return bps;
 }
 
 function forbidden(): never {
@@ -456,13 +475,31 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
     if (dependencies.config.escrowContractAddress === undefined) throw new HttpError(503, 'escrow_not_configured');
   };
   const setupAllowedPaths = new Set(['/security-setup', '/email', '/email/verify', '/logout']);
-  const memberPolicy = (user: Awaited<ReturnType<typeof member>>) => {
+  const memberPolicy = async (user: Awaited<ReturnType<typeof member>>) => {
     const policy = user.country === null
       ? null
       : identityPolicyFor(user.country, shahkarAccess(dependencies.config));
     const serialized = serializeMember(user);
+    const settings = new Map((await prisma.systemSetting.findMany({ where: { key: { in: ['COMMISSION_FLOOR_BPS', 'COMMISSION_FLOOR_BPS_BY_COUNTRY'] } } })).map((row) => [row.key, row.value]));
+    const marketer = user.marketerId === null ? null : await prisma.user.findUnique({ where: { id: user.marketerId }, select: { barcodeId: true, displayName: true } });
+    const dispute = await prisma.commissionDispute.findFirst({ where: { sellerId: user.id, status: 'OPEN' }, orderBy: { createdAt: 'desc' } });
+    const average = await prisma.$transaction((tx) => networkAverageRateBps(tx));
+    const floor = commissionFloorBps(settings, user.country);
     return {
       ...serialized,
+      commission: {
+        rateBps: user.commissionRateBps,
+        floorBps: floor,
+        networkAverageBps: average,
+        marketer,
+        dispute: dispute === null ? null : {
+          strikes: dispute.strikes,
+          lastStrikeAt: dispute.lastStrikeAt,
+          status: dispute.status,
+          nextStrikeAt: dispute.strikes >= 3 ? null : new Date(dispute.lastStrikeAt.getTime() + STRIKE_INTERVAL_MS),
+          autoResolveAt: dispute.strikes === 3 ? new Date(dispute.lastStrikeAt.getTime() + STRIKE_INTERVAL_MS) : null,
+        },
+      },
       identityVerification: {
         ...serialized.identityVerification,
         mode: policy?.mode ?? null,
@@ -739,10 +776,64 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
 
   router.get('/', async (request, response, next) => {
     try {
-      response.json(memberPolicy(await member(prisma, memberClaims(request).sub)));
+      response.json(await memberPolicy(await member(prisma, memberClaims(request).sub)));
     } catch (error) {
       next(error);
     }
+  });
+
+  router.put('/commission-rate', async (request, response, next) => {
+    try {
+      const body = commissionRateSchema.parse(request.body);
+      const userId = memberClaims(request).sub;
+      await verifyMemberPin(prisma, userId, body.pin);
+      const user = await member(prisma, userId);
+      const settings = new Map((await prisma.systemSetting.findMany({ where: { key: { in: ['COMMISSION_FLOOR_BPS', 'COMMISSION_FLOOR_BPS_BY_COUNTRY'] } } })).map((row) => [row.key, row.value]));
+      const updated = await setCommissionRate(prisma, { userId, rateBps: parseRateBps(body.ratePercent), floorBps: commissionFloorBps(settings, user.country) });
+      response.json(await memberPolicy(updated));
+    } catch (error) { next(error); }
+  });
+
+  router.put('/marketer', async (request, response, next) => {
+    try {
+      const body = marketerSchema.parse(request.body);
+      const userId = memberClaims(request).sub;
+      await verifyMemberPin(prisma, userId, body.pin);
+      const updated = await setMarketer(prisma, { userId, marketerBarcodeId: body.barcodeId });
+      response.json(await memberPolicy(updated));
+    } catch (error) { next(error); }
+  });
+
+  router.post('/commission-discounts', async (request, response, next) => {
+    try {
+      const body = discountSchema.parse(request.body);
+      const marketerId = memberClaims(request).sub;
+      await verifyMemberPin(prisma, marketerId, body.pin);
+      const seller = await userByBarcode(prisma, body.sellerBarcodeId);
+      const settings = new Map((await prisma.systemSetting.findMany({ where: { key: { in: ['COMMISSION_FLOOR_BPS', 'COMMISSION_FLOOR_BPS_BY_COUNTRY'] } } })).map((row) => [row.key, row.value]));
+      const updated = await grantRateDiscount(prisma, { marketerId, sellerId: seller.id, newRateBps: parseRateBps(body.ratePercent), floorBps: commissionFloorBps(settings, seller.country) });
+      response.json({ sellerBarcodeId: seller.barcodeId, rateBps: updated.commissionRateBps });
+    } catch (error) { next(error); }
+  });
+
+  router.post('/commission-disputes/strike', async (request, response, next) => {
+    try {
+      const body = commissionActionSchema.parse(request.body);
+      const sellerId = memberClaims(request).sub;
+      await verifyMemberPin(prisma, sellerId, body.pin);
+      response.json(await logCommissionStrike(prisma, { sellerId }));
+    } catch (error) { next(error); }
+  });
+
+  router.post('/commission-disputes/auto-resolve', async (request, response, next) => {
+    try {
+      const body = commissionActionSchema.parse(request.body);
+      const sellerId = memberClaims(request).sub;
+      await verifyMemberPin(prisma, sellerId, body.pin);
+      const seller = await member(prisma, sellerId);
+      const settings = new Map((await prisma.systemSetting.findMany({ where: { key: { in: ['COMMISSION_FLOOR_BPS', 'COMMISSION_FLOOR_BPS_BY_COUNTRY'] } } })).map((row) => [row.key, row.value]));
+      response.json(await forceAutoResolve(prisma, { sellerId, floorBps: commissionFloorBps(settings, seller.country) }));
+    } catch (error) { next(error); }
   });
 
   router.post('/identity', identityLimiter, async (request, response, next) => {
@@ -1079,7 +1170,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
         throw new HttpError(409, 'country cannot be changed after identity verification');
       }
       const updated = await prisma.user.update({ where: { id: user.id }, data: { country: body.country } });
-      response.json(memberPolicy(updated));
+      response.json(await memberPolicy(updated));
     } catch (error) {
       next(error);
     }
@@ -1092,14 +1183,14 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       await verifyMemberPin(prisma, userId, body.pin);
       const current = await member(prisma, userId);
       if (current.phoneNumber === body.phone) {
-        response.json(memberPolicy(current));
+        response.json(await memberPolicy(current));
         return;
       }
       if (current.identityVerificationStatus === IdentityVerificationStatus.VERIFIED) {
         throw new HttpError(409, 'phone cannot be changed after identity verification');
       }
       const updated = await prisma.user.update({ where: { id: userId }, data: { phoneNumber: body.phone } });
-      response.json(memberPolicy(updated));
+      response.json(await memberPolicy(updated));
     } catch (error) {
       if (isPhoneUniqueViolation(error)) {
         next(new HttpError(409, 'phone already registered'));
@@ -1113,7 +1204,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
     try {
       const body = z.object({ displayName: displayNameSchema }).parse(request.body);
       const updated = await prisma.user.update({ where: { id: memberClaims(request).sub }, data: { displayName: body.displayName } });
-      response.json(memberPolicy(updated));
+      response.json(await memberPolicy(updated));
     } catch (error) {
       next(error);
     }
@@ -1154,7 +1245,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
     try {
       const body = emailCodeSchema.parse(request.body);
       const updated = await verifyAndSetEmail(prisma, memberClaims(request).sub, body.code, dependencies.config.requireEmailVerification);
-      response.json(memberPolicy(updated));
+      response.json(await memberPolicy(updated));
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         next(new HttpError(409, 'email already in use'));

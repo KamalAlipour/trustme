@@ -10,6 +10,8 @@ type Settings = {
   autoApprovalLimitMicroUsdt: string;
   requireIdentityForWithdrawal: boolean;
   identityRequiredCountries: string[];
+  commissionFloorBps: number;
+  commissionFloorByCountry: Array<{ country: string; bps: number }>;
 };
 
 export function SettingsForm({ settings, errorField, errorMessage }: Readonly<{ settings: Settings; errorField?: string | undefined; errorMessage?: string | undefined }>) {
@@ -42,6 +44,16 @@ export function SettingsForm({ settings, errorField, errorMessage }: Readonly<{ 
           </label>
         ))}
       </fieldset>
+      <label className="block">
+        <span className="mb-1 block text-sm font-medium">Commission floor (bps)</span>
+        <input className="w-full" name="commissionFloorBps" defaultValue={settings.commissionFloorBps} inputMode="numeric" />
+        {fieldError('commissionFloorBps') ? <span className="mt-1 block text-sm text-red-700">{fieldError('commissionFloorBps')}</span> : null}
+      </label>
+      <label className="block">
+        <span className="mb-1 block text-sm font-medium">Commission floors by country (IR=300,NO=300)</span>
+        <input className="w-full" name="commissionFloorByCountry" defaultValue={settings.commissionFloorByCountry.map((row) => `${row.country}=${row.bps}`).join(',')} />
+        {fieldError('commissionFloorByCountry') ? <span className="mt-1 block text-sm text-red-700">{fieldError('commissionFloorByCountry')}</span> : null}
+      </label>
       <label className="block">
         <span className="mb-1 block text-sm font-medium">{labels.minimumFeeMicroUsdt}</span>
         <input className="w-full" name="minimumFeeUsdt" defaultValue={microUsdtToDecimal(settings.minimumFeeMicroUsdt)} inputMode="decimal" />

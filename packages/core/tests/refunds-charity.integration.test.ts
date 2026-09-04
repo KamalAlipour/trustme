@@ -36,6 +36,7 @@ describe('refunds and charity domain', () => {
     const vault = await account(AccountType.SYSTEM_VAULT_USDT, Asset.USDT);
     await account(AccountType.SYSTEM_WITHDRAWAL_PENDING, Asset.USDT);
     await account(AccountType.SYSTEM_FEE_COLLECTION, Asset.USDT);
+    await account(AccountType.SYSTEM_FEE_COLLECTION, Asset.COUPON);
     await postDeposit(prisma, { externalRef: 'deposit:refund', userId: buyer.id, userCouponAccountId: buyerAccount.id, externalOnchainAccountId: external.id, vaultAccountId: vault.id, issuanceAccountId: issuance.id, amountMicroUsdt: 1_000_000n });
     const original = await transferCoupons(prisma, { externalRef: 'transfer:refund', fromAccountId: buyerAccount.id, toAccountId: sellerAccount.id, amountCoupons: 100n });
     const solvencyBefore = await readSolvency(prisma);

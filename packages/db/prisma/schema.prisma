@@ -177,6 +177,12 @@ enum PurchaseGuaranteeStatus {
   REVOKED
 }
 
+enum CommissionDisputeStatus {
+  OPEN
+  RESOLVED_BY_MARKETER
+  AUTO_RESOLVED
+}
+
 enum IdentityProvider {
   GOOGLE
   APPLE
@@ -240,6 +246,8 @@ model User {
   setupAcknowledgedAt DateTime?
   pinResetQuarantineUntil DateTime?
   isDemo               Boolean             @default(false)
+  commissionRateBps    Int                 @default(0)
+  marketerId           String?             @db.Uuid
   dustMicroUsdt        BigInt              @default(0)
   activeGuaranteeCount Int                 @default(0)
   createdAt            DateTime            @default(now())
@@ -278,6 +286,10 @@ model User {
   payerSettlements      EscrowSettlement[] @relation("EscrowSettlementPayer")
   purchaseGuaranteesAsGuarantor PurchaseGuarantee[] @relation("PurchaseGuarantor")
   purchaseGuaranteesAsBeneficiary PurchaseGuarantee[] @relation("PurchaseGuaranteeBeneficiary")
+  marketer             User?              @relation("Marketer", fields: [marketerId], references: [id])
+  referredMembers      User[]             @relation("Marketer")
+  commissionDisputesAsSeller CommissionDispute[] @relation("CommissionDisputeSeller")
+  commissionDisputesAsMarketer CommissionDispute[] @relation("CommissionDisputeMarketer")
   unloads              EscrowUnload[]
   escrowChainEvents    EscrowChainEvent[]
 
@@ -623,6 +635,23 @@ model SystemSetting {
   key       String   @id
   value     String
   updatedAt DateTime @updatedAt
+}
+
+model CommissionDispute {
+  id             String                  @id @default(uuid()) @db.Uuid
+  sellerId       String                  @db.Uuid
+  marketerId     String                  @db.Uuid
+  strikes        Int                     @default(1)
+  lastStrikeAt   DateTime
+  openedRateBps  Int
+  status         CommissionDisputeStatus @default(OPEN)
+  resolvedRateBps Int?
+  resolvedAt     DateTime?
+  createdAt      DateTime                @default(now())
+  seller         User                    @relation("CommissionDisputeSeller", fields: [sellerId], references: [id])
+  marketer       User                    @relation("CommissionDisputeMarketer", fields: [marketerId], references: [id])
+
+  @@index([sellerId, status])
 }
 
 model EscrowHold {

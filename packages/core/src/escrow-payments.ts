@@ -135,6 +135,7 @@ async function settlePayCode(
     issuanceAccountId: issuance.id,
     amountMicroUsdt: input.amountMicroUsdt,
     type: TransactionType.DEPOSIT,
+    commissionFor: { buyerId: input.buyerId },
   });
   const settlement = await tx.escrowSettlement.create({
     data: {
@@ -304,11 +305,13 @@ export async function failSettlement(prisma: PrismaClient, input: { settlementId
       await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "User" WHERE "id" = ${settlement.merchantId}::uuid FOR UPDATE`);
       const merchant = await tx.user.findUniqueOrThrow({ where: { id: settlement.merchantId } });
       const newDust = merchant.dustMicroUsdt + original.amountCoupons * 10_000n - settlement.amountMicroUsdt;
-      const merchantAccount = await userCouponAccount(tx, settlement.merchantId);
-      const issuance = await issuanceAccount(tx);
       try {
         if (newDust < 0n) throw new DomainError('manual handling is needed: merchant dust would become negative');
         if (original.amountCoupons > 0n) {
+          const originalEntries = await tx.ledgerEntry.findMany({
+            where: { transactionId: original.id, asset: Asset.COUPON },
+            select: { fromAccountId: true, toAccountId: true, amount: true, asset: true },
+          });
           await postWithClient(tx, {
             type: TransactionType.REFUND,
             externalRef: `escrow:settle-reverse:${settlement.id}`,
@@ -317,7 +320,12 @@ export async function failSettlement(prisma: PrismaClient, input: { settlementId
             amountMicroUsdt: settlement.amountMicroUsdt,
             amountCoupons: original.amountCoupons,
             roundingDustMicroUsdt: original.roundingDustMicroUsdt,
-            legs: [{ fromAccountId: merchantAccount.id, toAccountId: issuance.id, amount: original.amountCoupons, asset: Asset.COUPON }],
+            legs: originalEntries.map((entry) => ({
+              fromAccountId: entry.toAccountId,
+              toAccountId: entry.fromAccountId,
+              amount: entry.amount,
+              asset: entry.asset,
+            })),
           });
         }
         await tx.user.update({ where: { id: settlement.merchantId }, data: { dustMicroUsdt: newDust } });

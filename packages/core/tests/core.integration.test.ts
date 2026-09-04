@@ -28,10 +28,16 @@ import {
   approveAidRequest,
   createAidRequest,
   revokePurchaseGuarantee,
+  forceAutoResolve,
+  grantRateDiscount,
+  logCommissionStrike,
+  setCommissionRate,
+  splitCommission,
+  readSolvency,
 } from '../src/index.js';
 
 const prisma = new PrismaClient();
-type Accounts = { issuance: string; external: string; vault: string; pending: string; fees: string; users: string[]; escrows: string[] };
+type Accounts = { issuance: string; external: string; vault: string; pending: string; fees: string; couponFees: string; users: string[]; escrows: string[] };
 
 async function account(type: AccountType, asset: Asset, userId?: string) {
   return prisma.ledgerAccount.create({ data: { type, asset, ...(userId === undefined ? {} : { userId }) } });
@@ -53,6 +59,7 @@ async function fixture(userCount = 2): Promise<Accounts & { users: string[] }> {
     vault: (await account(AccountType.SYSTEM_VAULT_USDT, Asset.USDT)).id,
     pending: (await account(AccountType.SYSTEM_WITHDRAWAL_PENDING, Asset.USDT)).id,
     fees: (await account(AccountType.SYSTEM_FEE_COLLECTION, Asset.USDT)).id,
+    couponFees: (await account(AccountType.SYSTEM_FEE_COLLECTION, Asset.COUPON)).id,
     users: userAccounts,
     escrows: escrowAccounts,
   };
@@ -69,6 +76,112 @@ afterAll(async () => {
 });
 
 describe('money and ledger domain', () => {
+  it('posts seller commission legs atomically with a coupon transfer', async () => {
+    const fixtureAccounts = await fixture(4);
+    const users = await prisma.user.findMany({ orderBy: { phoneNumber: 'asc' }, take: 4 });
+    const [buyer, seller, buyerMarketer, sellerMarketer] = users;
+    await prisma.user.update({ where: { id: buyer!.id }, data: { marketerId: buyerMarketer!.id } });
+    await prisma.user.update({ where: { id: seller!.id }, data: { marketerId: sellerMarketer!.id, commissionRateBps: 300 } });
+    await postDeposit(prisma, {
+      externalRef: 'deposit:commission:0',
+      userId: buyer!.id,
+      userCouponAccountId: fixtureAccounts.users[0]!,
+      externalOnchainAccountId: fixtureAccounts.external,
+      vaultAccountId: fixtureAccounts.vault,
+      issuanceAccountId: fixtureAccounts.issuance,
+      amountMicroUsdt: 10_000n * 10_000n,
+    });
+    await transferCoupons(prisma, { externalRef: 'transfer:commission:0', userId: buyer!.id, fromAccountId: fixtureAccounts.users[0]!, toAccountId: fixtureAccounts.users[1]!, amountCoupons: 1_000n });
+    const balances = await prisma.ledgerAccount.findMany({ where: { id: { in: [fixtureAccounts.users[0]!, fixtureAccounts.users[1]!, fixtureAccounts.users[2]!, fixtureAccounts.users[3]!, fixtureAccounts.couponFees] } } });
+    expect(Object.fromEntries(balances.map((account) => [account.id, account.balance]))).toMatchObject({
+      [fixtureAccounts.users[0]!]: 9_000n,
+      [fixtureAccounts.users[1]!]: 970n,
+      [fixtureAccounts.users[2]!]: 10n,
+      [fixtureAccounts.users[3]!]: 10n,
+      [fixtureAccounts.couponFees]: 10n,
+    });
+    expect(splitCommission(1_000n, 300)).toMatchObject({ fee: 30n });
+  });
+
+  it('reverses pay-code commission legs together with merchant credit', async () => {
+    const fixtureAccounts = await fixture(4);
+    const users = await prisma.user.findMany({ orderBy: { phoneNumber: 'asc' }, take: 4 });
+    const [buyer, merchant, buyerMarketer, sellerMarketer] = users;
+    await prisma.user.update({ where: { id: buyer!.id }, data: { marketerId: buyerMarketer!.id } });
+    await prisma.user.update({ where: { id: merchant!.id }, data: { marketerId: sellerMarketer!.id, commissionRateBps: 300 } });
+    await prisma.escrowBalance.create({ data: { userId: buyer!.id, lockedMicroUsdt: 1_000_000n } });
+    await createPayCode(prisma, {
+      buyerId: buyer!.id,
+      merchantId: merchant!.id,
+      amountMicroUsdt: 1_000_000n,
+      maxAmountMicroUsdt: 1_000_000n,
+      code: '1234',
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    const settled = await settleWithPayCode(prisma, {
+      merchantId: merchant!.id,
+      buyerBarcodeId: buyer!.barcodeId,
+      code: '1234',
+      amountMicroUsdt: 1_000_000n,
+    });
+    expect(settled.settlement.payerId).toBe(buyer!.id);
+    const afterSettlement = await prisma.ledgerAccount.findMany({
+      where: { id: { in: [fixtureAccounts.users[1]!, fixtureAccounts.users[2]!, fixtureAccounts.users[3]!, fixtureAccounts.couponFees] } },
+    });
+    expect(Object.fromEntries(afterSettlement.map((account) => [account.id, account.balance]))).toMatchObject({
+      [fixtureAccounts.users[1]!]: 97n,
+      [fixtureAccounts.users[2]!]: 1n,
+      [fixtureAccounts.users[3]!]: 1n,
+      [fixtureAccounts.couponFees]: 1n,
+    });
+    await failSettlement(prisma, { settlementId: settled.settlement.id, error: 'provider failure' });
+    const afterFailure = await prisma.ledgerAccount.findMany({
+      where: { id: { in: [fixtureAccounts.users[1]!, fixtureAccounts.users[2]!, fixtureAccounts.users[3]!, fixtureAccounts.couponFees] } },
+    });
+    expect(afterFailure.every((account) => account.balance === 0n)).toBe(true);
+  });
+
+  it('enforces commission floors and marketer discount authorization', async () => {
+    await fixture(3);
+    const users = await prisma.user.findMany({ orderBy: { phoneNumber: 'asc' }, take: 3 });
+    const [seller, marketer, stranger] = users;
+    await expect(setCommissionRate(prisma, { userId: seller!.id, rateBps: 200, floorBps: 300 })).rejects.toThrow('commission rate is below the floor');
+    await expect(setCommissionRate(prisma, { userId: seller!.id, rateBps: 0, floorBps: 300 })).resolves.toMatchObject({ commissionRateBps: 0 });
+    await expect(setCommissionRate(prisma, { userId: seller!.id, rateBps: 500, floorBps: 300 })).resolves.toMatchObject({ commissionRateBps: 500 });
+    await prisma.user.update({ where: { id: seller!.id }, data: { marketerId: marketer!.id } });
+    await expect(grantRateDiscount(prisma, { marketerId: stranger!.id, sellerId: seller!.id, newRateBps: 400, floorBps: 300 })).rejects.toThrow('marketer is not assigned');
+    await expect(grantRateDiscount(prisma, { marketerId: marketer!.id, sellerId: seller!.id, newRateBps: 500, floorBps: 300 })).rejects.toThrow('lower than the current rate');
+    await expect(grantRateDiscount(prisma, { marketerId: marketer!.id, sellerId: seller!.id, newRateBps: 200, floorBps: 300 })).rejects.toThrow('commission rate is below the floor');
+    await expect(grantRateDiscount(prisma, { marketerId: marketer!.id, sellerId: seller!.id, newRateBps: 400, floorBps: 300 })).resolves.toMatchObject({ commissionRateBps: 400 });
+  });
+
+  it('enforces strike timing and auto-resolves commission disputes at market average', async () => {
+    await fixture(3);
+    const users = await prisma.user.findMany({ orderBy: { phoneNumber: 'asc' }, take: 3 });
+    const [seller, marketer, averageUser] = users;
+    await prisma.user.updateMany({ where: { id: { in: [seller!.id, averageUser!.id] } }, data: { commissionRateBps: 500 } });
+    await prisma.user.update({ where: { id: seller!.id }, data: { commissionRateBps: 1_000, marketerId: marketer!.id } });
+    const first = new Date('2026-01-01T00:00:00.000Z');
+    await expect(logCommissionStrike(prisma, { sellerId: seller!.id, now: first })).resolves.toMatchObject({ strikes: 1 });
+    await expect(logCommissionStrike(prisma, { sellerId: seller!.id, now: new Date(first.getTime() + 9 * 24 * 60 * 60 * 1000) })).rejects.toThrow('not yet allowed');
+    const secondAt = new Date(first.getTime() + 10 * 24 * 60 * 60 * 1000);
+    await expect(logCommissionStrike(prisma, { sellerId: seller!.id, now: secondAt })).resolves.toMatchObject({ strikes: 2 });
+    const thirdAt = new Date(secondAt.getTime() + 10 * 24 * 60 * 60 * 1000);
+    await expect(logCommissionStrike(prisma, { sellerId: seller!.id, now: thirdAt })).resolves.toMatchObject({ strikes: 3 });
+    await expect(forceAutoResolve(prisma, { sellerId: seller!.id, floorBps: 300, now: new Date(thirdAt.getTime() + 9 * 24 * 60 * 60 * 1000) })).rejects.toThrow('not yet eligible');
+    await expect(forceAutoResolve(prisma, { sellerId: seller!.id, floorBps: 300, now: new Date(thirdAt.getTime() + 10 * 24 * 60 * 60 * 1000) })).resolves.toMatchObject({ status: 'AUTO_RESOLVED', resolvedRateBps: 750 });
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: seller!.id } })).commissionRateBps).toBe(750);
+    const lowSeller = await prisma.user.create({ data: { phoneNumber: '+1555000009', barcodeId: 'low-seller', commissionRateBps: 500, marketerId: marketer!.id } });
+    await expect(logCommissionStrike(prisma, { sellerId: lowSeller.id, now: first })).rejects.toThrow('already at or below market average');
+  });
+
+  it('counts coupon treasury-held coupons through issuance in solvency obligations', async () => {
+    const fixtureAccounts = await fixture(1);
+    await prisma.ledgerAccount.update({ where: { id: fixtureAccounts.issuance }, data: { balance: -100n } });
+    await prisma.ledgerAccount.update({ where: { id: fixtureAccounts.couponFees }, data: { balance: 10n } });
+    await expect(readSolvency(prisma)).resolves.toMatchObject({ obligationsMicroUsdt: 1_000_000n });
+  });
+
   it('posts a deposit and records exact dust', async () => {
     const fixtureAccounts = await fixture(1);
     const transaction = await postDeposit(prisma, {

@@ -13,3 +13,4 @@ export * from './countries.js';
 export * from './identity-policy.js';
 export * from './escrow-abi.js';
 export * from './escrow-payments.js';
+export * from './commission.js';

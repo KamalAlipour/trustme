@@ -33,6 +33,11 @@ export const openapiDocument = {
       get: { responses: { '200': { description: 'Member profile, including identityVerification status and verifiedAt' }, '401': { description: 'Unauthorized' } } },
       patch: { responses: { '200': { description: 'Updated member profile' } } },
     },
+    '/v1/me/commission-rate': { put: { responses: { '200': { description: 'Updated commission profile' }, '400': { description: 'Rate is below the configured floor' } } } },
+    '/v1/me/marketer': { put: { responses: { '200': { description: 'Updated marketer relationship' }, '409': { description: 'Marketer is already set' } } } },
+    '/v1/me/commission-discounts': { post: { responses: { '200': { description: 'Discount granted', content: { 'application/json': { schema: { type: 'object', required: ['sellerBarcodeId', 'rateBps'], properties: { sellerBarcodeId: { type: 'string' }, rateBps: { type: 'integer' } } } } } }, '400': { description: 'Invalid discount' } } } },
+    '/v1/me/commission-disputes/strike': { post: { responses: { '200': { description: 'Commission dispute strike recorded' }, '409': { description: 'Strike is not allowed' } } } },
+    '/v1/me/commission-disputes/auto-resolve': { post: { responses: { '200': { description: 'Commission dispute auto-resolved' }, '409': { description: 'Dispute is not eligible' } } } },
     '/v1/me/identity': {
       get: { responses: { '200': { description: 'Country-aware identity policy and status' } } },
       post: {
@@ -329,6 +334,7 @@ export const openapiDocument = {
       get: { responses: { '200': { description: 'Admin settings' } } },
       patch: { responses: { '200': { description: 'Updated admin settings' } } },
     },
+    '/v1/public/commission-average': { get: { responses: { '200': { description: 'Current network commission average' } } } },
     '/admin/withdrawals': { get: { responses: { '200': { description: 'Admin withdrawal queue' } } } },
     '/admin/withdrawals/{id}/approve': { post: { responses: { '200': { description: 'Withdrawal approved' } } } },
     '/admin/withdrawals/{id}/reject': { post: { responses: { '200': { description: 'Withdrawal rejected' } } } },

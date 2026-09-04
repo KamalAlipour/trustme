@@ -79,6 +79,8 @@ const settingSchema = z.object({
   autoApprovalLimitMicroUsdt: nonNegativeIntegerString,
   requireIdentityForWithdrawal: z.boolean(),
   identityRequiredCountries: z.array(z.string().regex(/^[A-Za-z]{2}$/, 'country code must be exactly two letters')).transform((countries) => [...new Set(countries.map((country) => country.toUpperCase()))]),
+  commissionFloorBps: z.number().int().min(0),
+  commissionFloorByCountry: z.array(z.object({ country: z.string().regex(/^[A-Za-z]{2}$/), bps: z.number().int().min(0) })).transform((rows) => rows.map((row) => ({ country: row.country.toUpperCase(), bps: row.bps }))),
 }).strict();
 const patchSettingsSchema = settingSchema.partial().strict();
 const statusSchema = z.nativeEnum(WithdrawalStatus).optional();
@@ -196,8 +198,12 @@ function nextCursor(createdAt: Date, id: string): string {
 }
 
 async function readAdminSettings(prisma: PrismaClient) {
-  const rows = await prisma.systemSetting.findMany({ where: { key: { in: ['WITHDRAWAL_BASE_FEE_BPS', 'WITHDRAWAL_MIN_FEE_USDT', 'MIN_WITHDRAWAL_USDT', 'AUTO_APPROVAL_LIMIT_USDT', 'REQUIRE_IDENTITY_FOR_WITHDRAWAL', 'IDENTITY_REQUIRED_COUNTRIES'] } } });
+  const rows = await prisma.systemSetting.findMany({ where: { key: { in: ['WITHDRAWAL_BASE_FEE_BPS', 'WITHDRAWAL_MIN_FEE_USDT', 'MIN_WITHDRAWAL_USDT', 'AUTO_APPROVAL_LIMIT_USDT', 'REQUIRE_IDENTITY_FOR_WITHDRAWAL', 'IDENTITY_REQUIRED_COUNTRIES', 'COMMISSION_FLOOR_BPS', 'COMMISSION_FLOOR_BPS_BY_COUNTRY'] } } });
   const values = new Map(rows.map((row) => [row.key, row.value]));
+  const commissionFloorByCountry = (values.get('COMMISSION_FLOOR_BPS_BY_COUNTRY') ?? 'IR=300').split(',').filter(Boolean).map((entry) => {
+    const [country, bps] = entry.split('=');
+    return { country: country!.toUpperCase(), bps: Number.parseInt(bps ?? '0', 10) };
+  });
   return {
     withdrawalBaseFeeBps: values.get('WITHDRAWAL_BASE_FEE_BPS') ?? '0',
     minimumFeeMicroUsdt: microUsdtFromDecimal(values.get('WITHDRAWAL_MIN_FEE_USDT') ?? '0').toString(),
@@ -205,6 +211,8 @@ async function readAdminSettings(prisma: PrismaClient) {
     autoApprovalLimitMicroUsdt: microUsdtFromDecimal(values.get('AUTO_APPROVAL_LIMIT_USDT') ?? '0').toString(),
     requireIdentityForWithdrawal: requireIdentityForWithdrawal(values.get('REQUIRE_IDENTITY_FOR_WITHDRAWAL')),
     identityRequiredCountries: [...parseIdentityRequiredCountries(values.get('IDENTITY_REQUIRED_COUNTRIES'))],
+    commissionFloorBps: Number.parseInt(values.get('COMMISSION_FLOOR_BPS') ?? '300', 10),
+    commissionFloorByCountry,
   };
 }
 
@@ -325,6 +333,8 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
           autoApprovalLimitMicroUsdt: 'AUTO_APPROVAL_LIMIT_USDT',
           requireIdentityForWithdrawal: 'REQUIRE_IDENTITY_FOR_WITHDRAWAL',
           identityRequiredCountries: 'IDENTITY_REQUIRED_COUNTRIES',
+          commissionFloorBps: 'COMMISSION_FLOOR_BPS',
+          commissionFloorByCountry: 'COMMISSION_FLOOR_BPS_BY_COUNTRY',
         };
         const before = await tx.systemSetting.findMany({ where: { key: { in: keys.map((key) => keyMap[key]!) } } });
         const oldValues = Object.fromEntries(before.map((row) => [row.key, row.value]));
@@ -332,10 +342,12 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
           const value = body[field as keyof typeof body];
           if (value === undefined) continue;
           const key = keyMap[field]!;
-          const storedValue = field === 'withdrawalBaseFeeBps' || field === 'requireIdentityForWithdrawal'
+          const storedValue = field === 'withdrawalBaseFeeBps' || field === 'requireIdentityForWithdrawal' || field === 'commissionFloorBps'
             ? String(value)
             : field === 'identityRequiredCountries'
               ? (value as string[]).join(',')
+              : field === 'commissionFloorByCountry'
+                ? (value as Array<{ country: string; bps: number }>).map((row) => `${row.country.toUpperCase()}=${row.bps}`).join(',')
               : decimalFromMicroUsdt(BigInt(value as string));
           await tx.systemSetting.upsert({ where: { key }, update: { value: storedValue }, create: { key, value: storedValue } });
         }

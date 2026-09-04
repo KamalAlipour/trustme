@@ -46,6 +46,7 @@ async function setup() {
   const lock = await system(AccountType.GUARANTEE_LOCK, Asset.COUPON);
   const escrow = await system(AccountType.ESCROW, Asset.COUPON);
   const fees = await system(AccountType.SYSTEM_FEE_COLLECTION, Asset.USDT);
+  await system(AccountType.SYSTEM_FEE_COLLECTION, Asset.COUPON);
   const pending = await system(AccountType.SYSTEM_WITHDRAWAL_PENDING, Asset.USDT);
   const borrower = await user('borrower');
   const lender = await user('lender');
