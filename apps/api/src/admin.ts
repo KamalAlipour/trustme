@@ -5,6 +5,7 @@ import { z } from 'zod';
 import {
   AccountType,
   AdminRole,
+  ApiKeyScope,
   Asset,
   IdentityReviewStatus,
   IdentityVerificationStatus,
@@ -28,6 +29,10 @@ import {
   revokeCharityAgent,
   identityPolicyFor,
   networkAverageRateBps,
+  createApiKey,
+  revokeApiKey,
+  scopeFromName,
+  SCOPE_NAMES,
 } from '@trustme/core';
 import type { QueueLike } from './app.js';
 import { adminClaims, createAdminJwt, requireAdmin, requireRole, verifyAdminPassword } from './admin-auth.js';
@@ -93,6 +98,16 @@ const dateSchema = z.string().datetime().optional();
 const charityCreateSchema = z.object({ name: z.string().trim().min(1), description: z.string().trim().optional(), contactEmail: z.string().email().optional(), isActive: z.boolean().optional() });
 const charityPatchSchema = charityCreateSchema.partial();
 const charityAgentSchema = z.object({ barcodeId: z.string().min(1), role: z.nativeEnum(CharityAgentRole).default(CharityAgentRole.AGENT) });
+const apiKeyCreateSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  scopes: z.array(z.string().min(1)).min(1).superRefine((scopes, context) => {
+    for (const [index, scope] of scopes.entries()) {
+      if (scopeFromName(scope) === null) context.addIssue({ code: z.ZodIssueCode.custom, path: [index], message: 'unknown API key scope' });
+    }
+  }),
+  expiresAt: z.string().datetime().optional(),
+}).strict();
+const apiKeyIdSchema = z.object({ id: z.string().uuid() });
 
 function jsonValue(value: unknown): string {
   const secretKeys = new Set(['code', 'password', 'passwordHash', 'privateKey', 'HOT_WALLET_PRIVATE_KEY', 'ADMIN_JWT_SECRET', 'authorization', 'token', 'jwt']);
@@ -100,6 +115,29 @@ function jsonValue(value: unknown): string {
     if (secretKeys.has(key)) return '[REDACTED]';
     return typeof nested === 'bigint' ? nested.toString() : nested;
   });
+}
+
+function serializeApiKey(row: {
+  id: string;
+  name: string;
+  keyPrefix: string;
+  scopes: ApiKeyScope[];
+  createdAt: Date;
+  expiresAt: Date | null;
+  revokedAt: Date | null;
+  lastUsedAt: Date | null;
+}, createdByUsername: string) {
+  return {
+    id: row.id,
+    name: row.name,
+    keyPrefix: row.keyPrefix,
+    scopes: row.scopes.map((scope) => SCOPE_NAMES[scope]),
+    createdAt: row.createdAt,
+    expiresAt: row.expiresAt,
+    revokedAt: row.revokedAt,
+    lastUsedAt: row.lastUsedAt,
+    createdBy: { username: createdByUsername },
+  };
 }
 
 function serializeWithdrawal(withdrawal: {
@@ -240,6 +278,72 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
   });
 
   router.use(requireAdmin(config.adminJwtSecret));
+
+  router.get('/api-keys', requireRole(AdminRole.ADMIN), async (_request, response, next) => {
+    try {
+      const rows = await prisma.apiKey.findMany({
+        include: { createdBy: { select: { username: true } } },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      });
+      response.json(rows.map((row) => serializeApiKey(row, row.createdBy.username)));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/api-keys', requireRole(AdminRole.ADMIN), async (request, response, next) => {
+    try {
+      const body = apiKeyCreateSchema.parse(request.body);
+      const claims = adminClaims(request);
+      const result = await prisma.$transaction(async (tx) => {
+        const created = await createApiKey(tx, {
+          name: body.name,
+          scopes: body.scopes.map((scope) => scopeFromName(scope)!).filter((scope): scope is ApiKeyScope => scope !== null),
+          ...(body.expiresAt === undefined ? {} : { expiresAt: new Date(body.expiresAt) }),
+          createdById: claims.sub,
+        });
+        await tx.adminAuditLog.create({
+          data: {
+            adminUserId: claims.sub,
+            action: 'api_key.create',
+            entityType: 'ApiKey',
+            entityId: created.apiKey.id,
+            newValue: jsonValue({ name: body.name, scopes: body.scopes }),
+          },
+        });
+        return created;
+      });
+      response.status(201).json({ ...serializeApiKey(result.apiKey, claims.username), rawKey: result.rawKey });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/api-keys/:id/revoke', requireRole(AdminRole.ADMIN), async (request, response, next) => {
+    try {
+      const { id } = apiKeyIdSchema.parse(request.params);
+      const claims = adminClaims(request);
+      const row = await prisma.$transaction(async (tx) => {
+        const current = await tx.apiKey.findUnique({ where: { id } });
+        if (current === null) throw new HttpError(404, 'API key not found');
+        const revoked = await revokeApiKey(tx, id);
+        await tx.adminAuditLog.create({
+          data: {
+            adminUserId: claims.sub,
+            action: 'api_key.revoke',
+            entityType: 'ApiKey',
+            entityId: id,
+            oldValue: jsonValue({ revokedAt: current.revokedAt }),
+            newValue: jsonValue({ revokedAt: revoked.revokedAt }),
+          },
+        });
+        return revoked;
+      });
+      response.json(serializeApiKey(row, claims.username));
+    } catch (error) {
+      next(error);
+    }
+  });
 
   router.get('/overview', async (_request, response, next) => {
     try {

@@ -106,6 +106,12 @@ enum AdminRole {
   ADMIN
 }
 
+enum ApiKeyScope {
+  READ_MARKET_AVERAGE
+  READ_RESERVES
+  WRITE_EXECUTE_TRANSFER_ON_BEHALF_OF_USER
+}
+
 enum KycStatus {
   UNVERIFIED
   PENDING
@@ -930,6 +936,7 @@ model AdminUser {
   createdAt    DateTime        @default(now())
   auditLogs    AdminAuditLog[]
   identityReviews IdentityReview[] @relation("IdentityReviewDecider")
+  apiKeys      ApiKey[]
 }
 
 model AdminAuditLog {
@@ -944,4 +951,20 @@ model AdminAuditLog {
   adminUser   AdminUser @relation(fields: [adminUserId], references: [id])
 
   @@index([entityType, entityId])
+}
+
+model ApiKey {
+  id          String       @id @default(uuid()) @db.Uuid
+  name        String
+  keyPrefix   String       @unique
+  keyHash     String       @unique
+  scopes      ApiKeyScope[]
+  createdById String       @db.Uuid
+  createdAt   DateTime     @default(now())
+  expiresAt   DateTime?
+  revokedAt   DateTime?
+  lastUsedAt  DateTime?
+  createdBy   AdminUser    @relation(fields: [createdById], references: [id])
+
+  @@index([createdById])
 }

@@ -16,7 +16,7 @@ export function Shell({ children, session }: Readonly<{ children: React.ReactNod
             <Link href="/withdrawals">{labels.withdrawals}</Link>
             <Link href="/identity-reviews">{labels.identityReviews}</Link>
             <Link href="/ledger">{labels.ledger}</Link>
-            {session.role === 'ADMIN' ? <Link href="/settings">{labels.settings}</Link> : null}
+            {session.role === 'ADMIN' ? <><Link href="/settings">{labels.settings}</Link><Link href="/api-keys">{labels.apiKeys}</Link></> : null}
             <span className="text-slate-500">{session.username} ({session.role})</span>
             <form action={logoutAction}>
               <button type="submit">{labels.logout}</button>

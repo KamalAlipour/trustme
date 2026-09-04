@@ -195,7 +195,7 @@ beforeAll(async () => {
   await prisma.$connect();
 });
 beforeEach(async () => {
-  await prisma.$executeRawUnsafe('TRUNCATE TABLE "EscrowChainEvent", "EscrowUnload", "EscrowSettlement", "PayCode", "EscrowBalance", "MemberWallet", "BalanceDisclosureRequest", "MediaAsset", "IdentityReview", "IdentityCaptureSession", "RefundRequest", "AidRequest", "CharityAgent", "Charity", "AdminAuditLog", "AdminUser", "Withdrawal", "EscrowHold", "EmailVerification", "MemberDevice", "Contact", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User", "ChainCursor", "SystemSetting" CASCADE');
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "ApiKey", "EscrowChainEvent", "EscrowUnload", "EscrowSettlement", "PayCode", "EscrowBalance", "MemberWallet", "BalanceDisclosureRequest", "MediaAsset", "IdentityReview", "IdentityCaptureSession", "RefundRequest", "AidRequest", "CharityAgent", "Charity", "AdminAuditLog", "AdminUser", "Withdrawal", "EscrowHold", "EmailVerification", "MemberDevice", "Contact", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User", "ChainCursor", "SystemSetting" CASCADE');
   await prisma.systemSetting.createMany({ data: [
     { key: 'WITHDRAWAL_BASE_FEE_BPS', value: '100' },
     { key: 'WITHDRAWAL_MIN_FEE_USDT', value: '0.20' },
@@ -1792,6 +1792,53 @@ describe('member API', () => {
     expect(paged.body.items).toHaveLength(1);
     expect(paged.body.nextCursor).toBeNull();
     expect((await request(app).get('/v1/me/refunds?role=buyer').set('Authorization', `Bearer ${unrelated.body.tokens.accessToken}`)).body.items).toHaveLength(0);
+  });
+});
+
+describe('scoped API keys', () => {
+  it('allows admins to create scoped keys and protects partner routes', async () => {
+    const { app } = appFixture();
+    const admin = await createAdmin(AdminRole.ADMIN, 'correct-password', 'api-keys-admin@example.com');
+    const adminJwt = await adminToken(app, admin.username);
+    const created = await request(app).post('/admin/api-keys').set('Authorization', `Bearer ${adminJwt}`).send({
+      name: 'Market child',
+      scopes: ['read:market_average'],
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.rawKey).toMatch(/^tck_[A-Za-z0-9_-]{40}$/);
+    expect(created.body.keyHash).toBeUndefined();
+    const listed = await request(app).get('/admin/api-keys').set('Authorization', `Bearer ${adminJwt}`);
+    expect(listed.status).toBe(200);
+    expect(listed.body[0]).not.toHaveProperty('rawKey');
+    expect(listed.body[0]).not.toHaveProperty('keyHash');
+    expect(listed.body[0].createdBy).toEqual({ username: admin.username });
+    expect((await request(app).get('/v1/partner/market-average').set('Authorization', `Bearer ${created.body.rawKey}`)).status).toBe(200);
+    const insufficient = await request(app).post('/admin/api-keys').set('Authorization', `Bearer ${adminJwt}`).send({ name: 'Reserves child', scopes: ['read:reserves'] });
+    const denied = await request(app).get('/v1/partner/market-average').set('Authorization', `Bearer ${insufficient.body.rawKey}`);
+    expect(denied.status).toBe(403);
+    expect(denied.body).toEqual({ error: 'insufficient_scope', required: ['read:market_average'] });
+    expect((await request(app).get('/v1/partner/market-average')).status).toBe(401);
+    expect((await request(app).get('/v1/partner/market-average').set('Authorization', `Bearer ${token}`)).status).toBe(401);
+    expect((await request(app).post(`/admin/api-keys/${created.body.id}/revoke`).set('Authorization', `Bearer ${adminJwt}`)).status).toBe(200);
+    expect((await request(app).get('/v1/partner/market-average').set('Authorization', `Bearer ${created.body.rawKey}`)).status).toBe(401);
+    expect(await prisma.adminAuditLog.count({ where: { action: 'api_key.revoke', entityId: created.body.id } })).toBe(1);
+  });
+
+  it('requires the ADMIN role and rejects expired partner keys', async () => {
+    const { app } = appFixture();
+    const approver = await createAdmin(AdminRole.APPROVER, 'correct-password', 'api-keys-approver@example.com');
+    const approverJwt = await adminToken(app, approver.username);
+    expect((await request(app).get('/admin/api-keys').set('Authorization', `Bearer ${approverJwt}`)).status).toBe(403);
+    expect((await request(app).post('/admin/api-keys').set('Authorization', `Bearer ${approverJwt}`).send({ name: 'Nope', scopes: ['read:reserves'] })).status).toBe(403);
+    const admin = await createAdmin(AdminRole.ADMIN, 'correct-password', 'api-keys-expired@example.com');
+    const adminJwt = await adminToken(app, admin.username);
+    const expired = await request(app).post('/admin/api-keys').set('Authorization', `Bearer ${adminJwt}`).send({
+      name: 'Expired child',
+      scopes: ['read:reserves'],
+      expiresAt: new Date(Date.now() - 1000).toISOString(),
+    });
+    expect(expired.status).toBe(201);
+    expect((await request(app).get('/v1/partner/reserves').set('Authorization', `Bearer ${expired.body.rawKey}`)).status).toBe(401);
   });
 });
 

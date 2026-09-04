@@ -30,6 +30,27 @@ function publicUsdt(value: bigint): string {
   return `${whole}.${fraction.padEnd(6, '0')}`;
 }
 
+export async function publicReservesPayload(prisma: PrismaClient) {
+  const [solvency, issuance, demoCirculation, demoUsers] = await Promise.all([
+    readSolvency(prisma),
+    prisma.ledgerAccount.findFirstOrThrow({ where: { type: AccountType.SYSTEM_COUPON_ISSUANCE, asset: Asset.COUPON, userId: null }, select: { balance: true } }),
+    readDemoCirculation(prisma),
+    prisma.user.count({ where: { isDemo: true } }),
+  ]);
+  const escrow = await prisma.escrowBalance.aggregate({ _sum: { lockedMicroUsdt: true } });
+  return {
+    asOf: new Date().toISOString(),
+    real: {
+      custodyUsdt: publicUsdt(solvency.custodyMicroUsdt),
+      obligationsUsdt: publicUsdt(solvency.obligationsMicroUsdt),
+      couponsInCirculation: (-issuance.balance).toString(),
+      isFullyBacked: solvency.isSolvent,
+    },
+    demo: { couponsInCirculation: demoCirculation.toString(), userCount: demoUsers },
+    escrowLockedMicroUsdt: (escrow._sum.lockedMicroUsdt ?? 0n).toString(),
+  };
+}
+
 type DatabaseClient = PrismaClient | Prisma.TransactionClient;
 
 async function accountForUser(prisma: DatabaseClient, userId: string) {
@@ -101,24 +122,7 @@ export function createPublicRouter(prisma: PrismaClient): express.Router {
         response.json(reservesCache.value);
         return;
       }
-      const [solvency, issuance, demoCirculation, demoUsers] = await Promise.all([
-        readSolvency(prisma),
-        prisma.ledgerAccount.findFirstOrThrow({ where: { type: AccountType.SYSTEM_COUPON_ISSUANCE, asset: Asset.COUPON, userId: null }, select: { balance: true } }),
-        readDemoCirculation(prisma),
-        prisma.user.count({ where: { isDemo: true } }),
-      ]);
-      const escrow = await prisma.escrowBalance.aggregate({ _sum: { lockedMicroUsdt: true } });
-      const value = {
-        asOf: new Date().toISOString(),
-        real: {
-          custodyUsdt: publicUsdt(solvency.custodyMicroUsdt),
-          obligationsUsdt: publicUsdt(solvency.obligationsMicroUsdt),
-          couponsInCirculation: (-issuance.balance).toString(),
-          isFullyBacked: solvency.isSolvent,
-        },
-        demo: { couponsInCirculation: demoCirculation.toString(), userCount: demoUsers },
-        escrowLockedMicroUsdt: (escrow._sum.lockedMicroUsdt ?? 0n).toString(),
-      };
+      const value = await publicReservesPayload(prisma);
       reservesCache = { expiresAt: Date.now() + 10_000, value };
       response.json(value);
     } catch (error) {

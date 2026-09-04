@@ -43,6 +43,7 @@ import { requireIdentityForWithdrawal } from './withdrawal-settings.js';
 import { createMemberAuthRouter, createMemberSecurityRouter, requireMember } from './member-auth.js';
 import { createMemberRouter } from './member-router.js';
 import { createPublicRouter } from './public-router.js';
+import { createPartnerRouter } from './partner-router.js';
 import { provisionUser } from './user-provisioning.js';
 
 export { HttpError } from './http-error.js';
@@ -178,6 +179,9 @@ export function createApp(dependencies: ApiDependencies): express.Express {
       'req.body.password',
       'req.body.token',
       'res.body.token',
+      'req.body.rawKey',
+      'res.body.rawKey',
+      'rawKey',
     ],
   });
   const app = express();
@@ -187,6 +191,7 @@ export function createApp(dependencies: ApiDependencies): express.Express {
   app.use('/v1', rateLimit({ windowMs: config.rateLimitWindowMs, limit: config.rateLimitMax, standardHeaders: true, legacyHeaders: false }));
   useConfiguredCors(app, config.allowedOrigins);
   app.use('/v1/public', createPublicRouter(prisma));
+  app.use('/v1/partner', createPartnerRouter(prisma));
   const logEmailCode = dependencies.logEmailCode ?? ((email: string, code: string) => logger.info({ email }, `member email code ${code}`));
   app.use('/v1/auth', createMemberAuthRouter({
     config,
