@@ -1765,9 +1765,9 @@ describe('directed escrow API', () => {
     await prisma.escrowBalance.create({ data: { userId: buyer.id, lockedMicroUsdt: 5_000_000n } });
     const created = await request(app).post('/v1/me/escrow/pay-codes').set('Authorization', `Bearer ${buyerToken}`).send({ code: '3456', merchantBarcodeId: 'decimal-merchant', amountCoupons: '12.5', pin: '2468' });
     expect(created.status).toBe(201);
-    expect(created.body).toMatchObject({ amount: '0.125', amountCoupons: '12.5' });
+    expect(created.body).toMatchObject({ amount: '0.125000', amountCoupons: '12.5' });
     const incoming = await request(app).get('/v1/me/escrow/pay-codes/incoming').set('Authorization', `Bearer ${merchantToken}`);
-    expect(incoming.body.items).toMatchObject([{ amount: '0.125', amountCoupons: '12.5' }]);
+    expect(incoming.body.items).toMatchObject([{ amount: '0.125000', amountCoupons: '12.5' }]);
     const settlement = await request(app).post('/v1/me/escrow/settlements').set('Authorization', `Bearer ${merchantToken}`).send({ payCodeId: created.body.id, code: '3456', pin: '2468', idempotencyKey: 'decimal-settlement' });
     expect(settlement.status).toBe(201);
     expect((await prisma.escrowSettlement.findUniqueOrThrow({ where: { payCodeId: created.body.id } })).amountMicroUsdt).toBe(125_000n);
