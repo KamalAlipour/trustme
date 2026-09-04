@@ -15,6 +15,7 @@ import {
   TransactionType,
 } from '@trustme/db';
 import { postDepositCouponCredit } from './domain.js';
+import { reverseCommissionPayouts } from './commission.js';
 import { postWithClient } from './ledger.js';
 import { withSerializableRetry } from './retry.js';
 import { evmAddressSchema, fourDigitCodeSchema } from './schemas.js';
@@ -312,7 +313,7 @@ export async function failSettlement(prisma: PrismaClient, input: { settlementId
             where: { transactionId: original.id, asset: Asset.COUPON },
             select: { fromAccountId: true, toAccountId: true, amount: true, asset: true },
           });
-          await postWithClient(tx, {
+          const reversal = await postWithClient(tx, {
             type: TransactionType.REFUND,
             externalRef: `escrow:settle-reverse:${settlement.id}`,
             userId: settlement.merchantId,
@@ -327,6 +328,7 @@ export async function failSettlement(prisma: PrismaClient, input: { settlementId
               asset: entry.asset,
             })),
           });
+          await reverseCommissionPayouts(tx, original.id, reversal.id);
         }
         await tx.user.update({ where: { id: settlement.merchantId }, data: { dustMicroUsdt: newDust } });
       } catch (error) {

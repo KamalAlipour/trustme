@@ -17,7 +17,7 @@ import { withSerializableRetry } from './retry.js';
 import { DomainError } from './domain-error.js';
 import { assertNoPinResetQuarantine, assertNotRestricted, readWithdrawalAvailabilityInTransaction } from './lending.js';
 import { assertNotDemoAccount, assertNotDemoCharityDonation, assertSameDemoSide } from './demo.js';
-import { commissionLegs } from './commission.js';
+import { commissionLegs, recordCommissionPayouts, type PendingPayout } from './commission.js';
 
 export async function postDeposit(
   prisma: PrismaClient,
@@ -74,13 +74,16 @@ export async function postDepositCouponCredit(
     ...(input.legs ?? []),
     ...(coupons > 0n ? [{ fromAccountId: input.issuanceAccountId, toAccountId: input.userCouponAccountId, amount: coupons, asset: Asset.COUPON }] : []),
   ];
+  let payouts: PendingPayout[] = [];
   if (coupons > 0n && input.commissionFor !== undefined) {
-    legs.push(...await commissionLegs(tx, {
+    const commission = await commissionLegs(tx, {
       buyerId: input.commissionFor.buyerId,
       sellerId: input.userId,
       sellerAccountId: input.userCouponAccountId,
       amountCoupons: coupons,
-    }));
+    });
+    legs.push(...commission.legs);
+    payouts = commission.payouts;
   }
   const transaction = legs.length > 0
     ? await postWithClient(tx, {
@@ -106,6 +109,7 @@ export async function postDepositCouponCredit(
         roundingDustMicroUsdt: carry,
       },
     });
+  await recordCommissionPayouts(tx, transaction.id, payouts);
   await tx.user.update({ where: { id: input.userId }, data: { dustMicroUsdt: carry } });
   return transaction;
 }
@@ -126,15 +130,18 @@ export async function transferCoupons(
     if (input.userId !== undefined) await assertNotDemoCharityDonation(tx, input.userId, input.toAccountId);
     const destination = await tx.ledgerAccount.findUnique({ where: { id: input.toAccountId }, select: { id: true, type: true, asset: true, userId: true } });
     const legs: LedgerLeg[] = [{ fromAccountId: input.fromAccountId, toAccountId: input.toAccountId, amount: input.amountCoupons, asset: Asset.COUPON }];
+    let payouts: PendingPayout[] = [];
     if (destination?.type === AccountType.USER_COUPON && destination.asset === Asset.COUPON && destination.userId !== null && input.userId !== undefined) {
-      legs.push(...await commissionLegs(tx, {
+      const commission = await commissionLegs(tx, {
         buyerId: input.userId,
         sellerId: destination.userId,
         sellerAccountId: destination.id,
         amountCoupons: input.amountCoupons,
-      }));
+      });
+      legs.push(...commission.legs);
+      payouts = commission.payouts;
     }
-    return postWithClient(tx, {
+    const transaction = await postWithClient(tx, {
       type: TransactionType.TRANSFER,
       externalRef: input.externalRef,
       ...(input.userId === undefined ? {} : { userId: input.userId }),
@@ -142,6 +149,8 @@ export async function transferCoupons(
       amountCoupons: input.amountCoupons,
       legs,
     });
+    await recordCommissionPayouts(tx, transaction.id, payouts);
+    return transaction;
   });
 }
 

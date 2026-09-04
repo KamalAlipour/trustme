@@ -183,6 +183,12 @@ enum CommissionDisputeStatus {
   AUTO_RESOLVED
 }
 
+enum CommissionPayoutRole {
+  BUYER_MARKETER
+  SELLER_MARKETER
+  TRAINER
+}
+
 enum IdentityProvider {
   GOOGLE
   APPLE
@@ -248,6 +254,7 @@ model User {
   isDemo               Boolean             @default(false)
   commissionRateBps    Int                 @default(0)
   marketerId           String?             @db.Uuid
+  trainerId            String?             @db.Uuid
   dustMicroUsdt        BigInt              @default(0)
   activeGuaranteeCount Int                 @default(0)
   createdAt            DateTime            @default(now())
@@ -288,8 +295,12 @@ model User {
   purchaseGuaranteesAsBeneficiary PurchaseGuarantee[] @relation("PurchaseGuaranteeBeneficiary")
   marketer             User?              @relation("Marketer", fields: [marketerId], references: [id])
   referredMembers      User[]             @relation("Marketer")
+  trainer              User?              @relation("Trainer", fields: [trainerId], references: [id])
+  trainees             User[]             @relation("Trainer")
   commissionDisputesAsSeller CommissionDispute[] @relation("CommissionDisputeSeller")
   commissionDisputesAsMarketer CommissionDispute[] @relation("CommissionDisputeMarketer")
+  commissionPayoutsReceived CommissionPayout[] @relation("PayoutRecipient")
+  commissionPayoutsAttributed CommissionPayout[] @relation("PayoutSource")
   unloads              EscrowUnload[]
   escrowChainEvents    EscrowChainEvent[]
 
@@ -527,6 +538,7 @@ model Transaction {
   refundRequest         RefundRequest?    @relation("RefundTransaction")
   aidDisbursement       AidRequest?       @relation("AidDisbursementTransaction")
   escrowSettlement      EscrowSettlement?
+  commissionPayouts     CommissionPayout[]
 
   @@index([userId, createdAt])
 }
@@ -652,6 +664,22 @@ model CommissionDispute {
   marketer       User                    @relation("CommissionDisputeMarketer", fields: [marketerId], references: [id])
 
   @@index([sellerId, status])
+}
+
+model CommissionPayout {
+  id            String               @id @default(uuid()) @db.Uuid
+  transactionId String               @db.Uuid
+  recipientId   String               @db.Uuid
+  sourceUserId  String               @db.Uuid
+  role          CommissionPayoutRole
+  amount        BigInt
+  createdAt     DateTime             @default(now())
+  transaction   Transaction          @relation(fields: [transactionId], references: [id])
+  recipient     User                 @relation("PayoutRecipient", fields: [recipientId], references: [id])
+  sourceUser    User                 @relation("PayoutSource", fields: [sourceUserId], references: [id])
+
+  @@index([recipientId, role])
+  @@index([transactionId])
 }
 
 model EscrowHold {

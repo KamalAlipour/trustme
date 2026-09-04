@@ -1,5 +1,5 @@
 import { beforeAll, afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { PrismaClient, AccountType, Asset, CharityAgentRole, EscrowEventKind, EscrowStatus, TransactionStatus, WithdrawalStatus } from '@trustme/db';
+import { PrismaClient, AccountType, Asset, CharityAgentRole, CommissionPayoutRole, EscrowEventKind, EscrowStatus, TransactionStatus, WithdrawalStatus } from '@trustme/db';
 import {
   calculateSolvency,
   issueDemoCoupons,
@@ -32,6 +32,8 @@ import {
   grantRateDiscount,
   logCommissionStrike,
   setCommissionRate,
+  setTrainer,
+  referralSummary,
   splitCommission,
   readSolvency,
 } from '../src/index.js';
@@ -69,7 +71,7 @@ beforeAll(async () => {
   await prisma.$connect();
 });
 beforeEach(async () => {
-  await prisma.$executeRawUnsafe('TRUNCATE TABLE "EscrowChainEvent", "EscrowUnload", "EscrowSettlement", "PayCode", "EscrowBalance", "MemberWallet", "MediaAsset", "RefundRequest", "AidRequest", "CharityAgent", "Charity", "AdminAuditLog", "AdminUser", "Withdrawal", "EscrowHold", "EmailVerification", "MemberDevice", "Contact", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User" CASCADE');
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "CommissionPayout", "EscrowChainEvent", "EscrowUnload", "EscrowSettlement", "PayCode", "EscrowBalance", "MemberWallet", "MediaAsset", "RefundRequest", "AidRequest", "CharityAgent", "Charity", "AdminAuditLog", "AdminUser", "Withdrawal", "EscrowHold", "EmailVerification", "MemberDevice", "Contact", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User" CASCADE');
 });
 afterAll(async () => {
   await prisma.$disconnect();
@@ -139,6 +141,74 @@ describe('money and ledger domain', () => {
       where: { id: { in: [fixtureAccounts.users[1]!, fixtureAccounts.users[2]!, fixtureAccounts.users[3]!, fixtureAccounts.couponFees] } },
     });
     expect(afterFailure.every((account) => account.balance === 0n)).toBe(true);
+  });
+
+  it('splits marketer shares to a trainer and records payout attribution', async () => {
+    const fixtureAccounts = await fixture(4);
+    const users = await prisma.user.findMany({ orderBy: { phoneNumber: 'asc' }, take: 4 });
+    const [buyer, merchant, marketer, trainer] = users;
+    await prisma.user.update({ where: { id: marketer!.id }, data: { trainerId: trainer!.id } });
+    await prisma.user.update({ where: { id: merchant!.id }, data: { marketerId: marketer!.id, commissionRateBps: 300 } });
+    await postDeposit(prisma, {
+      externalRef: 'deposit:trainer:0',
+      userId: buyer!.id,
+      userCouponAccountId: fixtureAccounts.users[0]!,
+      externalOnchainAccountId: fixtureAccounts.external,
+      vaultAccountId: fixtureAccounts.vault,
+      issuanceAccountId: fixtureAccounts.issuance,
+      amountMicroUsdt: 10_000n * 10_000n,
+    });
+    const transaction = await transferCoupons(prisma, {
+      externalRef: 'transfer:trainer:0',
+      userId: buyer!.id,
+      fromAccountId: fixtureAccounts.users[0]!,
+      toAccountId: fixtureAccounts.users[1]!,
+      amountCoupons: 1_000n,
+    });
+    expect(await prisma.ledgerAccount.findUniqueOrThrow({ where: { id: fixtureAccounts.users[1]! } })).toMatchObject({ balance: 970n });
+    expect(await prisma.ledgerAccount.findUniqueOrThrow({ where: { id: fixtureAccounts.users[2]! } })).toMatchObject({ balance: 8n });
+    expect(await prisma.ledgerAccount.findUniqueOrThrow({ where: { id: fixtureAccounts.users[3]! } })).toMatchObject({ balance: 2n });
+    const payouts = await prisma.commissionPayout.findMany({ where: { transactionId: transaction.id }, orderBy: { role: 'asc' } });
+    expect(payouts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ recipientId: marketer!.id, sourceUserId: merchant!.id, role: CommissionPayoutRole.SELLER_MARKETER, amount: 8n }),
+      expect.objectContaining({ recipientId: trainer!.id, sourceUserId: marketer!.id, role: CommissionPayoutRole.TRAINER, amount: 2n }),
+    ]));
+    expect(payouts.reduce((sum, payout) => sum + payout.amount, 0n)).toBe(10n);
+  });
+
+  it('keeps the full marketer share when the trainer is missing and summarizes referrals', async () => {
+    const fixtureAccounts = await fixture(3);
+    const users = await prisma.user.findMany({ orderBy: { phoneNumber: 'asc' }, take: 3 });
+    const [buyer, seller, marketer] = users;
+    await prisma.user.update({ where: { id: seller!.id }, data: { marketerId: marketer!.id, commissionRateBps: 300 } });
+    await prisma.user.update({ where: { id: buyer!.id }, data: { marketerId: marketer!.id } });
+    await postDeposit(prisma, {
+      externalRef: 'deposit:referral:0',
+      userId: buyer!.id,
+      userCouponAccountId: fixtureAccounts.users[0]!,
+      externalOnchainAccountId: fixtureAccounts.external,
+      vaultAccountId: fixtureAccounts.vault,
+      issuanceAccountId: fixtureAccounts.issuance,
+      amountMicroUsdt: 10_000n * 10_000n,
+    });
+    await transferCoupons(prisma, { externalRef: 'transfer:referral:0', userId: buyer!.id, fromAccountId: fixtureAccounts.users[0]!, toAccountId: fixtureAccounts.users[1]!, amountCoupons: 1_000n });
+    expect(await prisma.ledgerAccount.findUniqueOrThrow({ where: { id: fixtureAccounts.users[2]! } })).toMatchObject({ balance: 20n });
+    await expect(referralSummary(prisma, marketer!.id)).resolves.toEqual({
+      marketers: { count: 0, earnedCoupons: '0' },
+      sellers: { count: 1, earnedCoupons: '10' },
+      customers: { count: 1, earnedCoupons: '10' },
+    });
+  });
+
+  it('sets trainers once and rejects self and direct cycles', async () => {
+    await fixture(3);
+    const users = await prisma.user.findMany({ orderBy: { phoneNumber: 'asc' }, take: 3 });
+    const [member, trainer, cycle] = users;
+    await expect(setTrainer(prisma, { userId: member!.id, trainerBarcodeId: trainer!.barcodeId })).resolves.toMatchObject({ trainerId: trainer!.id });
+    await expect(setTrainer(prisma, { userId: member!.id, trainerBarcodeId: cycle!.barcodeId })).rejects.toThrow('already set');
+    await expect(setTrainer(prisma, { userId: cycle!.id, trainerBarcodeId: cycle!.barcodeId })).rejects.toThrow('self-referral');
+    await prisma.user.update({ where: { id: cycle!.id }, data: { trainerId: trainer!.id } });
+    await expect(setTrainer(prisma, { userId: trainer!.id, trainerBarcodeId: cycle!.barcodeId })).rejects.toThrow('cycle');
   });
 
   it('enforces commission floors and marketer discount authorization', async () => {

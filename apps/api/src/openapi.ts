@@ -21,6 +21,37 @@ export const openapiDocument = {
           },
         },
       },
+      MemberProfile: {
+        type: 'object',
+        properties: {
+          commission: {
+            type: 'object',
+            required: ['rateBps', 'floorBps', 'canStrike', 'marketer', 'trainer', 'dispute'],
+            properties: {
+              rateBps: { type: 'integer' },
+              floorBps: { type: 'integer' },
+              canStrike: { type: 'boolean' },
+              marketer: { type: 'object', nullable: true, properties: { barcodeId: { type: 'string' }, displayName: { type: 'string', nullable: true } } },
+              trainer: { type: 'object', nullable: true, properties: { barcodeId: { type: 'string' }, displayName: { type: 'string', nullable: true } } },
+              dispute: { type: 'object', nullable: true },
+            },
+          },
+          referrals: {
+            type: 'object',
+            required: ['marketers', 'sellers', 'customers'],
+            properties: {
+              marketers: { $ref: '#/components/schemas/ReferralSummary' },
+              sellers: { $ref: '#/components/schemas/ReferralSummary' },
+              customers: { $ref: '#/components/schemas/ReferralSummary' },
+            },
+          },
+        },
+      },
+      ReferralSummary: {
+        type: 'object',
+        required: ['count', 'earnedCoupons'],
+        properties: { count: { type: 'integer' }, earnedCoupons: { type: 'string' } },
+      },
     },
   },
   paths: {
@@ -30,11 +61,17 @@ export const openapiDocument = {
     '/v1/auth/pin-reset/request': { post: { responses: { '202': { description: 'Reset requested' }, '503': { description: 'Email delivery unavailable' } } } },
     '/v1/auth/pin-reset/confirm': { post: { responses: { '200': { description: 'Reset PIN and tokens' }, '401': { description: 'Invalid code' } } } },
     '/v1/me': {
-      get: { responses: { '200': { description: 'Member profile, including identityVerification status and verifiedAt' }, '401': { description: 'Unauthorized' } } },
+      get: { responses: { '200': { description: 'Member profile, including commission trainer and referral summaries', content: { 'application/json': { schema: { $ref: '#/components/schemas/MemberProfile' } } } }, '401': { description: 'Unauthorized' } } },
       patch: { responses: { '200': { description: 'Updated member profile' } } },
     },
     '/v1/me/commission-rate': { put: { responses: { '200': { description: 'Updated commission profile' }, '400': { description: 'Rate is below the configured floor' } } } },
     '/v1/me/marketer': { put: { responses: { '200': { description: 'Updated marketer relationship' }, '409': { description: 'Marketer is already set' } } } },
+    '/v1/me/trainer': {
+      put: {
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['trainerBarcodeId', 'pin'], properties: { trainerBarcodeId: { type: 'string' }, pin: { type: 'string', pattern: '^\\d{4}$' } } } } } },
+        responses: { '200': { description: 'Updated trainer relationship' }, '400': { description: 'Trainer referral cycle or self-referral' }, '409': { description: 'Trainer is already set' } },
+      },
+    },
     '/v1/me/commission-discounts': { post: { responses: { '200': { description: 'Discount granted', content: { 'application/json': { schema: { type: 'object', required: ['sellerBarcodeId', 'rateBps'], properties: { sellerBarcodeId: { type: 'string' }, rateBps: { type: 'integer' } } } } } }, '400': { description: 'Invalid discount' } } } },
     '/v1/me/commission-disputes/strike': { post: { responses: { '200': { description: 'Commission dispute strike recorded' }, '409': { description: 'Strike is not allowed' } } } },
     '/v1/me/commission-disputes/auto-resolve': { post: { responses: { '200': { description: 'Commission dispute auto-resolved' }, '409': { description: 'Dispute is not eligible' } } } },

@@ -6,6 +6,7 @@ export type OverviewData = {
   feesCollectedUsdt: string;
   withdrawalPendingUsdt: string;
   dustUsdt: string;
+  commissionNetworkAverageBps: number;
   solvency: {
     custodyUsdt: string;
     obligationsUsdt: string;
@@ -17,7 +18,6 @@ export type OverviewData = {
   chain: { available: boolean; headBlock?: number; nextBlock?: string; lag?: string };
   hotWallet: { available: boolean; usdt?: string; nativeWei?: string };
   demo: { couponsInCirculation: string; userCount: number };
-  commissionNetworkAverageBps: number;
 };
 
 export function availabilityLabel(available: boolean): string {
