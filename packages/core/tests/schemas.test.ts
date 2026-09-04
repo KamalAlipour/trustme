@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { generateBarcodeId, ibanSchema, iranMobileSchema, jalaliBirthDateSchema, nationalCodeSchema } from '../src/index.js';
+import { couponAmountSchema, generateBarcodeId, ibanSchema, iranMobileSchema, jalaliBirthDateSchema, nationalCodeSchema } from '../src/index.js';
 
 describe('barcode IDs', () => {
   it('generates cryptographically random Crockford IDs in the documented format', () => {
@@ -45,5 +45,12 @@ describe('identity schemas', () => {
     expect(jalaliBirthDateSchema.parse('۱۳۷۸/۰۱/۱۲')).toBe('1378/01/12');
     expect(jalaliBirthDateSchema.parse('1400-1-2')).toBe('1400/1/2');
     expect(jalaliBirthDateSchema.safeParse('1399/13/01').success).toBe(false);
+  });
+
+  it('normalizes Persian decimal coupon amounts and rejects invalid values', () => {
+    expect(couponAmountSchema.parse('۱۲٫۵')).toBe('12.5');
+    expect(couponAmountSchema.parse(' 1,25 ')).toBe('1.25');
+    expect(couponAmountSchema.safeParse('0').success).toBe(false);
+    expect(couponAmountSchema.safeParse('1.23456').success).toBe(false);
   });
 });

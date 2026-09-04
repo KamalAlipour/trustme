@@ -14,6 +14,13 @@ export function formatCoupons(coupons: string, language: Language): string {
   return localizeDigits(grouped, language);
 }
 
+export function formatCouponAmount(value: string, language: Language): string {
+  if (!/^\d+(\.\d{1,4})?$/.test(value)) throw new Error('invalid coupon amount');
+  const [whole = '', fraction] = value.split('.');
+  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return localizeDigits(fraction === undefined ? grouped : `${grouped}.${fraction}`, language);
+}
+
 export function formatDate(value: string, language: Language): string {
   return new Intl.DateTimeFormat(language === 'fa' ? 'fa-IR' : 'en-US', { dateStyle: 'medium' }).format(new Date(value));
 }
