@@ -14,7 +14,13 @@ export type Member = {
     floorBps: number;
     canStrike: boolean;
     marketer: { barcodeId: string; displayName: string | null } | null;
+    trainer: { barcodeId: string; displayName: string | null } | null;
     dispute: { strikes: number; lastStrikeAt: string; status: string; nextStrikeAt: string | null; autoResolveAt: string | null } | null;
+  };
+  referrals: {
+    marketers: { count: number; earnedCoupons: string };
+    sellers: { count: number; earnedCoupons: string };
+    customers: { count: number; earnedCoupons: string };
   };
   identityVerification: {
     status: 'UNVERIFIED' | 'VERIFIED' | 'MISMATCH' | 'INCONCLUSIVE';

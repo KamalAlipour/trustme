@@ -59,6 +59,7 @@ export default function Profile() {
   const [emailBusy, setEmailBusy] = useState<'send' | 'verify' | null>(null);
   const [commissionRate, setCommissionRate] = useState('');
   const [marketerBarcode, setMarketerBarcode] = useState('');
+  const [trainerBarcode, setTrainerBarcode] = useState('');
   const [discountSellerBarcode, setDiscountSellerBarcode] = useState('');
   const [discountRate, setDiscountRate] = useState('');
   const previousLanguage = useRef(language);
@@ -69,6 +70,7 @@ export default function Profile() {
   }, [current?.commission?.rateBps]);
   useEffect(() => {
     if (params.field === 'marketer' && params.barcodeId !== undefined) setMarketerBarcode(params.barcodeId);
+    if (params.field === 'trainer' && params.barcodeId !== undefined) setTrainerBarcode(params.barcodeId);
   }, [params.barcodeId, params.field]);
   const emailIsValid = isValidEmail(email);
   const emailCodeIsValid = isValidEmailCode(emailCode);
@@ -110,6 +112,13 @@ export default function Profile() {
     try {
       await request('/v1/me/marketer', { method: 'PUT', body: { barcodeId: marketerBarcode, pin: await stepUp() } });
       setMarketerBarcode('');
+      await invalidate();
+    } catch (cause) { setError(cause instanceof ApiError ? cause.message : t.unknownError); }
+  };
+  const saveTrainer = async () => {
+    try {
+      await request('/v1/me/trainer', { method: 'PUT', body: { trainerBarcodeId: trainerBarcode, pin: await stepUp() } });
+      setTrainerBarcode('');
       await invalidate();
     } catch (cause) { setError(cause instanceof ApiError ? cause.message : t.unknownError); }
   };
@@ -271,6 +280,12 @@ export default function Profile() {
           <TextInput value={marketerBarcode} onChangeText={setMarketerBarcode} placeholder={t.barcode} style={styles.input} />
           <Pressable onPress={() => router.push({ pathname: '/scan', params: { returnTo: '/(tabs)/profile', field: 'marketer' } })} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.scanQr}</Text></Pressable>
           <Pressable onPress={() => void saveMarketer()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.setMarketer}</Text></Pressable>
+        </> : null}
+        <Text style={styles.text}>{t.trainer}: {current.commission.trainer?.displayName ?? current.commission.trainer?.barcodeId ?? t.notRegistered}</Text>
+        {current.commission.trainer === null ? <>
+          <TextInput value={trainerBarcode} onChangeText={setTrainerBarcode} placeholder={t.barcode} style={styles.input} />
+          <Pressable onPress={() => router.push({ pathname: '/scan', params: { returnTo: '/(tabs)/profile', field: 'trainer' } })} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.scanQr}</Text></Pressable>
+          <Pressable onPress={() => void saveTrainer()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.setTrainer}</Text></Pressable>
         </> : null}
         {current.commission.canStrike ? <>
           {current.commission.dispute ? <Text style={styles.muted}>{t.strikes(current.commission.dispute.strikes)}{current.commission.dispute.nextStrikeAt ? ` · ${t.nextStrike(formatDate(current.commission.dispute.nextStrikeAt, language))}` : ''}</Text> : null}

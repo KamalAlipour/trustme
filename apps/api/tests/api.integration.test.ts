@@ -231,6 +231,31 @@ describe('member API', () => {
     expect(result.status).toBe(404);
   });
 
+  it('sets a trainer and includes trainer and referral summaries in the member profile', async () => {
+    const { app } = appFixture();
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000094', barcodeId: 'trainer-member' });
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000095', barcodeId: 'trainer-coach' });
+    const accessToken = await memberToken(app, '+1555000094');
+    const result = await request(app)
+      .put('/v1/me/trainer')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ trainerBarcodeId: 'trainer-coach', pin: '2468' });
+    expect(result.status).toBe(200);
+    expect(result.body.commission.trainer).toEqual({ barcodeId: 'trainer-coach', displayName: null });
+    expect(result.body.referrals).toEqual({
+      marketers: { count: 0, earnedCoupons: '0' },
+      sellers: { count: 0, earnedCoupons: '0' },
+      customers: { count: 0, earnedCoupons: '0' },
+    });
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000096', barcodeId: 'trainer-self' });
+    const selfToken = await memberToken(app, '+1555000096');
+    const self = await request(app)
+      .put('/v1/me/trainer')
+      .set('Authorization', `Bearer ${selfToken}`)
+      .send({ trainerBarcodeId: 'trainer-self', pin: '2468' });
+    expect(self.status).toBe(400);
+  });
+
   it('disables prepaid escrow operations when no contract is configured', async () => {
     const { app } = appFixture();
     await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+15550000001', barcodeId: 'escrow-disabled' });
@@ -1964,17 +1989,19 @@ describe('admin API', () => {
     const updated = await request(app)
       .patch('/admin/settings')
       .set('Authorization', `Bearer ${jwt}`)
-      .send({ commissionFloorBps: 250, commissionFloorByCountry: [{ country: 'no', bps: 350 }] });
+      .send({ commissionFloorBps: 250, commissionFloorByCountry: [{ country: 'no', bps: 350 }], trainerCutBps: 2200 });
     expect(updated.status).toBe(200);
     expect(updated.body).toMatchObject({
       commissionFloorBps: 250,
       commissionFloorByCountry: [{ country: 'NO', bps: 350 }],
+      trainerCutBps: 2200,
     });
     const read = await request(app).get('/admin/settings').set('Authorization', `Bearer ${jwt}`);
     expect(read.status).toBe(200);
     expect(read.body).toMatchObject({
       commissionFloorBps: 250,
       commissionFloorByCountry: [{ country: 'NO', bps: 350 }],
+      trainerCutBps: 2200,
     });
   });
 
@@ -2156,6 +2183,7 @@ describe('admin API', () => {
     const result = await request(app).get('/admin/overview').set('Authorization', `Bearer ${await adminToken(app, 'viewer@example.com')}`);
     expect(result.status).toBe(200);
     expect(result.body.chain).toMatchObject({ available: true, headBlock: 250, nextBlock: '240', lag: '10' });
+    expect(result.body.commissionNetworkAverageBps).toBe(0);
     expect(result.body.hotWallet).toMatchObject({ available: true, usdt: '10', nativeWei: '2000000000000000000' });
     expect(result.body.solvency.isSolvent).toBe(true);
     expect(result.body.solvency).toMatchObject({

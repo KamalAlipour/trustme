@@ -12,6 +12,7 @@ type Settings = {
   identityRequiredCountries: string[];
   commissionFloorBps: number;
   commissionFloorByCountry: Array<{ country: string; bps: number }>;
+  trainerCutBps: number;
 };
 
 export function SettingsForm({ settings, errorField, errorMessage }: Readonly<{ settings: Settings; errorField?: string | undefined; errorMessage?: string | undefined }>) {
@@ -53,6 +54,11 @@ export function SettingsForm({ settings, errorField, errorMessage }: Readonly<{ 
         <span className="mb-1 block text-sm font-medium">Commission floors by country (IR=300,NO=300)</span>
         <input className="w-full" name="commissionFloorByCountry" defaultValue={settings.commissionFloorByCountry.map((row) => `${row.country}=${row.bps}`).join(',')} />
         {fieldError('commissionFloorByCountry') ? <span className="mt-1 block text-sm text-red-700">{fieldError('commissionFloorByCountry')}</span> : null}
+      </label>
+      <label className="block">
+        <span className="mb-1 block text-sm font-medium">Trainer cut (bps)</span>
+        <input className="w-full" name="trainerCutBps" defaultValue={settings.trainerCutBps} inputMode="numeric" />
+        {fieldError('trainerCutBps') ? <span className="mt-1 block text-sm text-red-700">{fieldError('trainerCutBps')}</span> : null}
       </label>
       <label className="block">
         <span className="mb-1 block text-sm font-medium">{labels.minimumFeeMicroUsdt}</span>

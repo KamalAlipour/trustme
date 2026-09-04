@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { splitCommission } from '../src/commission.js';
+import { splitCommission, splitTrainerCut } from '../src/commission.js';
 
 describe('commission splitting', () => {
   it('splits a three-percent fee into thirds', () => {
@@ -16,5 +16,11 @@ describe('commission splitting', () => {
 
   it('assigns any remainder after thirds to the treasury', () => {
     expect(splitCommission(1_000n, 350)).toEqual({ fee: 35n, treasury: 13n, buyerMarketer: 11n, sellerMarketer: 11n });
+  });
+
+  it('splits a marketer share with the trainer cut', () => {
+    expect(splitTrainerCut(1_000n, 2_000)).toEqual({ marketer: 800n, trainer: 200n });
+    expect(splitTrainerCut(7n, 2_000)).toEqual({ marketer: 6n, trainer: 1n });
+    expect(splitTrainerCut(1_000n, 0)).toEqual({ marketer: 1_000n, trainer: 0n });
   });
 });

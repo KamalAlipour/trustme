@@ -6,6 +6,7 @@ export type OverviewData = {
   feesCollectedUsdt: string;
   withdrawalPendingUsdt: string;
   dustUsdt: string;
+  commissionNetworkAverageBps: number;
   solvency: {
     custodyUsdt: string;
     obligationsUsdt: string;

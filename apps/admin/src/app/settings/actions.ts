@@ -5,7 +5,7 @@ import { labels } from '../../labels';
 import { adminApiFetch, ApiResponseError } from '../../lib/api';
 import { decimalUsdtToMicro } from '../../lib/format';
 
-const fields = ['withdrawalBaseFeeBps', 'minimumFeeUsdt', 'minimumWithdrawalUsdt', 'autoApprovalLimitUsdt', 'commissionFloorBps', 'commissionFloorByCountry'] as const;
+const fields = ['withdrawalBaseFeeBps', 'minimumFeeUsdt', 'minimumWithdrawalUsdt', 'autoApprovalLimitUsdt', 'commissionFloorBps', 'commissionFloorByCountry', 'trainerCutBps'] as const;
 
 export async function updateSettingsAction(formData: FormData): Promise<void> {
   const values = Object.fromEntries(fields.map((field) => [field, formData.get(field)])) as Record<typeof fields[number], FormDataEntryValue | null>;
@@ -31,6 +31,7 @@ export async function updateSettingsAction(formData: FormData): Promise<void> {
         const [country, bps] = entry.trim().split('=');
         return { country: country!.toUpperCase(), bps: Number(bps) };
       }),
+      trainerCutBps: Number(formData.get('trainerCutBps') ?? 2000),
     };
   } catch {
     const invalidField = !/^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/.test(values.minimumFeeUsdt as string)

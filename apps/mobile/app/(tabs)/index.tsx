@@ -240,6 +240,11 @@ export default function Home() {
         <Pressable onPress={() => void sharePaymentLink()} style={styles.secondaryButton}>
           <Text style={styles.secondaryButtonText}>{t.sharePayLink}</Text>
         </Pressable>
+        {profile.data?.referrals ? <>
+          <Text style={styles.text}>{t.myMarketers}: {profile.data.referrals.marketers.count} · {t.earned(profile.data.referrals.marketers.earnedCoupons)}</Text>
+          <Text style={styles.text}>{t.mySellers}: {profile.data.referrals.sellers.count} · {t.earned(profile.data.referrals.sellers.earnedCoupons)}</Text>
+          <Text style={styles.text}>{t.myCustomers}: {profile.data.referrals.customers.count} · {t.earned(profile.data.referrals.customers.earnedCoupons)}</Text>
+        </> : null}
         {barcodeShareError ? <Text style={styles.danger}>{barcodeShareError}</Text> : null}
       </View> : null}
       <View style={styles.card}>

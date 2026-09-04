@@ -70,8 +70,10 @@ import {
   grantRateDiscount,
   logCommissionStrike,
   networkAverageRateBps,
+  referralSummary,
   setCommissionRate,
   setMarketer,
+  setTrainer,
   STRIKE_INTERVAL_MS,
 } from '@trustme/core';
 import { DomainError } from '@trustme/core';
@@ -145,6 +147,7 @@ const charityQuerySchema = z.object({ status: z.enum(['PENDING', 'DOCUMENTS_REQU
 const aidApprovalSchema = z.object({ approvedCoupons: couponsSchema.optional(), note: z.string().trim().optional(), mode: z.enum(['TRANSFER', 'GUARANTEE']).optional(), pin: fourDigitCodeSchema });
 const commissionRateSchema = z.object({ ratePercent: z.string().regex(/^\d+(?:\.\d{1,2})?$/), pin: fourDigitCodeSchema });
 const marketerSchema = z.object({ barcodeId: barcodeIdSchema, pin: fourDigitCodeSchema });
+const trainerSchema = z.object({ trainerBarcodeId: barcodeIdSchema, pin: fourDigitCodeSchema });
 const discountSchema = z.object({ sellerBarcodeId: barcodeIdSchema, ratePercent: z.string().regex(/^\d+(?:\.\d{1,2})?$/), pin: fourDigitCodeSchema });
 const commissionActionSchema = z.object({ pin: fourDigitCodeSchema });
 const noteSchema = z.object({ note: z.string().trim().min(1) });
@@ -482,8 +485,12 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
     const serialized = serializeMember(user);
     const settings = new Map((await prisma.systemSetting.findMany({ where: { key: { in: ['COMMISSION_FLOOR_BPS', 'COMMISSION_FLOOR_BPS_BY_COUNTRY'] } } })).map((row) => [row.key, row.value]));
     const marketer = user.marketerId === null ? null : await prisma.user.findUnique({ where: { id: user.marketerId }, select: { barcodeId: true, displayName: true } });
+    const trainer = user.trainerId === null ? null : await prisma.user.findUnique({ where: { id: user.trainerId }, select: { barcodeId: true, displayName: true } });
     const dispute = await prisma.commissionDispute.findFirst({ where: { sellerId: user.id, status: 'OPEN' }, orderBy: { createdAt: 'desc' } });
-    const average = await prisma.$transaction((tx) => networkAverageRateBps(tx));
+    const [average, referrals] = await Promise.all([
+      prisma.$transaction((tx) => networkAverageRateBps(tx)),
+      referralSummary(prisma, user.id),
+    ]);
     const floor = commissionFloorBps(settings, user.country);
     return {
       ...serialized,
@@ -492,6 +499,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
         floorBps: floor,
         canStrike: marketer !== null && user.commissionRateBps > average,
         marketer,
+        trainer,
         dispute: dispute === null ? null : {
           strikes: dispute.strikes,
           lastStrikeAt: dispute.lastStrikeAt,
@@ -500,6 +508,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
           autoResolveAt: dispute.strikes === 3 ? new Date(dispute.lastStrikeAt.getTime() + STRIKE_INTERVAL_MS) : null,
         },
       },
+      referrals,
       identityVerification: {
         ...serialized.identityVerification,
         mode: policy?.mode ?? null,
@@ -800,6 +809,16 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       const userId = memberClaims(request).sub;
       await verifyMemberPin(prisma, userId, body.pin);
       const updated = await setMarketer(prisma, { userId, marketerBarcodeId: body.barcodeId });
+      response.json(await memberPolicy(updated));
+    } catch (error) { next(error); }
+  });
+
+  router.put('/trainer', async (request, response, next) => {
+    try {
+      const body = trainerSchema.parse(request.body);
+      const userId = memberClaims(request).sub;
+      await verifyMemberPin(prisma, userId, body.pin);
+      const updated = await setTrainer(prisma, { userId, trainerBarcodeId: body.trainerBarcodeId });
       response.json(await memberPolicy(updated));
     } catch (error) { next(error); }
   });

@@ -20,6 +20,7 @@ const settings = [
   ['REQUIRE_IDENTITY_FOR_WITHDRAWAL', 'true'],
   ['COMMISSION_FLOOR_BPS', '300'],
   ['COMMISSION_FLOOR_BPS_BY_COUNTRY', 'IR=300'],
+  ['TRAINER_CUT_BPS', '2000'],
 ] as const;
 
 for (const account of accounts) {
