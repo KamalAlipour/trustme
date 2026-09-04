@@ -271,6 +271,26 @@ export async function confirmSettlement(prisma: PrismaClient, input: { ref: stri
   });
 }
 
+async function restoreOrReleaseGuarantee(
+  tx: Prisma.TransactionClient,
+  settlement: { payerId: string; guaranteeId: string; amountMicroUsdt: bigint },
+  release: bigint,
+) {
+  await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "PurchaseGuarantee" WHERE "id" = ${settlement.guaranteeId}::uuid FOR UPDATE`);
+  const guarantee = await tx.purchaseGuarantee.findUniqueOrThrow({ where: { id: settlement.guaranteeId } });
+  if (guarantee.status === PurchaseGuaranteeStatus.REVOKED) {
+    await tx.escrowBalance.update({
+      where: { userId: settlement.payerId },
+      data: { reservedMicroUsdt: { decrement: release } },
+    });
+    return;
+  }
+  await tx.purchaseGuarantee.update({
+    where: { id: guarantee.id },
+    data: { remainingMicroUsdt: { increment: settlement.amountMicroUsdt }, status: PurchaseGuaranteeStatus.ACTIVE },
+  });
+}
+
 export async function failSettlement(prisma: PrismaClient, input: { settlementId: string; error: string }) {
   return withSerializableRetry(prisma, async (tx) => {
     const settlement = await tx.escrowSettlement.findUnique({ where: { id: input.settlementId } });
@@ -307,10 +327,7 @@ export async function failSettlement(prisma: PrismaClient, input: { settlementId
           await tx.escrowBalance.update({ where: { userId: settlement.payerId }, data: { reservedMicroUsdt: { decrement: release } } });
         }
         if (settlement.guaranteeId !== null) {
-          await tx.purchaseGuarantee.update({
-            where: { id: settlement.guaranteeId },
-            data: { remainingMicroUsdt: { increment: settlement.amountMicroUsdt }, status: PurchaseGuaranteeStatus.ACTIVE },
-          });
+          await restoreOrReleaseGuarantee(tx, { payerId: settlement.payerId, guaranteeId: settlement.guaranteeId, amountMicroUsdt: settlement.amountMicroUsdt }, release);
         }
         return tx.escrowSettlement.update({ where: { id: settlement.id }, data: { status: EscrowSettlementStatus.FAILED, lastError } });
       }
@@ -319,10 +336,7 @@ export async function failSettlement(prisma: PrismaClient, input: { settlementId
       await tx.escrowBalance.update({ where: { userId: settlement.payerId }, data: { reservedMicroUsdt: { decrement: release } } });
     }
     if (settlement.guaranteeId !== null) {
-      await tx.purchaseGuarantee.update({
-        where: { id: settlement.guaranteeId },
-        data: { remainingMicroUsdt: { increment: settlement.amountMicroUsdt }, status: PurchaseGuaranteeStatus.ACTIVE },
-      });
+      await restoreOrReleaseGuarantee(tx, { payerId: settlement.payerId, guaranteeId: settlement.guaranteeId, amountMicroUsdt: settlement.amountMicroUsdt }, release);
     }
     return tx.escrowSettlement.update({ where: { id: settlement.id }, data: { status: EscrowSettlementStatus.FAILED, lastError } });
   });
