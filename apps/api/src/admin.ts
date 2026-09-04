@@ -27,6 +27,7 @@ import {
   addCharityAgent,
   revokeCharityAgent,
   identityPolicyFor,
+  networkAverageRateBps,
 } from '@trustme/core';
 import type { QueueLike } from './app.js';
 import { adminClaims, createAdminJwt, requireAdmin, requireRole, verifyAdminPassword } from './admin-auth.js';
@@ -240,7 +241,7 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
 
   router.get('/overview', async (_request, response, next) => {
     try {
-      const [vault, issuance, fees, pending, dust, solvency, countRows, demoCirculation, demoUserCount] = await Promise.all([
+      const [vault, issuance, fees, pending, dust, solvency, countRows, demoCirculation, demoUserCount, commissionNetworkAverageBps] = await Promise.all([
         systemAccount(prisma, AccountType.SYSTEM_VAULT_USDT, Asset.USDT),
         systemAccount(prisma, AccountType.SYSTEM_COUPON_ISSUANCE, Asset.COUPON),
         systemAccount(prisma, AccountType.SYSTEM_FEE_COLLECTION, Asset.USDT),
@@ -254,6 +255,7 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
         }),
         readDemoCirculation(prisma),
         prisma.user.count({ where: { isDemo: true } }),
+        prisma.$transaction((tx) => networkAverageRateBps(tx)),
       ]);
       let chain: Record<string, unknown> = { available: false };
       try {
@@ -303,6 +305,7 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
           couponsInCirculation: demoCirculation.toString(),
           userCount: demoUserCount,
         },
+        commissionNetworkAverageBps,
         transactionCount24hByType,
         chain,
         hotWallet,

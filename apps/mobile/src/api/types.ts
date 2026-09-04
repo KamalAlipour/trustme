@@ -12,7 +12,7 @@ export type Member = {
   commission: {
     rateBps: number;
     floorBps: number;
-    networkAverageBps: number;
+    canStrike: boolean;
     marketer: { barcodeId: string; displayName: string | null } | null;
     dispute: { strikes: number; lastStrikeAt: string; status: string; nextStrikeAt: string | null; autoResolveAt: string | null } | null;
   };

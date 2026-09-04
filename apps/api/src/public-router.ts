@@ -3,7 +3,7 @@ import express from 'express';
 import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
 import { AccountType, Asset, BalanceDisclosureStatus, Prisma, PrismaClient, TransactionStatus, TransactionType } from '@trustme/db';
-import { barcodeIdSchema, decimalFromMicroUsdt, networkAverageRateBps, readDemoCirculation, readSolvency } from '@trustme/core';
+import { barcodeIdSchema, decimalFromMicroUsdt, readDemoCirculation, readSolvency } from '@trustme/core';
 import { HttpError } from './http-error.js';
 
 const publicTypes = [
@@ -121,14 +121,6 @@ export function createPublicRouter(prisma: PrismaClient): express.Router {
       };
       reservesCache = { expiresAt: Date.now() + 10_000, value };
       response.json(value);
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  router.get('/commission-average', readLimiter, async (_request, response, next) => {
-    try {
-      response.json({ networkAverageBps: await prisma.$transaction((tx) => networkAverageRateBps(tx)) });
     } catch (error) {
       next(error);
     }

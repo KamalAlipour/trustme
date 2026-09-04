@@ -17,6 +17,7 @@ export const labels = {
   feesCollected: 'Fees collected',
   withdrawalPending: 'Withdrawal pending',
   dust: 'Member dust',
+  commissionNetworkAverage: 'Network commission average',
   solvencySurplus: 'Solvency surplus',
   custody: 'Custody',
   obligations: 'Obligations',

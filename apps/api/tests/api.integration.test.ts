@@ -225,14 +225,10 @@ describe('member API', () => {
     expect(result.body.error).toBe('commission rate is below the floor');
   });
 
-  it('returns the public commission average', async () => {
+  it('does not expose the network commission average publicly', async () => {
     const { app } = appFixture();
-    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000092', barcodeId: 'commission-average-one' });
-    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000093', barcodeId: 'commission-average-two' });
-    await prisma.user.updateMany({ where: { barcodeId: { in: ['commission-average-one', 'commission-average-two'] } }, data: { commissionRateBps: 300 } });
-    const result = await request(app).get('/v1/public/commission-average');
-    expect(result.status).toBe(200);
-    expect(result.body).toEqual({ networkAverageBps: 300 });
+    const result = await request(app).get('/v1/public/commission-average').set('Authorization', `Bearer ${token}`);
+    expect(result.status).toBe(404);
   });
 
   it('disables prepaid escrow operations when no contract is configured', async () => {
@@ -2168,6 +2164,7 @@ describe('admin API', () => {
       surplusUsdt: '0',
       components: { vaultUsdt: '0', withdrawalPendingUsdt: '0', feesUsdt: '0', couponsUsdt: '0', dustUsdt: '0' },
     });
+    expect(result.body.commissionNetworkAverageBps).toBe(0);
 
     const unavailable = appFixture({
       getBlockNumber: async () => { throw new Error('RPC unavailable'); },

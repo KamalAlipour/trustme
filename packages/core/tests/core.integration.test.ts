@@ -172,7 +172,9 @@ describe('money and ledger domain', () => {
     await expect(forceAutoResolve(prisma, { sellerId: seller!.id, floorBps: 300, now: new Date(thirdAt.getTime() + 10 * 24 * 60 * 60 * 1000) })).resolves.toMatchObject({ status: 'AUTO_RESOLVED', resolvedRateBps: 750 });
     expect((await prisma.user.findUniqueOrThrow({ where: { id: seller!.id } })).commissionRateBps).toBe(750);
     const lowSeller = await prisma.user.create({ data: { phoneNumber: '+1555000009', barcodeId: 'low-seller', commissionRateBps: 500, marketerId: marketer!.id } });
-    await expect(logCommissionStrike(prisma, { sellerId: lowSeller.id, now: first })).rejects.toThrow('already at or below market average');
+    await expect(logCommissionStrike(prisma, { sellerId: lowSeller.id, now: first })).rejects.toThrow(
+      'commission dispute is not available for this rate'
+    );
   });
 
   it('counts coupon treasury-held coupons through issuance in solvency obligations', async () => {

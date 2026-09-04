@@ -490,7 +490,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       commission: {
         rateBps: user.commissionRateBps,
         floorBps: floor,
-        networkAverageBps: average,
+        canStrike: marketer !== null && user.commissionRateBps > average,
         marketer,
         dispute: dispute === null ? null : {
           strikes: dispute.strikes,

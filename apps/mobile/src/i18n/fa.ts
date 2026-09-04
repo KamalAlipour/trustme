@@ -108,7 +108,6 @@ export const fa: Translations = {
   marketing: 'بازاریابی',
   commissionRate: 'نرخ کمیسیون (درصد)',
   commissionFloor: (floor: string) => `کف ${floor}٪ — ۰ یعنی بدون بازاریاب`,
-  networkAverage: (rate: string) => `میانگین شبکه: ${rate}٪`,
   marketer: 'بازاریاب',
   setMarketer: 'ثبت بازاریاب',
   grantDiscount: 'اعطای تخفیف به فروشنده',
