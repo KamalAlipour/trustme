@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { checkShahkarMatch } from '../src/shahkar.js';
+import { checkIbanMatch, checkShahkarMatch } from '../src/shahkar.js';
 
 const input = { nationalCode: '3141592659', mobile: '09000000000' };
+const ibanInput = { iban: 'IR123456789012345678901234', nationalCode: '3141592659', birthDate: '1378/1/12' };
 const dependencies = { token: 'test-token', baseUrl: 'https://provider.test', retryDelayMs: 0 };
 
 function response(body: unknown, status = 200): Response {
@@ -89,5 +90,30 @@ describe('Shahkar provider client', () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe('IbanMatch provider client', () => {
+  it('maps a match response', async () => {
+    const result = await checkIbanMatch(ibanInput, { ...dependencies, fetchImpl: async () => response({ data: true, success: true, code: 0, message: '' }) });
+    expect(result).toEqual({ status: 'MATCH', providerCode: 0 });
+  });
+
+  it('maps a mismatch response with a message', async () => {
+    const result = await checkIbanMatch(ibanInput, { ...dependencies, fetchImpl: async () => response({ data: false, success: true, code: 12, message: 'not matched' }) });
+    expect(result).toEqual({ status: 'MISMATCH', providerCode: 12 });
+  });
+
+  it('retries a parseable HTTP 400 inconclusive response', async () => {
+    let calls = 0;
+    const result = await checkIbanMatch(ibanInput, {
+      ...dependencies,
+      fetchImpl: async () => {
+        calls += 1;
+        return response({ success: false, code: 400, message: 'missing field' }, 400);
+      },
+    });
+    expect(result).toEqual({ status: 'INCONCLUSIVE', providerCode: 400 });
+    expect(calls).toBe(2);
   });
 });

@@ -45,6 +45,7 @@ export const apiConfigSchema = z.object({
   appleOAuthAudiences: z.string().optional().transform((value) => value?.split(',').map((id) => id.trim()).filter(Boolean)),
   shahkarApiToken: z.string().min(1).optional(),
   shahkarBaseUrl: z.string().url().default('https://s.api.ir/api/sw1/ShahkarLite'),
+  ibanMatchBaseUrl: z.string().url().default('https://s.api.ir/api/sw1/IbanMatch'),
   identityHashPepper: z.string().min(32).optional(),
   allowedOrigins: z.string().default('').transform((value) => value.split(',').map((origin) => origin.trim()).filter(Boolean)),
 });
@@ -90,6 +91,7 @@ export function loadApiConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     appleOAuthAudiences: env.APPLE_OAUTH_AUDIENCES,
     shahkarApiToken: env.SHAHKAR_API_TOKEN || undefined,
     shahkarBaseUrl: env.SHAHKAR_BASE_URL,
+    ibanMatchBaseUrl: env.IBAN_MATCH_BASE_URL,
     identityHashPepper: env.IDENTITY_HASH_PEPPER || undefined,
     allowedOrigins: env.API_ALLOWED_ORIGINS,
   });

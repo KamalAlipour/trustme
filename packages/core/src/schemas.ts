@@ -25,6 +25,15 @@ export const nationalCodeSchema = z.string()
   .regex(/^\d{10}$/, 'national code must be exactly 10 digits')
   .refine(hasValidIranianNationalCode, 'national code checksum is invalid');
 
+export const ibanSchema = z.string()
+  .trim()
+  .transform((value) => value.replace(/[\s-]/g, '').toUpperCase())
+  .refine((value) => /^IR\d{24}$/.test(value), 'iban must be an Iranian IBAN (IR + 24 digits)');
+export const jalaliBirthDateSchema = z.string()
+  .trim()
+  .transform((value) => value.replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit))).replace(/-/g, '/'))
+  .refine((value) => /^1[34]\d{2}\/(0?[1-9]|1[0-2])\/(0?[1-9]|[12]\d|3[01])$/.test(value), 'birth date must be Jalali YYYY/M/D');
+
 export const iranMobileSchema = z.string()
   .refine((value) => /^09\d{9}$/.test(value) || /^\+989\d{9}$/.test(value) || /^00989\d{9}$/.test(value) || /^989\d{9}$/.test(value), 'mobile must be a valid Iranian mobile number')
   .transform((value) => {

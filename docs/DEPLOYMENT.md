@@ -310,6 +310,7 @@ Shahkar identity verification is configured with `SHAHKAR_API_TOKEN` and
 both values are present; `SHAHKAR_BASE_URL` may override the default Shahkar
 endpoint. The pepper must be at least 32 characters and these values must be
 provided through the deployment secret-management process, not committed here.
+`IBAN_MATCH_BASE_URL` may override the default api.ir IbanMatch endpoint.
 
 The user must still provide and authorize:
 
