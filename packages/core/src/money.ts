@@ -13,6 +13,21 @@ export function microUsdtFromCoupons(coupons: bigint): bigint {
   return coupons * MICRO_USDT_PER_COUPON;
 }
 
+export function microUsdtFromCouponAmount(value: string): bigint {
+  if (!/^(0|[1-9]\d*)(\.\d{1,4})?$/.test(value)) throw new DomainError('invalid coupon amount');
+  const [whole = '0', fraction = ''] = value.split('.');
+  const microUsdt = BigInt(whole) * MICRO_USDT_PER_COUPON + BigInt(fraction.padEnd(4, '0') || '0');
+  if (microUsdt <= 0n) throw new DomainError('coupon amount must be positive');
+  return microUsdt;
+}
+
+export function couponAmountFromMicroUsdt(microUsdt: bigint): string {
+  if (microUsdt < 0n) throw new DomainError('micro-USDT cannot be negative');
+  const whole = microUsdt / MICRO_USDT_PER_COUPON;
+  const fraction = (microUsdt % MICRO_USDT_PER_COUPON).toString().padStart(4, '0').replace(/0+$/, '');
+  return fraction ? `${whole}.${fraction}` : whole.toString();
+}
+
 export function roundingDustMicroUsdt(microUsdt: bigint): bigint {
   return microUsdt % MICRO_USDT_PER_COUPON;
 }

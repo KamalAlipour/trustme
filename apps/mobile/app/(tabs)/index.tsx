@@ -12,7 +12,8 @@ import { useTranslation } from '../../src/i18n';
 import { randomFourDigitCode } from '../../src/lib/code';
 import { formatEscrowCountdown } from '../../src/lib/escrow';
 import { mapApiError } from '../../src/lib/errors';
-import { formatCoupons } from '../../src/lib/format';
+import { formatCouponAmount, formatCoupons } from '../../src/lib/format';
+import { payLink } from '../../src/lib/links';
 import { colors, styles } from '../../src/styles';
 import { HeaderIcons } from '../../src/components/HeaderIcons';
 
@@ -110,7 +111,7 @@ export default function Home() {
         setPayMessage(t.escrow.payMerchantRequired);
         return;
       }
-      if (!/^[1-9][0-9]*$/.test(payAmount)) {
+      if (!/^(0|[1-9]\d*)(\.\d{1,4})?$/.test(payAmount) || Number(payAmount) <= 0) {
         setPayMessage(t.escrow.payAmountRequired);
         return;
       }
@@ -155,6 +156,25 @@ export default function Home() {
       setBarcodeShareError(t.barcodeShareUnavailable);
     }
   };
+  const sharePaymentLink = async () => {
+    if (!ownBarcodeId) return;
+    setBarcodeShareError('');
+    try {
+      await Share.share({ message: payLink(ownBarcodeId) });
+    } catch {
+      setBarcodeShareError(t.barcodeShareUnavailable);
+    }
+  };
+  const normalizePayAmount = (value: string) => {
+    const normalized = value
+      .replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)))
+      .replace(/[٫,]/g, '.')
+      .replace(/[^\d.]/g, '');
+    const separator = normalized.indexOf('.');
+    const whole = separator === -1 ? normalized : normalized.slice(0, separator);
+    const fraction = separator === -1 ? '' : normalized.slice(separator + 1).replace(/\./g, '');
+    setPayAmount(separator === -1 ? whole : `${whole}.${fraction.slice(0, 4)}`);
+  };
   return (
     <Page>
       <View style={styles.row}>
@@ -179,7 +199,7 @@ export default function Home() {
         {incoming.data?.items.map((item) => <View key={item.id} style={styles.card}>
           <Text style={styles.heading}>{t.escrow.incomingFrom(item.buyerDisplayName ?? item.buyerBarcodeId)}</Text>
           <Text style={styles.muted}>{item.buyerBarcodeId}</Text>
-          <Text style={styles.text}>{t.escrow.incomingAmount}: {formatCoupons(item.amountCoupons, language)}</Text>
+          <Text style={styles.text}>{t.escrow.incomingAmount}: {formatCouponAmount(item.amountCoupons, language)}</Text>
           <TextInput value={incomingCodes[item.id] ?? ''} onChangeText={(value) => setIncomingCodes((current) => ({ ...current, [item.id]: value.replace(/\D/g, '').slice(0, 4) }))} placeholder={t.escrow.incomingCodePlaceholder} style={styles.input} keyboardType="number-pad" secureTextEntry />
           <Pressable onPress={() => void settleIncoming(item)} style={styles.button}><Text style={styles.buttonText}>{t.escrow.incomingConfirm}</Text></Pressable>
         </View>)}
@@ -189,7 +209,7 @@ export default function Home() {
         <Text style={styles.heading}>{t.escrow.buyTitle}</Text>
         <TextInput value={payMerchantBarcode} onChangeText={setPayMerchantBarcode} placeholder={t.escrow.payMerchantBarcode} style={styles.input} />
         <Pressable onPress={() => router.push({ pathname: '/scan', params: { returnTo: '/(tabs)', field: 'pay' } })} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.scanQr}</Text></Pressable>
-        <TextInput value={payAmount} onChangeText={(value) => setPayAmount(value.replace(/\D/g, ''))} placeholder={t.escrow.payAmountCoupons} style={styles.input} keyboardType="number-pad" autoFocus={payMerchantBarcode !== '' && buyerPayCode === null} />
+        <TextInput value={payAmount} onChangeText={normalizePayAmount} placeholder={t.escrow.payAmountCoupons} style={styles.input} keyboardType="decimal-pad" autoFocus={payMerchantBarcode !== '' && buyerPayCode === null} />
         <Pressable onPress={() => void (buyerPayCode === null ? paySeller() : cancelBuyerPayCode())} style={styles.button}><Text style={styles.buttonText}>{buyerPayCode === null ? t.escrow.payNow : t.cancel}</Text></Pressable>
         {buyerPayCode !== null ? <>
           <Text style={styles.muted}>{t.escrow.payCodeShow}</Text>
@@ -214,6 +234,9 @@ export default function Home() {
         </View>
         <Pressable onPress={() => void shareBarcode()} style={styles.secondaryButton}>
           <Text style={styles.secondaryButtonText}>{t.shareBarcode}</Text>
+        </Pressable>
+        <Pressable onPress={() => void sharePaymentLink()} style={styles.secondaryButton}>
+          <Text style={styles.secondaryButtonText}>{t.sharePayLink}</Text>
         </Pressable>
         {barcodeShareError ? <Text style={styles.danger}>{barcodeShareError}</Text> : null}
       </View> : null}

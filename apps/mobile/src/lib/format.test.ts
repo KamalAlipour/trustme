@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatCoupons, formatDate, formatMicroUsdt } from './format';
+import { formatCouponAmount, formatCoupons, formatDate, formatMicroUsdt } from './format';
 
 describe('localized formatting', () => {
   it('formats coupon amounts with Latin digits in English and Persian digits in Persian', () => {
@@ -7,6 +7,12 @@ describe('localized formatting', () => {
 
     expect(formatCoupons(value, 'en')).toBe('1,234,567');
     expect(formatCoupons(value, 'fa')).toBe('۱,۲۳۴,۵۶۷');
+  });
+
+  it('formats decimal coupon amounts without dropping fractional digits', () => {
+    expect(formatCouponAmount('1234567.5', 'en')).toBe('1,234,567.5');
+    expect(formatCouponAmount('1234567.5', 'fa')).toBe('۱,۲۳۴,۵۶۷.۵');
+    expect(() => formatCouponAmount('1.23456', 'en')).toThrow();
   });
 
   it('formats dates with the Gregorian English locale and Jalali Persian locale', () => {

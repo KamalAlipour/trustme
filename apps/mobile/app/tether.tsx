@@ -7,7 +7,7 @@ import { BrowserProvider, Contract, JsonRpcProvider, MaxUint256, Wallet } from '
 import EthereumProvider from '@walletconnect/ethereum-provider';
 import { ApiError, LockedError, request } from '../src/api/client';
 import type { EscrowConfig, EscrowSettlement, EscrowWallet, WithdrawalQuote } from '../src/api/types';
-import { useAvailability, useBalance, useEscrowBalance, useEscrowConfig, useEscrowSettlements, useEscrowUnloads, useInvalidateMoney } from '../src/hooks';
+import { useAvailability, useBalance, useEscrowBalance, useEscrowConfig, useEscrowSettlements, useEscrowUnloads, useIdentity, useInvalidateMoney } from '../src/hooks';
 import { useSession } from '../src/auth/session';
 import { Page, LoadingScreen } from '../src/components/Screen';
 import { useTranslation } from '../src/i18n';
@@ -55,6 +55,7 @@ function RecoveryWords({ words }: { words: string[] }) {
 export default function Tether() {
   const { t, language } = useTranslation();
   const { getStepUpPin } = useSession();
+  const identity = useIdentity();
   const config = useEscrowConfig();
   const enabled = config.data?.enabled === true;
   const balance = useEscrowBalance(enabled);
@@ -396,10 +397,17 @@ export default function Tether() {
     unloadPrefilled.current = true;
   };
   const publicRpcUnavailable = wallet?.kind === 'IN_APP' && config.data?.rpcUrl === null;
+  const identityRequired = identity.data !== undefined && identity.data.status !== 'VERIFIED';
 
   return (
     <Page>
       <View style={styles.row}><Pressable onPress={() => router.back()}><Text style={styles.secondaryButtonText}>{t.escrow.back}</Text></Pressable><Text style={styles.title}>{t.escrow.title}</Text><HeaderIcons /></View>
+      {identityRequired ? <View style={styles.card}>
+        <Text style={styles.text}>{t.escrow.identityRequiredForTether}</Text>
+        <Pressable onPress={() => router.push('/(tabs)/profile')} style={styles.button}>
+          <Text style={styles.buttonText}>{t.openIdentityVerification}</Text>
+        </Pressable>
+      </View> : null}
       <View style={styles.card}>
         <Text style={styles.heading}>{t.escrow.locked}</Text>
         <Text style={styles.title}>{formatMicroUsdt(balance.data?.lockedMicroUsdt ?? '0', language)} USDT</Text>
@@ -407,7 +415,7 @@ export default function Tether() {
         <Text style={styles.notice}>{t.escrow.confirmationNotice}</Text>
       </View>
 
-      <View style={styles.card}>
+      {!identityRequired ? <View style={styles.card}>
         <Text style={styles.heading}>{t.escrow.wallet}</Text>
         {wallet === null ? <Text style={styles.muted}>{t.escrow.noWallet}</Text> : <><Text style={styles.muted}>{t.escrow.walletAddress}: {shortAddress}</Text><Pressable onPress={() => void copyAddress()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.escrow.copyAddress}</Text></Pressable>{wallet.kind === 'IN_APP' ? <Pressable onPress={() => void revealWallet()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.escrow.walletReveal}</Text></Pressable> : null}<Pressable onPress={() => setRemoveWalletConfirm(true)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.escrow.disconnectWallet}</Text></Pressable>{removeWalletConfirm ? <View style={styles.card}><Text style={styles.muted}>{wallet.kind === 'IN_APP' ? t.escrow.disconnectInAppWarning : t.escrow.disconnectExternalWarning}</Text><Pressable onPress={() => void removeWallet()} style={styles.button}><Text style={styles.buttonText}>{t.escrow.disconnectConfirm}</Text></Pressable><Pressable onPress={() => setRemoveWalletConfirm(false)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.cancel}</Text></Pressable></View> : null}</>}
         {Platform.OS === 'web' ? <Text style={styles.muted}>{t.escrow.webWalletWarning}</Text> : null}
@@ -419,17 +427,17 @@ export default function Tether() {
         {revealedWords !== null ? <View style={styles.card}><Text style={styles.text}>{t.escrow.recoveryWords}</Text><RecoveryWords words={revealedWords} /><Pressable onPress={() => setRevealedWords(null)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.close}</Text></Pressable></View> : null}
         {busy === 'remove-wallet' ? <Text style={styles.muted}>{t.loading}</Text> : null}
         {feedback ? <Text style={feedback.kind === 'success' ? styles.notice : styles.danger}>{feedback.text}</Text> : null}
-      </View>
+      </View> : null}
 
-      <View style={styles.card}>
+      {!identityRequired ? <View style={styles.card}>
         <Text style={styles.heading}>{t.escrow.topUp}</Text>
         <TextInput value={topUpAmount} onChangeText={setTopUpAmount} placeholder={t.escrow.topUpAmount} style={styles.input} keyboardType="decimal-pad" />
         <Text style={styles.muted}>{t.escrow.twoSignatureNotice}</Text>
         {publicRpcUnavailable ? <Text style={styles.danger}>{t.escrow.publicRpcUnavailable}</Text> : null}
         <Pressable disabled={busy !== '' || wallet === null || publicRpcUnavailable} onPress={() => void sendTopUp()} style={[styles.button, busy !== '' || wallet === null || publicRpcUnavailable ? styles.buttonDisabled : null]}><Text style={styles.buttonText}>{t.escrow.topUpButton}</Text></Pressable>
-      </View>
+      </View> : null}
 
-      {availableMicroUsdt > 0n || (unloads.data?.items ?? []).length > 0 ? <View style={styles.card}>
+      {!identityRequired && (availableMicroUsdt > 0n || (unloads.data?.items ?? []).length > 0) ? <View style={styles.card}>
         <Text style={styles.heading}>{t.escrow.unload}</Text>
         {availableMicroUsdt > 0n ? <><TextInput value={unloadAmount} onChangeText={setUnloadAmount} placeholder={t.escrow.unloadAmount} style={styles.input} keyboardType="decimal-pad" />
         <Pressable onPress={useFullAvailable} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.escrow.useFullAvailable}</Text></Pressable>

@@ -19,3 +19,7 @@ export function requireIdentityForSpending(
     throw new HttpError(403, 'identity_verification_required');
   }
 }
+
+export function requireVerifiedIdentity(status: IdentityVerificationStatus): void {
+  if (status !== IdentityVerificationStatus.VERIFIED) throw new HttpError(403, 'identity_verification_required');
+}

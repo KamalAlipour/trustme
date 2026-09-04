@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { getAddress } from 'ethers';
 import { z } from 'zod';
 import { ISO_ALPHA2_CODES } from './countries.js';
+import { microUsdtFromCouponAmount } from './money.js';
 
 export const evmAddressSchema = z.string().refine((value) => {
   try {
@@ -24,6 +25,18 @@ function hasValidIranianNationalCode(value: string): boolean {
 export const nationalCodeSchema = z.string()
   .regex(/^\d{10}$/, 'national code must be exactly 10 digits')
   .refine(hasValidIranianNationalCode, 'national code checksum is invalid');
+
+export const couponAmountSchema = z.string()
+  .trim()
+  .transform((value) => value.replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit))).replace(/[٫,]/g, '.'))
+  .refine((value) => /^(0|[1-9]\d*)(\.\d{1,4})?$/.test(value), 'amount must be a decimal coupon amount')
+  .refine((value) => {
+    try {
+      return microUsdtFromCouponAmount(value) > 0n;
+    } catch {
+      return false;
+    }
+  }, 'amount must be positive');
 
 export const ibanSchema = z.string()
   .trim()
