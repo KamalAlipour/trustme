@@ -132,7 +132,7 @@ export async function logCommissionStrike(prisma: PrismaClient, input: { sellerI
     const seller = await tx.user.findUniqueOrThrow({ where: { id: input.sellerId }, select: { id: true, marketerId: true, commissionRateBps: true } });
     if (seller.marketerId === null) throw new DomainError('seller has no marketer');
     const average = await networkAverageRateBps(tx);
-    if (seller.commissionRateBps <= average) throw new DomainError('dispute rejected: rate is already at or below market average', 409);
+    if (seller.commissionRateBps <= average) throw new DomainError('commission dispute is not available for this rate', 409);
     const dispute = await tx.commissionDispute.findFirst({ where: { sellerId: seller.id, status: CommissionDisputeStatus.OPEN } });
     if (dispute === null) {
       return tx.commissionDispute.create({

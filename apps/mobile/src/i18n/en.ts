@@ -106,7 +106,6 @@ export const en = {
   marketing: 'Marketing',
   commissionRate: 'Commission rate (%)',
   commissionFloor: (floor: string) => `Floor ${floor}% — 0 means no marketer`,
-  networkAverage: (rate: string) => `Network average: ${rate}%`,
   marketer: 'Marketer',
   setMarketer: 'Set marketer',
   grantDiscount: 'Grant discount to seller',

@@ -17,6 +17,7 @@ export type OverviewData = {
   chain: { available: boolean; headBlock?: number; nextBlock?: string; lag?: string };
   hotWallet: { available: boolean; usdt?: string; nativeWei?: string };
   demo: { couponsInCirculation: string; userCount: number };
+  commissionNetworkAverageBps: number;
 };
 
 export function availabilityLabel(available: boolean): string {
@@ -43,6 +44,7 @@ export function Overview({ data }: Readonly<{ data: OverviewData }>) {
           <StatCard label={labels.feesCollected} value={data.feesCollectedUsdt} />
           <StatCard label={labels.withdrawalPending} value={data.withdrawalPendingUsdt} />
           <StatCard label={labels.dust} value={data.dustUsdt} />
+          <StatCard label={labels.commissionNetworkAverage} value={`${data.commissionNetworkAverageBps / 100}%`} />
           <div className={`rounded-lg border p-5 shadow-sm ${data.solvency.isSolvent ? 'border-emerald-300 bg-emerald-50' : 'border-red-300 bg-red-50'}`}>
             <p className="text-sm text-slate-500">{labels.solvencySurplus}</p>
             <p className="mt-2 text-2xl font-semibold">{data.solvency.surplusUsdt}</p>

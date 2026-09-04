@@ -334,7 +334,6 @@ export const openapiDocument = {
       get: { responses: { '200': { description: 'Admin settings' } } },
       patch: { responses: { '200': { description: 'Updated admin settings' } } },
     },
-    '/v1/public/commission-average': { get: { responses: { '200': { description: 'Current network commission average' } } } },
     '/admin/withdrawals': { get: { responses: { '200': { description: 'Admin withdrawal queue' } } } },
     '/admin/withdrawals/{id}/approve': { post: { responses: { '200': { description: 'Withdrawal approved' } } } },
     '/admin/withdrawals/{id}/reject': { post: { responses: { '200': { description: 'Withdrawal rejected' } } } },

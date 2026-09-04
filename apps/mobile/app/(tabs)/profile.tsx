@@ -265,7 +265,6 @@ export default function Profile() {
         <Text style={styles.heading}>{t.marketing}</Text>
         <TextInput value={commissionRate} onChangeText={setCommissionRate} placeholder={t.commissionRate} style={styles.input} keyboardType="decimal-pad" />
         <Text style={styles.muted}>{t.commissionFloor((current.commission.floorBps / 100).toString())}</Text>
-        <Text style={styles.text}>{t.networkAverage((current.commission.networkAverageBps / 100).toString())}</Text>
         <Pressable onPress={() => void saveCommissionRate()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.save}</Text></Pressable>
         <Text style={styles.text}>{t.marketer}: {current.commission.marketer?.displayName ?? current.commission.marketer?.barcodeId ?? t.notRegistered}</Text>
         {current.commission.marketer === null ? <>
@@ -273,7 +272,7 @@ export default function Profile() {
           <Pressable onPress={() => router.push({ pathname: '/scan', params: { returnTo: '/(tabs)/profile', field: 'marketer' } })} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.scanQr}</Text></Pressable>
           <Pressable onPress={() => void saveMarketer()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.setMarketer}</Text></Pressable>
         </> : null}
-        {current.commission.marketer !== null && current.commission.rateBps > current.commission.networkAverageBps ? <>
+        {current.commission.canStrike ? <>
           {current.commission.dispute ? <Text style={styles.muted}>{t.strikes(current.commission.dispute.strikes)}{current.commission.dispute.nextStrikeAt ? ` · ${t.nextStrike(formatDate(current.commission.dispute.nextStrikeAt, language))}` : ''}</Text> : null}
           {current.commission.dispute?.strikes !== 3 ? <Pressable onPress={() => void strike()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.strike}</Text></Pressable> : null}
           {current.commission.dispute?.strikes === 3 && current.commission.dispute.autoResolveAt !== null && new Date(current.commission.dispute.autoResolveAt) <= new Date() ? <Pressable onPress={() => void autoResolve()} style={styles.button}><Text style={styles.buttonText}>{t.autoResolve}</Text></Pressable> : null}
