@@ -17,6 +17,7 @@ import { withSerializableRetry } from './retry.js';
 import { DomainError } from './domain-error.js';
 import { assertNoPinResetQuarantine, assertNotRestricted, readWithdrawalAvailabilityInTransaction } from './lending.js';
 import { assertNotDemoAccount, assertNotDemoCharityDonation, assertSameDemoSide } from './demo.js';
+import { commissionLegs } from './commission.js';
 
 export async function postDeposit(
   prisma: PrismaClient,
@@ -61,6 +62,7 @@ export async function postDepositCouponCredit(
     type?: TransactionType;
     txHash?: string;
     legs?: readonly LedgerLeg[];
+    commissionFor?: { buyerId: string };
   },
 ) {
   if (input.amountMicroUsdt <= 0n) throw new DomainError('deposit amount must be positive');
@@ -72,6 +74,14 @@ export async function postDepositCouponCredit(
     ...(input.legs ?? []),
     ...(coupons > 0n ? [{ fromAccountId: input.issuanceAccountId, toAccountId: input.userCouponAccountId, amount: coupons, asset: Asset.COUPON }] : []),
   ];
+  if (coupons > 0n && input.commissionFor !== undefined) {
+    legs.push(...await commissionLegs(tx, {
+      buyerId: input.commissionFor.buyerId,
+      sellerId: input.userId,
+      sellerAccountId: input.userCouponAccountId,
+      amountCoupons: coupons,
+    }));
+  }
   const transaction = legs.length > 0
     ? await postWithClient(tx, {
       type: input.type ?? TransactionType.DEPOSIT,
@@ -114,13 +124,23 @@ export async function transferCoupons(
       await assertSameDemoSide(tx, input.userId, input.counterpartyUserId);
     }
     if (input.userId !== undefined) await assertNotDemoCharityDonation(tx, input.userId, input.toAccountId);
+    const destination = await tx.ledgerAccount.findUnique({ where: { id: input.toAccountId }, select: { id: true, type: true, asset: true, userId: true } });
+    const legs: LedgerLeg[] = [{ fromAccountId: input.fromAccountId, toAccountId: input.toAccountId, amount: input.amountCoupons, asset: Asset.COUPON }];
+    if (destination?.type === AccountType.USER_COUPON && destination.asset === Asset.COUPON && destination.userId !== null && input.userId !== undefined) {
+      legs.push(...await commissionLegs(tx, {
+        buyerId: input.userId,
+        sellerId: destination.userId,
+        sellerAccountId: destination.id,
+        amountCoupons: input.amountCoupons,
+      }));
+    }
     return postWithClient(tx, {
       type: TransactionType.TRANSFER,
       externalRef: input.externalRef,
       ...(input.userId === undefined ? {} : { userId: input.userId }),
       status: TransactionStatus.CONFIRMED,
       amountCoupons: input.amountCoupons,
-      legs: [{ fromAccountId: input.fromAccountId, toAccountId: input.toAccountId, amount: input.amountCoupons, asset: Asset.COUPON }],
+      legs,
     });
   });
 }
