@@ -1,5 +1,5 @@
 import { beforeAll, afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { PrismaClient, AccountType, Asset, EscrowEventKind, EscrowStatus, TransactionStatus, WithdrawalStatus } from '@trustme/db';
+import { PrismaClient, AccountType, Asset, CharityAgentRole, EscrowEventKind, EscrowStatus, TransactionStatus, WithdrawalStatus } from '@trustme/db';
 import {
   calculateSolvency,
   issueDemoCoupons,
@@ -25,6 +25,9 @@ import {
   failUnload,
   settleWithPayCode,
   settleDirectedPayCode,
+  approveAidRequest,
+  createAidRequest,
+  revokePurchaseGuarantee,
 } from '../src/index.js';
 
 const prisma = new PrismaClient();
@@ -553,5 +556,69 @@ describe('prepaid USDT escrow', () => {
     expect(await prisma.escrowChainEvent.count()).toBe(1);
     expect((await prisma.escrowBalance.findUniqueOrThrow({ where: { userId: user.id } })).lockedMicroUsdt).toBe(123n);
     expect(fixtureAccounts.users).toHaveLength(1);
+  });
+
+  it('settles beneficiary pay codes against a charity purchase guarantee', async () => {
+    await fixture(3);
+    const users = await prisma.user.findMany({ orderBy: { barcodeId: 'asc' } });
+    const beneficiary = users[0]!;
+    const merchant = users[1]!;
+    const agent = users[2]!;
+    await prisma.escrowBalance.create({ data: { userId: agent.id, lockedMicroUsdt: 10_000_000n } });
+    const charity = await prisma.charity.create({ data: { name: 'Guarantee Help' } });
+    await prisma.charityAgent.create({ data: { charityId: charity.id, userId: agent.id, role: CharityAgentRole.AGENT } });
+    const request = await createAidRequest(prisma, { applicantId: beneficiary.id, charityId: charity.id, amountCoupons: 500n, description: 'food' });
+    const approved = await approveAidRequest(prisma, { aidRequestId: request.id, agentId: agent.id, mode: 'GUARANTEE' });
+    expect(approved.status).toBe('GUARANTEED');
+    const guarantee = await prisma.purchaseGuarantee.findUniqueOrThrow({ where: { aidRequestId: request.id } });
+    expect(guarantee.remainingMicroUsdt).toBe(5_000_000n);
+    expect((await prisma.escrowBalance.findUniqueOrThrow({ where: { userId: agent.id } })).reservedMicroUsdt).toBe(5_000_000n);
+
+    const payCode = await createPayCode(prisma, { buyerId: beneficiary.id, code: '1234', maxAmountMicroUsdt: 30_000n, merchantId: merchant.id, amountMicroUsdt: 30_000n, expiresAt: new Date(Date.now() + 60_000) });
+    expect(payCode.guaranteeId).toBe(guarantee.id);
+    const settlement = await settleWithPayCode(prisma, { merchantId: merchant.id, buyerBarcodeId: beneficiary.barcodeId, code: '1234', amountMicroUsdt: 30_000n });
+    expect(settlement.settlement.payerId).toBe(agent.id);
+    expect((await prisma.purchaseGuarantee.findUniqueOrThrow({ where: { id: guarantee.id } })).remainingMicroUsdt).toBe(4_970_000n);
+    expect((await prisma.escrowBalance.findUniqueOrThrow({ where: { userId: agent.id } })).reservedMicroUsdt).toBe(5_000_000n);
+    await confirmSettlement(prisma, { ref: settlement.settlement.ref, txHash: '0xguaranteed' });
+    expect(await prisma.escrowBalance.findUniqueOrThrow({ where: { userId: agent.id } })).toMatchObject({ lockedMicroUsdt: 9_970_000n, reservedMicroUsdt: 4_970_000n });
+
+    const second = await createPayCode(prisma, { buyerId: beneficiary.id, code: '5678', maxAmountMicroUsdt: 30_000n, merchantId: merchant.id, amountMicroUsdt: 30_000n, expiresAt: new Date(Date.now() + 60_000) });
+    const failedSettlement = await settleWithPayCode(prisma, { merchantId: merchant.id, buyerBarcodeId: beneficiary.barcodeId, code: '5678', amountMicroUsdt: 30_000n });
+    await failSettlement(prisma, { settlementId: failedSettlement.settlement.id, error: 'provider failure' });
+    expect((await prisma.purchaseGuarantee.findUniqueOrThrow({ where: { id: guarantee.id } })).remainingMicroUsdt).toBe(4_970_000n);
+    await expect(createPayCode(prisma, { buyerId: beneficiary.id, code: '9999', maxAmountMicroUsdt: 5_000_000n, expiresAt: new Date(Date.now() + 60_000) })).rejects.toThrow('pay code exceeds available escrow');
+    await revokePurchaseGuarantee(prisma, { guaranteeId: guarantee.id, agentId: agent.id });
+    expect((await prisma.purchaseGuarantee.findUniqueOrThrow({ where: { id: guarantee.id } })).status).toBe('REVOKED');
+    expect((await prisma.escrowBalance.findUniqueOrThrow({ where: { userId: agent.id } })).reservedMicroUsdt).toBe(0n);
+    expect(second.guaranteeId).toBe(guarantee.id);
+    await expect(createPayCode(prisma, { buyerId: beneficiary.id, code: '0000', maxAmountMicroUsdt: 30_000n, expiresAt: new Date(Date.now() + 60_000) })).rejects.toThrow('pay code exceeds available escrow');
+  });
+
+  it('does not reopen a guarantee revoked while its settlement is pending', async () => {
+    await fixture(3);
+    const users = await prisma.user.findMany({ orderBy: { barcodeId: 'asc' } });
+    const beneficiary = users[0]!;
+    const merchant = users[1]!;
+    const agent = users[2]!;
+    await prisma.escrowBalance.create({ data: { userId: agent.id, lockedMicroUsdt: 10_000_000n } });
+    const charity = await prisma.charity.create({ data: { name: 'Revocation Help' } });
+    await prisma.charityAgent.create({ data: { charityId: charity.id, userId: agent.id, role: CharityAgentRole.AGENT } });
+    const request = await createAidRequest(prisma, { applicantId: beneficiary.id, charityId: charity.id, amountCoupons: 500n, description: 'food' });
+    await approveAidRequest(prisma, { aidRequestId: request.id, agentId: agent.id, mode: 'GUARANTEE' });
+    const guarantee = await prisma.purchaseGuarantee.findUniqueOrThrow({ where: { aidRequestId: request.id } });
+    const payCode = await createPayCode(prisma, { buyerId: beneficiary.id, code: '1234', maxAmountMicroUsdt: 30_000n, merchantId: merchant.id, amountMicroUsdt: 30_000n, expiresAt: new Date(Date.now() + 60_000) });
+    expect(payCode.guaranteeId).toBe(guarantee.id);
+    const settlement = await settleWithPayCode(prisma, { merchantId: merchant.id, buyerBarcodeId: beneficiary.barcodeId, code: '1234', amountMicroUsdt: 30_000n });
+    await revokePurchaseGuarantee(prisma, { guaranteeId: guarantee.id, agentId: agent.id });
+    const revoked = await prisma.purchaseGuarantee.findUniqueOrThrow({ where: { id: guarantee.id } });
+    expect(revoked.status).toBe('REVOKED');
+    expect(revoked.remainingMicroUsdt).toBe(4_970_000n);
+    expect((await prisma.escrowBalance.findUniqueOrThrow({ where: { userId: agent.id } })).reservedMicroUsdt).toBe(30_000n);
+    await failSettlement(prisma, { settlementId: settlement.settlement.id, error: 'provider failure' });
+    const restored = await prisma.purchaseGuarantee.findUniqueOrThrow({ where: { id: guarantee.id } });
+    expect(restored.status).toBe('REVOKED');
+    expect(restored.remainingMicroUsdt).toBe(4_970_000n);
+    expect((await prisma.escrowBalance.findUniqueOrThrow({ where: { userId: agent.id } })).reservedMicroUsdt).toBe(0n);
   });
 });

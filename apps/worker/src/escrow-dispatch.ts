@@ -32,15 +32,15 @@ export async function dispatchEscrowSettlement(
     await failSettlement(prisma, { settlementId, error: 'escrow settlement attempt limit reached' });
     return { status: 'failed' };
   }
-  const buyer = await prisma.memberWallet.findFirst({ where: { userId: settlement.buyerId, isPrimary: true } });
-  if (buyer === null) {
-    await failSettlement(prisma, { settlementId, error: 'buyer wallet is not registered' });
+  const payer = await prisma.memberWallet.findFirst({ where: { userId: settlement.payerId, isPrimary: true } });
+  if (payer === null) {
+    await failSettlement(prisma, { settlementId, error: 'payer wallet is not registered' });
     return { status: 'failed' };
   }
   try {
     await assertChainHealthy(prisma, provider, config);
     const fees = await provider.estimateFees();
-    const encoded = contractInterface.encodeFunctionData('settle', [getAddress(buyer.address), settlement.amountMicroUsdt, settlement.ref]);
+    const encoded = contractInterface.encodeFunctionData('settle', [getAddress(payer.address), settlement.amountMicroUsdt, settlement.ref]);
     const base: TransactionRequest = { to: config.escrowContractAddress, data: encoded, chainId: config.chainId, nonce: await provider.getTransactionCount(signer.address, 'pending'), ...feeFieldsWithType(fees) };
     const gasLimit = calculateGasLimit(await provider.estimateGas({ ...base, from: signer.address }), config);
     const signed = await signer.signTransaction({ ...base, gasLimit });

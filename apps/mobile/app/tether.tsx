@@ -412,6 +412,7 @@ export default function Tether() {
         <Text style={styles.heading}>{t.escrow.locked}</Text>
         <Text style={styles.title}>{formatMicroUsdt(balance.data?.lockedMicroUsdt ?? '0', language)} USDT</Text>
         <Text style={styles.muted}>{t.escrow.available}: {formatMicroUsdt(balance.data?.availableMicroUsdt ?? '0', language)} USDT</Text>
+        {(balance.data?.guarantees ?? []).map((guarantee) => <Text key={guarantee.id} style={styles.notice}>{t.escrow.guaranteedBy(guarantee.charityName, formatCoupons(guarantee.remainingCoupons, language))}</Text>)}
         <Text style={styles.notice}>{t.escrow.confirmationNotice}</Text>
       </View>
 

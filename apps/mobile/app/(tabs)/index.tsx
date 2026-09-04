@@ -7,7 +7,7 @@ import QRCode from 'react-native-qrcode-svg';
 import { ApiError, request } from '../../src/api/client';
 import { useSession } from '../../src/auth/session';
 import { Page, LoadingScreen } from '../../src/components/Screen';
-import { useBalance, useDisclosures, useEscrowConfig, useInvalidateMoney, useMember } from '../../src/hooks';
+import { useBalance, useDisclosures, useEscrowBalance, useEscrowConfig, useInvalidateMoney, useMember } from '../../src/hooks';
 import { useTranslation } from '../../src/i18n';
 import { randomFourDigitCode } from '../../src/lib/code';
 import { formatEscrowCountdown } from '../../src/lib/escrow';
@@ -32,6 +32,7 @@ export default function Home() {
   const disclosures = useDisclosures();
   const escrowConfig = useEscrowConfig();
   const escrowEnabled = escrowConfig.data?.enabled === true;
+  const escrowBalance = useEscrowBalance(escrowEnabled);
   const invalidate = useInvalidateMoney();
   const params = useLocalSearchParams<{ barcodeId?: string; field?: string }>();
   const [amount, setAmount] = useState('');
@@ -207,6 +208,7 @@ export default function Home() {
       </View> : null}
       {escrowEnabled ? <View style={styles.card}>
         <Text style={styles.heading}>{t.escrow.buyTitle}</Text>
+        {(escrowBalance.data?.guarantees ?? []).map((guarantee) => <Text key={guarantee.id} style={styles.notice}>{t.escrow.guaranteedBy(guarantee.charityName, formatCouponAmount(guarantee.remainingCoupons, language))}</Text>)}
         <TextInput value={payMerchantBarcode} onChangeText={setPayMerchantBarcode} placeholder={t.escrow.payMerchantBarcode} style={styles.input} />
         <Pressable onPress={() => router.push({ pathname: '/scan', params: { returnTo: '/(tabs)', field: 'pay' } })} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.scanQr}</Text></Pressable>
         <TextInput value={payAmount} onChangeText={normalizePayAmount} placeholder={t.escrow.payAmountCoupons} style={styles.input} keyboardType="decimal-pad" autoFocus={payMerchantBarcode !== '' && buyerPayCode === null} />

@@ -13,6 +13,7 @@ import {
   IdentityVerificationStatus,
   MemberWalletKind,
   PayCodeStatus,
+  PurchaseGuaranteeStatus,
   EscrowSettlementStatus,
   EscrowUnloadStatus,
   KycStatus,
@@ -61,6 +62,7 @@ import {
   createPayCode,
   microUsdtFromCouponAmount,
   requestUnload,
+  revokePurchaseGuarantee,
   settleWithPayCode,
   settleDirectedPayCode,
 } from '@trustme/core';
@@ -131,8 +133,8 @@ const escrowSettlementSchema = z.union([
 ]);
 const escrowUnloadSchema = z.object({ amount: z.string().min(1), pin: fourDigitCodeSchema });
 const escrowHistoryQuerySchema = z.object({ cursor: z.string().optional() });
-const charityQuerySchema = z.object({ status: z.enum(['PENDING', 'DOCUMENTS_REQUESTED', 'APPROVED', 'REJECTED']).optional() });
-const aidApprovalSchema = z.object({ approvedCoupons: couponsSchema.optional(), note: z.string().trim().optional(), pin: fourDigitCodeSchema });
+const charityQuerySchema = z.object({ status: z.enum(['PENDING', 'DOCUMENTS_REQUESTED', 'APPROVED', 'GUARANTEED', 'REJECTED']).optional() });
+const aidApprovalSchema = z.object({ approvedCoupons: couponsSchema.optional(), note: z.string().trim().optional(), mode: z.enum(['TRANSFER', 'GUARANTEE']).optional(), pin: fourDigitCodeSchema });
 const noteSchema = z.object({ note: z.string().trim().min(1) });
 const idSchema = z.string().uuid();
 
@@ -411,6 +413,7 @@ function serializeAid(request: {
   decisionNote: string | null;
   decidedById: string | null;
   disbursementTransactionId: string | null;
+  guarantee?: { id: string } | null;
   createdAt: Date;
   decidedAt: Date | null;
   media: Array<{ id: string }>;
@@ -430,6 +433,7 @@ function serializeAid(request: {
     decisionNote: request.decisionNote,
     decidedById: request.decidedById,
     disbursementTransactionId: request.disbursementTransactionId,
+    guaranteeId: request.guarantee?.id ?? null,
     loan: request.loan === undefined || request.loan === null ? null : {
       id: request.loan.id,
       principalCoupons: request.loan.principalCoupons.toString(),
@@ -542,7 +546,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       if ((balance?.lockedMicroUsdt ?? 0n) > 0n) throw new HttpError(409, 'unload your escrow balance before removing the wallet');
       const [pendingUnload, pendingSettlement] = await Promise.all([
         prisma.escrowUnload.findFirst({ where: { userId, status: EscrowUnloadStatus.PENDING } }),
-        prisma.escrowSettlement.findFirst({ where: { OR: [{ buyerId: userId }, { merchantId: userId }], status: EscrowSettlementStatus.PENDING } }),
+        prisma.escrowSettlement.findFirst({ where: { OR: [{ buyerId: userId }, { payerId: userId }, { merchantId: userId }], status: EscrowSettlementStatus.PENDING } }),
       ]);
       if (pendingUnload !== null || pendingSettlement !== null) throw new HttpError(409, 'wallet has pending escrow activity');
       await prisma.memberWallet.delete({ where: { id: wallet.id } });
@@ -554,9 +558,23 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
     try {
       escrowConfigured();
       const balance = await prisma.escrowBalance.findUnique({ where: { userId: memberClaims(request).sub } });
+      const userId = memberClaims(request).sub;
       const value = balance ?? { lockedMicroUsdt: 0n, reservedMicroUsdt: 0n };
-      const wallet = await prisma.memberWallet.findFirst({ where: { userId: memberClaims(request).sub, isPrimary: true } });
-      response.json({ lockedMicroUsdt: value.lockedMicroUsdt.toString(), reservedMicroUsdt: value.reservedMicroUsdt.toString(), availableMicroUsdt: availableEscrowMicroUsdt(value).toString(), locked: decimalFromMicroUsdt(value.lockedMicroUsdt), primaryWallet: wallet, enabled: true });
+      const wallet = await prisma.memberWallet.findFirst({ where: { userId, isPrimary: true } });
+      const guarantees = await prisma.purchaseGuarantee.findMany({ where: { beneficiaryId: userId, status: PurchaseGuaranteeStatus.ACTIVE, remainingMicroUsdt: { gt: 0n } }, include: { charity: { select: { name: true } } }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
+      const guaranteedMicroUsdt = guarantees.reduce((total, guarantee) => total + guarantee.remainingMicroUsdt, 0n);
+      response.json({
+        lockedMicroUsdt: value.lockedMicroUsdt.toString(),
+        reservedMicroUsdt: value.reservedMicroUsdt.toString(),
+        availableMicroUsdt: availableEscrowMicroUsdt(value).toString(),
+        spendableMicroUsdt: availableEscrowMicroUsdt(value).toString(),
+        guaranteedMicroUsdt: guaranteedMicroUsdt.toString(),
+        guaranteedCoupons: couponAmountFromMicroUsdt(guaranteedMicroUsdt),
+        guarantees: guarantees.map((guarantee) => ({ id: guarantee.id, charityName: guarantee.charity.name, remainingCoupons: couponAmountFromMicroUsdt(guarantee.remainingMicroUsdt) })),
+        locked: decimalFromMicroUsdt(value.lockedMicroUsdt),
+        primaryWallet: wallet,
+        enabled: true,
+      });
     } catch (error) { next(error); }
   });
 
@@ -652,10 +670,10 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       const cursor = query.cursor === undefined ? undefined : cursorDate(query.cursor);
       const userId = memberClaims(request).sub;
       const rows = await prisma.escrowSettlement.findMany({
-        where: { OR: [{ merchantId: userId }, { buyerId: userId }], ...(cursor === undefined ? {} : { AND: [{ OR: [{ createdAt: { lt: cursor.createdAt } }, { createdAt: cursor.createdAt, id: { lt: cursor.id } }] }] }) },
+        where: { OR: [{ merchantId: userId }, { buyerId: userId }, { payerId: userId }], ...(cursor === undefined ? {} : { AND: [{ OR: [{ createdAt: { lt: cursor.createdAt } }, { createdAt: cursor.createdAt, id: { lt: cursor.id } }] }] }) },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 51,
       });
-      response.json({ items: rows.slice(0, 50).map((row) => ({ id: row.id, status: row.status, amount: decimalFromMicroUsdt(row.amountMicroUsdt), buyerId: row.buyerId, merchantId: row.merchantId, role: row.merchantId === userId ? 'MERCHANT' : 'BUYER', createdAt: row.createdAt, confirmedAt: row.confirmedAt })), nextCursor: rows.length > 50 ? nextCursor(rows[49]!.createdAt, rows[49]!.id) : null });
+      response.json({ items: rows.slice(0, 50).map((row) => ({ id: row.id, status: row.status, amount: decimalFromMicroUsdt(row.amountMicroUsdt), buyerId: row.buyerId, payerId: row.payerId, merchantId: row.merchantId, guaranteeId: row.guaranteeId, role: row.merchantId === userId ? 'MERCHANT' : row.buyerId === userId ? 'BUYER' : 'GUARANTOR', payerRole: row.payerId === userId ? 'SELF' : 'GUARANTOR', createdAt: row.createdAt, confirmedAt: row.confirmedAt })), nextCursor: rows.length > 50 ? nextCursor(rows[49]!.createdAt, rows[49]!.id) : null });
     } catch (error) { next(error); }
   });
 
@@ -1946,7 +1964,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
     try {
       const rows = await prisma.aidRequest.findMany({
         where: { applicantId: memberClaims(request).sub },
-        include: { media: { select: { id: true } }, charity: { select: { name: true } }, loan: { select: { id: true, principalCoupons: true, outstandingCoupons: true, status: true } } },
+        include: { media: { select: { id: true } }, charity: { select: { name: true } }, loan: { select: { id: true, principalCoupons: true, outstandingCoupons: true, status: true } }, guarantee: { select: { id: true } } },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       });
       response.json({ items: rows.map(serializeAid) });
@@ -1970,6 +1988,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
           applicant: { select: { displayName: true, barcodeId: true } },
           charity: { select: { name: true } },
           loan: { select: { id: true, principalCoupons: true, outstandingCoupons: true, status: true } },
+          guarantee: { select: { id: true } },
         },
         orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
       });
@@ -1989,8 +2008,34 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
         agentId: userId,
         ...(body.approvedCoupons === undefined ? {} : { approvedCoupons: parseCoupons(body.approvedCoupons) }),
         ...(body.note === undefined ? {} : { note: body.note }),
+        ...(body.mode === undefined ? {} : { mode: body.mode }),
       });
-      response.json({ id: approved.id, status: approved.status, approvedCoupons: approved.approvedCoupons?.toString() ?? null, disbursementTransactionId: approved.disbursementTransactionId });
+      response.json({ id: approved.id, status: approved.status, approvedCoupons: approved.approvedCoupons?.toString() ?? null, disbursementTransactionId: approved.disbursementTransactionId, guaranteeId: approved.guarantee?.id ?? null });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/charity-guarantees', async (request, response, next) => {
+    try {
+      const rows = await prisma.purchaseGuarantee.findMany({
+        where: { guarantorId: memberClaims(request).sub },
+        include: { charity: { select: { name: true } }, beneficiary: { select: { displayName: true, barcodeId: true } } },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      });
+      response.json({ items: rows.map((row) => ({ id: row.id, charityName: row.charity.name, beneficiary: row.beneficiary, amountCoupons: couponAmountFromMicroUsdt(row.amountMicroUsdt), remainingCoupons: couponAmountFromMicroUsdt(row.remainingMicroUsdt), status: row.status, createdAt: row.createdAt, closedAt: row.closedAt })) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/charity-guarantees/:id/revoke', async (request, response, next) => {
+    try {
+      const body = z.object({ pin: fourDigitCodeSchema }).parse(request.body);
+      const userId = memberClaims(request).sub;
+      await verifyMemberPin(prisma, userId, body.pin);
+      const revoked = await revokePurchaseGuarantee(prisma, { guaranteeId: pathId(request.params.id), agentId: userId });
+      response.json({ id: revoked.id, status: revoked.status, remainingCoupons: couponAmountFromMicroUsdt(revoked.remainingMicroUsdt) });
     } catch (error) {
       next(error);
     }

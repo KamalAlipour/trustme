@@ -1,8 +1,9 @@
-import { Prisma, PrismaClient, AccountType, Asset, AidRequestStatus, CharityAgentRole, TransactionStatus, TransactionType } from '@trustme/db';
+import { Prisma, PrismaClient, AccountType, Asset, AidRequestStatus, CharityAgentRole, PurchaseGuaranteeStatus, TransactionStatus, TransactionType } from '@trustme/db';
 import { DomainError } from './domain-error.js';
 import { postWithClient } from './ledger.js';
 import { withSerializableRetry } from './retry.js';
 import { transferCoupons } from './domain.js';
+import { availableEscrowMicroUsdt, lockBalance } from './escrow-payments.js';
 
 export async function createCharity(
   prisma: PrismaClient,
@@ -177,9 +178,59 @@ async function assertAgent(tx: Prisma.TransactionClient, charityId: string, user
   if (agent === null) throw new DomainError('resource not found', 404);
 }
 
+async function createPurchaseGuaranteeWithClient(
+  tx: Prisma.TransactionClient,
+  input: { charityId: string; guarantorId: string; beneficiaryId: string; amountMicroUsdt: bigint; aidRequestId?: string; note?: string },
+) {
+  if (input.amountMicroUsdt <= 0n) throw new DomainError('guarantee amount must be positive');
+  if (input.guarantorId === input.beneficiaryId) throw new DomainError('guarantor and beneficiary must be different');
+  await assertAgent(tx, input.charityId, input.guarantorId);
+  const beneficiary = await tx.user.findUniqueOrThrow({ where: { id: input.beneficiaryId }, select: { isDemo: true } });
+  if (beneficiary.isDemo) throw new DomainError('demo accounts cannot receive guarantees');
+  const balance = await lockBalance(tx, input.guarantorId);
+  if (input.amountMicroUsdt > availableEscrowMicroUsdt(balance)) throw new DomainError('guarantee exceeds available escrow', 409);
+  await tx.escrowBalance.update({ where: { userId: input.guarantorId }, data: { reservedMicroUsdt: { increment: input.amountMicroUsdt } } });
+  return tx.purchaseGuarantee.create({
+    data: {
+      charityId: input.charityId,
+      guarantorId: input.guarantorId,
+      beneficiaryId: input.beneficiaryId,
+      amountMicroUsdt: input.amountMicroUsdt,
+      remainingMicroUsdt: input.amountMicroUsdt,
+      ...(input.aidRequestId === undefined ? {} : { aidRequestId: input.aidRequestId }),
+      ...(input.note === undefined ? {} : { note: input.note.trim() || null }),
+    },
+  });
+}
+
+export async function createPurchaseGuarantee(
+  prisma: PrismaClient,
+  input: { charityId: string; guarantorId: string; beneficiaryId: string; amountMicroUsdt: bigint; aidRequestId?: string; note?: string },
+) {
+  return withSerializableRetry(prisma, (tx) => createPurchaseGuaranteeWithClient(tx, input));
+}
+
+export async function revokePurchaseGuarantee(prisma: PrismaClient, input: { guaranteeId: string; agentId: string }) {
+  return withSerializableRetry(prisma, async (tx) => {
+    await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "PurchaseGuarantee" WHERE "id" = ${input.guaranteeId}::uuid FOR UPDATE`);
+    const guarantee = await tx.purchaseGuarantee.findUniqueOrThrow({ where: { id: input.guaranteeId } });
+    await assertAgent(tx, guarantee.charityId, input.agentId);
+    if (guarantee.status !== PurchaseGuaranteeStatus.ACTIVE && guarantee.status !== PurchaseGuaranteeStatus.EXHAUSTED) {
+      throw new DomainError('guarantee is already revoked', 409);
+    }
+    const balance = await lockBalance(tx, guarantee.guarantorId);
+    if (balance.reservedMicroUsdt < guarantee.remainingMicroUsdt) throw new DomainError('guarantee reservation is inconsistent');
+    await tx.escrowBalance.update({ where: { userId: guarantee.guarantorId }, data: { reservedMicroUsdt: { decrement: guarantee.remainingMicroUsdt } } });
+    return tx.purchaseGuarantee.update({
+      where: { id: guarantee.id },
+      data: { status: PurchaseGuaranteeStatus.REVOKED, closedAt: new Date() },
+    });
+  });
+}
+
 export async function approveAidRequest(
   prisma: PrismaClient,
-  input: { aidRequestId: string; agentId: string; approvedCoupons?: bigint; note?: string },
+  input: { aidRequestId: string; agentId: string; approvedCoupons?: bigint; note?: string; mode?: 'TRANSFER' | 'GUARANTEE' },
 ) {
   return withSerializableRetry(prisma, async (tx) => {
     await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "AidRequest" WHERE "id" = ${input.aidRequestId}::uuid FOR UPDATE`);
@@ -190,6 +241,27 @@ export async function approveAidRequest(
     if (request.status !== AidRequestStatus.PENDING) throw new DomainError('aid request is not pending', 409);
     const amount = input.approvedCoupons ?? request.amountCoupons;
     if (amount <= 0n || amount > request.amountCoupons) throw new DomainError('approved amount cannot exceed requested amount');
+    if (input.mode === 'GUARANTEE') {
+      await createPurchaseGuaranteeWithClient(tx, {
+        charityId: request.charityId,
+        guarantorId: input.agentId,
+        beneficiaryId: request.applicantId,
+        amountMicroUsdt: amount * 10_000n,
+        aidRequestId: request.id,
+        ...(input.note === undefined ? {} : { note: input.note }),
+      });
+      return tx.aidRequest.update({
+        where: { id: request.id },
+        data: {
+          status: AidRequestStatus.GUARANTEED,
+          approvedCoupons: amount,
+          decisionNote: input.note?.trim() || null,
+          decidedById: input.agentId,
+          decidedAt: new Date(),
+        },
+        include: { guarantee: true },
+      });
+    }
     const charityAccount = await tx.ledgerAccount.findFirstOrThrow({ where: { charityId: request.charityId, type: AccountType.CHARITY_COUPON, asset: Asset.COUPON } });
     const applicantAccount = await tx.ledgerAccount.findFirstOrThrow({ where: { userId: request.applicantId, type: AccountType.USER_COUPON, asset: Asset.COUPON } });
     await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "LedgerAccount" WHERE "id" = ${charityAccount.id}::uuid FOR UPDATE`);
@@ -213,6 +285,7 @@ export async function approveAidRequest(
         decidedAt: new Date(),
         disbursementTransactionId: transaction.id,
       },
+      include: { guarantee: true },
     });
   });
 }

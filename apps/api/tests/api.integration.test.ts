@@ -1673,6 +1673,39 @@ describe('member API', () => {
     expect(await prisma.adminAuditLog.count({ where: { entityType: 'CharityAgent' } })).toBe(2);
   });
 
+  it('approves and revokes a charity purchase guarantee over HTTP', async () => {
+    const { app } = appFixture(undefined, undefined, { escrowContractAddress: getAddress(`0x${'48'.repeat(20)}`) });
+    const admin = await createAdmin(AdminRole.ADMIN);
+    const adminJwt = await adminToken(app, admin.username);
+    const beneficiary = await request(app).post('/v1/auth/register').send({ phone: '+1555000320', pin: '2468' });
+    const agent = await request(app).post('/v1/auth/register').send({ phone: '+1555000321', pin: '2468' });
+    await completeMemberSetup('+1555000320');
+    await completeMemberSetup('+1555000321');
+    const agentUser = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000321' } });
+    await prisma.escrowBalance.create({ data: { userId: agentUser.id, lockedMicroUsdt: 10_000_000n } });
+    const charity = await request(app).post('/admin/charities').set('Authorization', `Bearer ${adminJwt}`).send({ name: 'Guarantee HTTP Help' });
+    expect(charity.status).toBe(201);
+    const added = await request(app).post(`/admin/charities/${charity.body.id}/agents`).set('Authorization', `Bearer ${adminJwt}`).send({ barcodeId: agent.body.member.barcodeId, role: 'AGENT' });
+    expect(added.status).toBe(201);
+    const aid = await request(app).post('/v1/me/aid-requests').set('Authorization', `Bearer ${beneficiary.body.tokens.accessToken}`).send({ charityId: charity.body.id, amountCoupons: '500', description: 'purchase backing' });
+    expect(aid.status).toBe(201);
+    const approval = await request(app).post(`/v1/me/charity-requests/${aid.body.id}/approve`).set('Authorization', `Bearer ${agent.body.tokens.accessToken}`).send({ approvedCoupons: '500', mode: 'GUARANTEE', pin: '2468' });
+    expect(approval.status).toBe(200);
+    expect(approval.body).toMatchObject({ status: 'GUARANTEED', guaranteeId: expect.any(String) });
+    const escrow = await request(app).get('/v1/me/escrow').set('Authorization', `Bearer ${beneficiary.body.tokens.accessToken}`);
+    expect(escrow.status).toBe(200);
+    expect(escrow.body.guaranteedCoupons).toBe('500');
+    expect(escrow.body.guarantees).toHaveLength(1);
+    expect(escrow.body.guarantees[0]).toMatchObject({ id: approval.body.guaranteeId, charityName: 'Guarantee HTTP Help', remainingCoupons: '500' });
+    const backed = await request(app).get('/v1/me/charity-guarantees').set('Authorization', `Bearer ${agent.body.tokens.accessToken}`);
+    expect(backed.status).toBe(200);
+    expect(backed.body.items).toHaveLength(1);
+    expect(backed.body.items[0]).toMatchObject({ id: approval.body.guaranteeId, status: 'ACTIVE', remainingCoupons: '500' });
+    const revoked = await request(app).post(`/v1/me/charity-guarantees/${approval.body.guaranteeId}/revoke`).set('Authorization', `Bearer ${agent.body.tokens.accessToken}`).send({ pin: '2468' });
+    expect(revoked.status).toBe(200);
+    expect(revoked.body.status).toBe('REVOKED');
+  });
+
   it('enforces refund ownership and magic-byte media rules', async () => {
     const { app } = appFixture();
     const payer = await request(app).post('/v1/auth/register').send({ phone: '+1555000306', pin: '2468' });
