@@ -9,6 +9,13 @@ export type Member = {
   kycStatus: string;
   activeGuaranteeCount: number;
   isRestricted: boolean;
+  commission: {
+    rateBps: number;
+    floorBps: number;
+    networkAverageBps: number;
+    marketer: { barcodeId: string; displayName: string | null } | null;
+    dispute: { strikes: number; lastStrikeAt: string; status: string; nextStrikeAt: string; autoResolveAt: string } | null;
+  };
   identityVerification: {
     status: 'UNVERIFIED' | 'VERIFIED' | 'MISMATCH' | 'INCONCLUSIVE';
     verifiedAt: string | null;

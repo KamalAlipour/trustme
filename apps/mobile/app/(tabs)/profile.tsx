@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { FlatList, Modal, Pressable, Text, TextInput, View } from 'react-native';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 import { request, ApiError } from '../../src/api/client';
 import { useSession } from '../../src/auth/session';
@@ -18,6 +18,7 @@ import { HeaderIcons } from '../../src/components/HeaderIcons';
 
 export default function Profile() {
   const { t, language } = useTranslation();
+  const params = useLocalSearchParams<{ barcodeId?: string; field?: string }>();
   const { signOut, getStepUpPin, refreshSetup, setup, biometric } = useSession();
   const member = useMember();
   const identity = useIdentity();
@@ -55,9 +56,19 @@ export default function Profile() {
   const [emailFeedback, setEmailFeedback] = useState('');
   const [emailError, setEmailError] = useState('');
   const [emailBusy, setEmailBusy] = useState<'send' | 'verify' | null>(null);
+  const [commissionRate, setCommissionRate] = useState('');
+  const [marketerBarcode, setMarketerBarcode] = useState('');
+  const [discountSellerBarcode, setDiscountSellerBarcode] = useState('');
+  const [discountRate, setDiscountRate] = useState('');
   const previousLanguage = useRef(language);
   const displayNamePrefilled = useRef(false);
   const current = member.data;
+  useEffect(() => {
+    if (current?.commission !== undefined) setCommissionRate((current.commission.rateBps / 100).toString());
+  }, [current?.commission?.rateBps]);
+  useEffect(() => {
+    if (params.field === 'marketer' && params.barcodeId !== undefined) setMarketerBarcode(params.barcodeId);
+  }, [params.barcodeId, params.field]);
   const emailIsValid = isValidEmail(email);
   const emailCodeIsValid = isValidEmailCode(emailCode);
   const devices = useQuery({
@@ -81,6 +92,38 @@ export default function Profile() {
   const saveName = async () => {
     setError(''); setNotice('');
     try { await request('/v1/me', { method: 'PATCH', body: { displayName } }); setNotice(t.nameSaved); await invalidate(); } catch (cause) { setError(cause instanceof ApiError ? cause.message : t.unknownError); }
+  };
+  const stepUp = async () => {
+    const pin = await getStepUpPin();
+    if (!pin) throw new ApiError(400, { error: t.operationPinRequired });
+    return pin;
+  };
+  const saveCommissionRate = async () => {
+    try {
+      await request('/v1/me/commission-rate', { method: 'PUT', body: { ratePercent: commissionRate, pin: await stepUp() } });
+      setNotice(t.save);
+      await invalidate();
+    } catch (cause) { setError(cause instanceof ApiError ? cause.message : t.unknownError); }
+  };
+  const saveMarketer = async () => {
+    try {
+      await request('/v1/me/marketer', { method: 'PUT', body: { barcodeId: marketerBarcode, pin: await stepUp() } });
+      setMarketerBarcode('');
+      await invalidate();
+    } catch (cause) { setError(cause instanceof ApiError ? cause.message : t.unknownError); }
+  };
+  const grantDiscount = async () => {
+    try {
+      await request('/v1/me/commission-discounts', { method: 'POST', body: { sellerBarcodeId: discountSellerBarcode, ratePercent: discountRate, pin: await stepUp() } });
+      setDiscountSellerBarcode(''); setDiscountRate('');
+      await invalidate();
+    } catch (cause) { setError(cause instanceof ApiError ? cause.message : t.unknownError); }
+  };
+  const strike = async () => {
+    try { await request('/v1/me/commission-disputes/strike', { method: 'POST', body: { pin: await stepUp() } }); await invalidate(); } catch (cause) { setError(cause instanceof ApiError ? cause.message : t.unknownError); }
+  };
+  const autoResolve = async () => {
+    try { await request('/v1/me/commission-disputes/auto-resolve', { method: 'POST', body: { pin: await stepUp() } }); await invalidate(); } catch (cause) { setError(cause instanceof ApiError ? cause.message : t.unknownError); }
   };
   const requestEmail = async () => {
     if (!emailIsValid || emailBusy !== null) return;
@@ -217,6 +260,30 @@ export default function Profile() {
       <View style={styles.card}>
         <Pressable onPress={() => router.push('/about')} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.about}</Text></Pressable>
       </View>
+      {current?.commission ? <View style={styles.card}>
+        <Text style={styles.heading}>{t.marketing}</Text>
+        <TextInput value={commissionRate} onChangeText={setCommissionRate} placeholder={t.commissionRate} style={styles.input} keyboardType="decimal-pad" />
+        <Text style={styles.muted}>{t.commissionFloor((current.commission.floorBps / 100).toString())}</Text>
+        <Text style={styles.text}>{t.networkAverage((current.commission.networkAverageBps / 100).toString())}</Text>
+        <Pressable onPress={() => void saveCommissionRate()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.save}</Text></Pressable>
+        <Text style={styles.text}>{t.marketer}: {current.commission.marketer?.displayName ?? current.commission.marketer?.barcodeId ?? t.notRegistered}</Text>
+        {current.commission.marketer === null ? <>
+          <TextInput value={marketerBarcode} onChangeText={setMarketerBarcode} placeholder={t.barcode} style={styles.input} />
+          <Pressable onPress={() => router.push({ pathname: '/scan', params: { returnTo: '/(tabs)/profile', field: 'marketer' } })} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.scanQr}</Text></Pressable>
+          <Pressable onPress={() => void saveMarketer()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.setMarketer}</Text></Pressable>
+        </> : null}
+        {current.commission.marketer !== null && current.commission.rateBps > current.commission.networkAverageBps ? <>
+          {current.commission.dispute ? <Text style={styles.muted}>{t.strikes(current.commission.dispute.strikes)} · {t.nextStrike(formatDate(current.commission.dispute.nextStrikeAt, language))}</Text> : null}
+          <Pressable onPress={() => void strike()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.strike}</Text></Pressable>
+          {current.commission.dispute?.strikes === 3 && new Date(current.commission.dispute.autoResolveAt) <= new Date() ? <Pressable onPress={() => void autoResolve()} style={styles.button}><Text style={styles.buttonText}>{t.autoResolve}</Text></Pressable> : null}
+        </> : null}
+        {current.commission.marketer !== null ? <>
+          <Text style={styles.heading}>{t.grantDiscount}</Text>
+          <TextInput value={discountSellerBarcode} onChangeText={setDiscountSellerBarcode} placeholder={t.sellerBarcode} style={styles.input} />
+          <TextInput value={discountRate} onChangeText={setDiscountRate} placeholder={t.newCommissionRate} style={styles.input} keyboardType="decimal-pad" />
+          <Pressable onPress={() => void grantDiscount()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.grantDiscount}</Text></Pressable>
+        </> : null}
+      </View> : null}
       {setup?.biometricPending && biometric ? <View style={styles.card}>
         <Text style={styles.heading}>{t.securitySetup}</Text>
         <Text style={styles.text}>{t.biometricQuestion}</Text>
