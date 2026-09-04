@@ -76,6 +76,7 @@ export type AidRequest = {
   decisionNote: string | null;
   decidedById: string | null;
   disbursementTransactionId: string | null;
+  guaranteeId: string | null;
   loan: { id: string; principalCoupons: string; outstandingCoupons: string; status: string } | null;
   createdAt: string;
   decidedAt: string | null;
@@ -142,6 +143,10 @@ export type EscrowBalance = {
   lockedMicroUsdt: string;
   reservedMicroUsdt: string;
   availableMicroUsdt: string;
+  spendableMicroUsdt: string;
+  guaranteedMicroUsdt: string;
+  guaranteedCoupons: string;
+  guarantees: Array<{ id: string; charityName: string; remainingCoupons: string }>;
   locked: string;
   primaryWallet: EscrowWallet | null;
   enabled: boolean;
@@ -153,10 +158,21 @@ export type EscrowSettlement = {
   amount: string;
   buyerId: string;
   merchantId: string;
-  role: 'MERCHANT' | 'BUYER';
+  role: 'MERCHANT' | 'BUYER' | 'GUARANTOR';
+  payerRole: 'SELF' | 'GUARANTOR';
   createdAt: string;
   confirmedAt: string | null;
   buyerBarcodeId?: string;
+};
+export type CharityGuarantee = {
+  id: string;
+  charityName: string;
+  beneficiary: { displayName: string | null; barcodeId: string };
+  amountCoupons: string;
+  remainingCoupons: string;
+  status: string;
+  createdAt: string;
+  closedAt: string | null;
 };
 export type EscrowUnload = {
   id: string;

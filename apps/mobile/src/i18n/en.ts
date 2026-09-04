@@ -344,6 +344,12 @@ export const en = {
   unselected: 'Not selected',
   approvePayment: 'Approve and pay',
   requestDocs: 'Request documents',
+  charity: {
+    guaranteeApprove: 'Guarantee with my Tether',
+    backedGuarantees: 'Guarantees I back',
+    revokeGuarantee: 'Revoke',
+    guaranteedStatus: 'Guaranteed',
+  },
   languageChanged: 'Language changed.',
   escrow: {
     title: 'Top up wallet (Tether/USDT)',
@@ -383,6 +389,7 @@ export const en = {
     payMerchantRequired: 'Scan or enter the seller barcode first.',
     payAmountCoupons: 'Amount in coupons (e.g. 12.5)',
     identityRequiredForTether: 'Complete identity verification before depositing or withdrawing Tether.',
+    guaranteedBy: (name: string, amount: string) => `Guaranteed by ${name}: ${amount} coupons`,
     payAmountRequired: 'Enter the amount in coupons.',
     payNow: 'Pay',
     payCodeShow: 'Give this code to the seller',

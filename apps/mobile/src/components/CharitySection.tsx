@@ -1,7 +1,7 @@
 import React from 'react';
 import { Pressable, Text, TextInput, TextStyle, View } from 'react-native';
 import { request } from '../api/client';
-import { useAidRequests, useCharityRequests, useInvalidateMoney } from '../hooks';
+import { useAidRequests, useCharityGuarantees, useCharityRequests, useInvalidateMoney } from '../hooks';
 import { useSession } from '../auth/session';
 import { EvidencePicker } from './EvidencePicker';
 import type { AidRequest } from '../api/types';
@@ -14,6 +14,7 @@ import { EvidenceViewer } from './EvidenceViewer';
 
 function statusLabel(status: string, t: ReturnType<typeof useTranslation>['t']): { label: string; style: TextStyle } {
   if (status === 'APPROVED') return { label: `🟢 ${t.aidApproved}`, style: styles.notice };
+  if (status === 'GUARANTEED') return { label: `🟢 ${t.charity.guaranteedStatus}`, style: styles.notice };
   if (status === 'REJECTED') return { label: `🔴 ${t.aidRejected}`, style: styles.danger };
   if (status === 'DOCUMENTS_REQUESTED') return { label: `📑 ${t.documentsRequested}`, style: styles.muted };
   return { label: `🟡 ${t.aidPending}`, style: styles.muted };
@@ -23,6 +24,7 @@ export function CharitySection() {
   const { t, language } = useTranslation();
   const aid = useAidRequests();
   const agent = useCharityRequests();
+  const guarantees = useCharityGuarantees();
   const invalidate = useInvalidateMoney();
   const { getStepUpPin } = useSession();
   const [error, setError] = React.useState('');
@@ -32,15 +34,15 @@ export function CharitySection() {
   const sendDocuments = async (requestId: string, documentMediaIds: string[]): Promise<boolean> => {
     try { await request(`/v1/me/aid-requests/${requestId}/documents`, { method: 'POST', body: { mediaIds: documentMediaIds } }); await invalidate(); return true; } catch (cause) { setError(mapApiError(cause, t)); return false; }
   };
-  const review = async (item: AidRequest, action: 'approve' | 'reject' | 'request-documents') => {
+  const review = async (item: AidRequest, action: 'approve' | 'guarantee' | 'reject' | 'request-documents') => {
     setError('');
     try {
-      if (action === 'approve') {
+      if (action === 'approve' || action === 'guarantee') {
         const pin = await getStepUpPin();
         if (!pin) { setError(t.operationPinRequired); return; }
         const value = approved[item.id] ?? item.amountCoupons;
         if (!approvedAmountWithinRequest(value, item.amountCoupons)) { setError(t.approvedAmountTooHigh); return; }
-        await request(`/v1/me/charity-requests/${item.id}/approve`, { method: 'POST', body: { approvedCoupons: value, pin, ...(notes[item.id] ? { note: notes[item.id] } : {}) } });
+        await request(`/v1/me/charity-requests/${item.id}/approve`, { method: 'POST', body: { approvedCoupons: value, mode: action === 'guarantee' ? 'GUARANTEE' : 'TRANSFER', pin, ...(notes[item.id] ? { note: notes[item.id] } : {}) } });
       } else {
         const note = notes[item.id]?.trim();
         if (!note) { setError(t.decisionNoteRequired); return; }
@@ -53,6 +55,7 @@ export function CharitySection() {
   const hasContent =
     (aid.data?.items?.length ?? 0) > 0 ||
     (agent.data?.items?.length ?? 0) > 0 ||
+    (guarantees.data?.items?.length ?? 0) > 0 ||
     error !== '';
   if (!hasContent) return null;
 
@@ -61,8 +64,9 @@ export function CharitySection() {
     {(agent.data?.items ?? []).length > 0 ? <><Text style={styles.heading}>{t.socialWorkerRequests}</Text>{(agent.data?.items ?? []).map((item) => <View key={item.id} style={styles.card}>
       <Text style={styles.heading}>{item.applicant?.displayName ?? item.applicant?.barcodeId}</Text><Text style={styles.text}>{t.couponBalance(formatCoupons(item.amountCoupons, language))} · {item.description}</Text><EvidenceViewer ids={item.mediaIds} />
       <Text style={statusLabel(item.status, t).style}>{statusLabel(item.status, t).label}</Text>
-      {item.status === 'PENDING' ? <><TextInput value={approved[item.id] ?? item.amountCoupons} onChangeText={(value) => setApproved((current) => ({ ...current, [item.id]: value.replace(/\D/g, '') }))} style={styles.input} keyboardType="number-pad" /><TextInput value={notes[item.id] ?? ''} onChangeText={(value) => setNotes((current) => ({ ...current, [item.id]: value }))} placeholder={t.decisionNote} style={styles.input} /><View style={styles.row}><Pressable onPress={() => void review(item, 'approve')} style={styles.button}><Text style={styles.buttonText}>{t.approveAndPay}</Text></Pressable><Pressable onPress={() => void review(item, 'reject')} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.reject}</Text></Pressable></View><Pressable onPress={() => void review(item, 'request-documents')} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.requestDocuments}</Text></Pressable></> : null}
+      {item.status === 'PENDING' ? <><TextInput value={approved[item.id] ?? item.amountCoupons} onChangeText={(value) => setApproved((current) => ({ ...current, [item.id]: value.replace(/\D/g, '') }))} style={styles.input} keyboardType="number-pad" /><TextInput value={notes[item.id] ?? ''} onChangeText={(value) => setNotes((current) => ({ ...current, [item.id]: value }))} placeholder={t.decisionNote} style={styles.input} /><View style={styles.row}><Pressable onPress={() => void review(item, 'approve')} style={styles.button}><Text style={styles.buttonText}>{t.approveAndPay}</Text></Pressable><Pressable onPress={() => void review(item, 'guarantee')} style={styles.button}><Text style={styles.buttonText}>{t.charity.guaranteeApprove}</Text></Pressable><Pressable onPress={() => void review(item, 'reject')} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.reject}</Text></Pressable></View><Pressable onPress={() => void review(item, 'request-documents')} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.requestDocuments}</Text></Pressable></> : null}
     </View>)}</> : null}
+    {(guarantees.data?.items?.length ?? 0) > 0 ? <><Text style={styles.heading}>{t.charity.backedGuarantees}</Text>{guarantees.data?.items.map((guarantee) => <View key={guarantee.id} style={styles.card}><Text style={styles.text}>{guarantee.beneficiary.displayName ?? guarantee.beneficiary.barcodeId}</Text><Text style={styles.muted}>{guarantee.charityName} · {guarantee.remainingCoupons} coupons</Text><Text style={statusLabel(guarantee.status, t).style}>{statusLabel(guarantee.status, t).label}</Text>{guarantee.status !== 'REVOKED' && guarantee.status !== 'EXHAUSTED' ? <Pressable onPress={() => void (async () => { const pin = await getStepUpPin(); if (!pin) { setError(t.operationPinRequired); return; } try { await request(`/v1/me/charity-guarantees/${guarantee.id}/revoke`, { method: 'POST', body: { pin } }); await invalidate(); } catch (cause) { setError(mapApiError(cause, t)); } })()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.charity.revokeGuarantee}</Text></Pressable> : null}</View>)}</> : null}
     {error ? <Text style={styles.danger}>{error}</Text> : null}
   </View>;
 }

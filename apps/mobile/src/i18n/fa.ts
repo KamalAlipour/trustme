@@ -346,6 +346,12 @@ export const fa: Translations = {
   unselected: 'انتخاب نشده',
   approvePayment: 'موافقت و پرداخت',
   requestDocs: 'درخواست مدارک',
+  charity: {
+    guaranteeApprove: 'ضمانت با تتر خودم',
+    backedGuarantees: 'ضمانت‌های من',
+    revokeGuarantee: 'لغو ضمانت',
+    guaranteedStatus: 'ضمانت‌شده',
+  },
   languageChanged: 'زبان تغییر کرد.',
   escrow: {
     title: 'شارژ کیف پول (Tether/USDT)',
@@ -385,6 +391,7 @@ export const fa: Translations = {
     payMerchantRequired: 'اول بارکد فروشنده را اسکن یا وارد کن.',
     payAmountCoupons: 'مبلغ به کوپن (مثل ۱۲٫۵)',
     identityRequiredForTether: 'پیش از واریز یا برداشت تتر، احراز هویت را کامل کنید.',
+    guaranteedBy: (name: string, amount: string) => `ضمانت‌شده توسط ${name}: ${amount} کوپن`,
     payAmountRequired: 'مبلغ را به کوپن وارد کن.',
     payNow: 'پرداخت',
     payCodeShow: 'این کد را به فروشنده بگو',
