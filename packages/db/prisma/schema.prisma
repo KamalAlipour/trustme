@@ -167,7 +167,14 @@ enum AidRequestStatus {
   PENDING
   DOCUMENTS_REQUESTED
   APPROVED
+  GUARANTEED
   REJECTED
+}
+
+enum PurchaseGuaranteeStatus {
+  ACTIVE
+  EXHAUSTED
+  REVOKED
 }
 
 enum IdentityProvider {
@@ -268,6 +275,9 @@ model User {
   payCodesToCollect    PayCode[]          @relation("PayCodeMerchant")
   buyerSettlements     EscrowSettlement[] @relation("EscrowSettlementBuyer")
   merchantSettlements  EscrowSettlement[] @relation("EscrowSettlementMerchant")
+  payerSettlements      EscrowSettlement[] @relation("EscrowSettlementPayer")
+  purchaseGuaranteesAsGuarantor PurchaseGuarantee[] @relation("PurchaseGuarantor")
+  purchaseGuaranteesAsBeneficiary PurchaseGuarantee[] @relation("PurchaseGuaranteeBeneficiary")
   unloads              EscrowUnload[]
   escrowChainEvents    EscrowChainEvent[]
 
@@ -555,6 +565,7 @@ model PayCode {
   codeHash           String
   amountMicroUsdt    BigInt?
   maxAmountMicroUsdt BigInt
+  guaranteeId        String?       @db.Uuid
   expiresAt          DateTime
   status             PayCodeStatus @default(ACTIVE)
   wrongAttempts      Int           @default(0)
@@ -562,6 +573,7 @@ model PayCode {
   usedAt             DateTime?
   buyer              User          @relation("PayCodeBuyer", fields: [buyerId], references: [id])
   merchant           User?         @relation("PayCodeMerchant", fields: [merchantId], references: [id])
+  guarantee          PurchaseGuarantee? @relation(fields: [guaranteeId], references: [id])
 
   @@index([buyerId, status])
   @@index([expiresAt, status])
@@ -571,8 +583,10 @@ model PayCode {
 model EscrowSettlement {
   id              String                 @id @default(uuid()) @db.Uuid
   buyerId         String                 @db.Uuid
+  payerId         String                 @db.Uuid
   merchantId      String                 @db.Uuid
   payCodeId       String                 @unique @db.Uuid
+  guaranteeId     String?                @db.Uuid
   amountMicroUsdt BigInt
   ref             String                 @unique
   externalRef     String?                @unique
@@ -584,7 +598,9 @@ model EscrowSettlement {
   createdAt       DateTime               @default(now())
   confirmedAt     DateTime?
   buyer           User                   @relation("EscrowSettlementBuyer", fields: [buyerId], references: [id])
+  payer           User                   @relation("EscrowSettlementPayer", fields: [payerId], references: [id])
   merchant        User                   @relation("EscrowSettlementMerchant", fields: [merchantId], references: [id])
+  guarantee       PurchaseGuarantee?     @relation(fields: [guaranteeId], references: [id])
   transaction     Transaction?           @relation(fields: [transactionId], references: [id])
 }
 
@@ -776,6 +792,30 @@ model Charity {
   agents         CharityAgent[]
   aidRequests    AidRequest[]
   ledgerAccounts LedgerAccount[]
+  purchaseGuarantees PurchaseGuarantee[]
+}
+
+model PurchaseGuarantee {
+  id                 String                 @id @default(uuid()) @db.Uuid
+  charityId          String                 @db.Uuid
+  guarantorId        String                 @db.Uuid
+  beneficiaryId      String                 @db.Uuid
+  aidRequestId       String?                @unique @db.Uuid
+  amountMicroUsdt    BigInt
+  remainingMicroUsdt BigInt
+  status             PurchaseGuaranteeStatus @default(ACTIVE)
+  note               String?
+  createdAt          DateTime               @default(now())
+  closedAt           DateTime?
+  charity            Charity                @relation(fields: [charityId], references: [id])
+  guarantor          User                   @relation("PurchaseGuarantor", fields: [guarantorId], references: [id])
+  beneficiary        User                   @relation("PurchaseGuaranteeBeneficiary", fields: [beneficiaryId], references: [id])
+  aidRequest         AidRequest?            @relation(fields: [aidRequestId], references: [id])
+  settlements        EscrowSettlement[]
+  payCodes           PayCode[]
+
+  @@index([beneficiaryId, status])
+  @@index([guarantorId, status])
 }
 
 model CharityAgent {
@@ -811,6 +851,7 @@ model AidRequest {
   loan                      Loan?            @relation(fields: [loanId], references: [id])
   decidedBy                 User?            @relation("AidDecider", fields: [decidedById], references: [id])
   disbursementTransaction   Transaction?     @relation("AidDisbursementTransaction", fields: [disbursementTransactionId], references: [id])
+  guarantee                 PurchaseGuarantee?
   media                     MediaAsset[]
 
   @@index([charityId, status, createdAt])

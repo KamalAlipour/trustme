@@ -8,6 +8,7 @@ import {
   EscrowSettlementStatus,
   EscrowUnloadStatus,
   PayCodeStatus,
+  PurchaseGuaranteeStatus,
   Prisma,
   PrismaClient,
   TransactionStatus,
@@ -30,7 +31,7 @@ export function escrowReference(prefix: 'settlement' | 'unload', id: string): st
   return keccak256(toUtf8Bytes(`${prefix}:${id}`));
 }
 
-async function lockBalance(tx: Prisma.TransactionClient, userId: string) {
+export async function lockBalance(tx: Prisma.TransactionClient, userId: string) {
   await tx.$queryRaw(Prisma.sql`SELECT "userId" FROM "EscrowBalance" WHERE "userId" = ${userId}::uuid FOR UPDATE`);
   return tx.escrowBalance.upsert({
     where: { userId },
@@ -71,13 +72,21 @@ export async function createPayCode(
   const codeHash = await bcrypt.hash(input.code, 10);
   return withSerializableRetry(prisma, async (tx) => {
     const balance = await lockBalance(tx, input.buyerId);
-    if (input.maxAmountMicroUsdt > availableEscrowMicroUsdt(balance)) throw new DomainError('pay code exceeds available escrow');
+    let guaranteeId: string | null = null;
+    if (input.maxAmountMicroUsdt > availableEscrowMicroUsdt(balance)) {
+      const guarantees = await activeGuaranteesFor(tx, input.buyerId);
+      const guarantee = guarantees.find((candidate) => candidate.remainingMicroUsdt >= input.maxAmountMicroUsdt);
+      if (guarantee === undefined) throw new DomainError('pay code exceeds available escrow');
+      await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "PurchaseGuarantee" WHERE "id" = ${guarantee.id}::uuid FOR UPDATE`);
+      guaranteeId = guarantee.id;
+    }
     await tx.payCode.updateMany({ where: { buyerId: input.buyerId, status: PayCodeStatus.ACTIVE }, data: { status: PayCodeStatus.CANCELLED } });
     return tx.payCode.create({
       data: {
         id,
         buyerId: input.buyerId,
         ...(input.merchantId === undefined ? {} : { merchantId: input.merchantId, amountMicroUsdt: input.amountMicroUsdt }),
+        guaranteeId,
         codeHash,
         maxAmountMicroUsdt: input.merchantId === undefined ? input.maxAmountMicroUsdt : input.amountMicroUsdt!,
         expiresAt: input.expiresAt,
@@ -86,18 +95,36 @@ export async function createPayCode(
   });
 }
 
+export async function activeGuaranteesFor(tx: Prisma.TransactionClient, beneficiaryId: string) {
+  return tx.purchaseGuarantee.findMany({
+    where: { beneficiaryId, status: PurchaseGuaranteeStatus.ACTIVE, remainingMicroUsdt: { gt: 0n } },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+  });
+}
+
 async function settlePayCode(
   tx: Prisma.TransactionClient,
   input: {
     merchantId: string;
     buyerId: string;
-    payCode: { id: string; codeHash: string; maxAmountMicroUsdt: bigint };
+    payCode: { id: string; codeHash: string; maxAmountMicroUsdt: bigint; guaranteeId: string | null };
     amountMicroUsdt: bigint;
     externalRef?: string;
   },
 ) {
-  const balance = await lockBalance(tx, input.buyerId);
-  if (input.amountMicroUsdt > availableEscrowMicroUsdt(balance)) throw new DomainError('settlement exceeds available escrow');
+  let payerId = input.buyerId;
+  let guarantee: { id: string; guarantorId: string; remainingMicroUsdt: bigint; status: PurchaseGuaranteeStatus } | null = null;
+  if (input.payCode.guaranteeId === null) {
+    const balance = await lockBalance(tx, input.buyerId);
+    if (input.amountMicroUsdt > availableEscrowMicroUsdt(balance)) throw new DomainError('settlement exceeds available escrow');
+  } else {
+    await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "PurchaseGuarantee" WHERE "id" = ${input.payCode.guaranteeId}::uuid FOR UPDATE`);
+    guarantee = await tx.purchaseGuarantee.findUnique({ where: { id: input.payCode.guaranteeId }, select: { id: true, guarantorId: true, remainingMicroUsdt: true, status: true } });
+    if (guarantee === null || guarantee.status !== PurchaseGuaranteeStatus.ACTIVE || guarantee.remainingMicroUsdt < input.amountMicroUsdt) {
+      throw new DomainError('guarantee no longer covers this amount');
+    }
+    payerId = guarantee.guarantorId;
+  }
   const settlementId = randomUUID();
   const merchantAccount = await userCouponAccount(tx, input.merchantId);
   const issuance = await issuanceAccount(tx);
@@ -113,8 +140,10 @@ async function settlePayCode(
     data: {
       id: settlementId,
       buyerId: input.buyerId,
+      payerId,
       merchantId: input.merchantId,
       payCodeId: input.payCode.id,
+      guaranteeId: input.payCode.guaranteeId,
       amountMicroUsdt: input.amountMicroUsdt,
       ref: escrowReference('settlement', settlementId),
       ...(input.externalRef === undefined ? {} : { externalRef: input.externalRef }),
@@ -122,7 +151,17 @@ async function settlePayCode(
     },
   });
   await tx.payCode.update({ where: { id: input.payCode.id }, data: { status: PayCodeStatus.USED, usedAt: new Date() } });
-  await tx.escrowBalance.update({ where: { userId: input.buyerId }, data: { reservedMicroUsdt: { increment: input.amountMicroUsdt } } });
+  if (input.payCode.guaranteeId === null) {
+    await tx.escrowBalance.update({ where: { userId: input.buyerId }, data: { reservedMicroUsdt: { increment: input.amountMicroUsdt } } });
+  } else {
+    await tx.purchaseGuarantee.update({
+      where: { id: input.payCode.guaranteeId },
+      data: {
+        remainingMicroUsdt: { decrement: input.amountMicroUsdt },
+        ...(input.amountMicroUsdt === guarantee!.remainingMicroUsdt ? { status: PurchaseGuaranteeStatus.EXHAUSTED } : {}),
+      },
+    });
+  }
   const buyer = await tx.user.findUniqueOrThrow({ where: { id: input.buyerId }, select: { id: true, barcodeId: true, displayName: true } });
   return { settlement, buyer, merchantId: input.merchantId };
 }
@@ -217,12 +256,12 @@ export async function confirmSettlement(prisma: PrismaClient, input: { ref: stri
     if (settlement === null) throw new DomainError('settlement not found', 404);
     if (settlement.status === EscrowSettlementStatus.CONFIRMED) return settlement;
     if (settlement.status === EscrowSettlementStatus.FAILED) throw new DomainError('settlement has failed');
-    const balance = await lockBalance(tx, settlement.buyerId);
+    const balance = await lockBalance(tx, settlement.payerId);
     if (balance.reservedMicroUsdt < settlement.amountMicroUsdt || balance.lockedMicroUsdt < settlement.amountMicroUsdt) {
       throw new DomainError('escrow balance is inconsistent');
     }
     await tx.escrowBalance.update({
-      where: { userId: settlement.buyerId },
+      where: { userId: settlement.payerId },
       data: { lockedMicroUsdt: { decrement: settlement.amountMicroUsdt }, reservedMicroUsdt: { decrement: settlement.amountMicroUsdt } },
     });
     return tx.escrowSettlement.update({
@@ -237,7 +276,7 @@ export async function failSettlement(prisma: PrismaClient, input: { settlementId
     const settlement = await tx.escrowSettlement.findUnique({ where: { id: input.settlementId } });
     if (settlement === null) throw new DomainError('settlement not found', 404);
     if (settlement.status === EscrowSettlementStatus.CONFIRMED) return settlement;
-    const balance = await lockBalance(tx, settlement.buyerId);
+    const balance = await lockBalance(tx, settlement.payerId);
     const release = settlement.amountMicroUsdt <= balance.reservedMicroUsdt ? settlement.amountMicroUsdt : balance.reservedMicroUsdt;
     let lastError = input.error;
     if (settlement.transactionId !== null) {
@@ -264,11 +303,27 @@ export async function failSettlement(prisma: PrismaClient, input: { settlementId
         await tx.user.update({ where: { id: settlement.merchantId }, data: { dustMicroUsdt: newDust } });
       } catch (error) {
         lastError = `${input.error}; reversal failed: ${error instanceof Error ? error.message : String(error)}; manual handling is needed`;
-        await tx.escrowBalance.update({ where: { userId: settlement.buyerId }, data: { reservedMicroUsdt: { decrement: release } } });
+        if (settlement.guaranteeId === null) {
+          await tx.escrowBalance.update({ where: { userId: settlement.payerId }, data: { reservedMicroUsdt: { decrement: release } } });
+        }
+        if (settlement.guaranteeId !== null) {
+          await tx.purchaseGuarantee.update({
+            where: { id: settlement.guaranteeId },
+            data: { remainingMicroUsdt: { increment: settlement.amountMicroUsdt }, status: PurchaseGuaranteeStatus.ACTIVE },
+          });
+        }
         return tx.escrowSettlement.update({ where: { id: settlement.id }, data: { status: EscrowSettlementStatus.FAILED, lastError } });
       }
     }
-    await tx.escrowBalance.update({ where: { userId: settlement.buyerId }, data: { reservedMicroUsdt: { decrement: release } } });
+    if (settlement.guaranteeId === null) {
+      await tx.escrowBalance.update({ where: { userId: settlement.payerId }, data: { reservedMicroUsdt: { decrement: release } } });
+    }
+    if (settlement.guaranteeId !== null) {
+      await tx.purchaseGuarantee.update({
+        where: { id: settlement.guaranteeId },
+        data: { remainingMicroUsdt: { increment: settlement.amountMicroUsdt }, status: PurchaseGuaranteeStatus.ACTIVE },
+      });
+    }
     return tx.escrowSettlement.update({ where: { id: settlement.id }, data: { status: EscrowSettlementStatus.FAILED, lastError } });
   });
 }
@@ -375,12 +430,12 @@ export async function applyEscrowChainEvent(
         return recorded;
       }
       if (settlement.status === EscrowSettlementStatus.PENDING) {
-        const balance = await lockBalance(tx, settlement.buyerId);
+        const balance = await lockBalance(tx, settlement.payerId);
         if (balance.lockedMicroUsdt < settlement.amountMicroUsdt || balance.reservedMicroUsdt < settlement.amountMicroUsdt) {
           log.error(`unreconciled escrow settlement event ${event.txHash}:${event.logIndex}: escrow balance is inconsistent`);
           return recorded;
         }
-        await tx.escrowBalance.update({ where: { userId: settlement.buyerId }, data: { lockedMicroUsdt: { decrement: settlement.amountMicroUsdt }, reservedMicroUsdt: { decrement: settlement.amountMicroUsdt } } });
+        await tx.escrowBalance.update({ where: { userId: settlement.payerId }, data: { lockedMicroUsdt: { decrement: settlement.amountMicroUsdt }, reservedMicroUsdt: { decrement: settlement.amountMicroUsdt } } });
         await tx.escrowSettlement.update({ where: { id: settlement.id }, data: { status: EscrowSettlementStatus.CONFIRMED, chainTxHash: event.txHash, confirmedAt: new Date() } });
       }
       return markReconciled();
