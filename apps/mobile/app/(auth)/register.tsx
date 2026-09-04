@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { router } from 'expo-router';
-import { Pressable, Text, TextInput } from 'react-native';
+import { Pressable, Text, TextInput, View } from 'react-native';
 import { ApiError } from '../../src/api/client';
 import { useSession } from '../../src/auth/session';
+import { Logo } from '../../src/components/Logo';
 import { Page } from '../../src/components/Screen';
 import { useTranslation } from '../../src/i18n';
 import { isWeakPin } from '../../src/lib/pin';
@@ -31,7 +32,10 @@ export default function Register() {
   };
   return (
     <Page>
-      <Text style={styles.title}>{t.register}</Text>
+      <View style={{ alignItems: 'center', gap: 12, marginBottom: 8 }}>
+        <Logo size={96} />
+        <Text style={styles.title}>{t.register}</Text>
+      </View>
       <SocialAuthButtons
         onError={setError}
         onGoogleToken={async (idToken) => { await signInWithSocial('google', idToken); router.replace('/'); }}

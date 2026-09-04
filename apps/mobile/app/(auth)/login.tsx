@@ -4,6 +4,7 @@ import { Pressable, Text, TextInput, View } from 'react-native';
 import { ApiError, LockedError } from '../../src/api/client';
 import { useSession } from '../../src/auth/session';
 import { PinPad } from '../../src/components/PinPad';
+import { Logo } from '../../src/components/Logo';
 import { Page } from '../../src/components/Screen';
 import { useTranslation } from '../../src/i18n';
 import { isWebPlatform } from '../../src/lib/platform';
@@ -55,7 +56,10 @@ export default function Login() {
   const remaining = lockedUntil === null ? 0 : Math.max(0, lockedUntil - now);
   return (
     <Page>
-      <Text style={styles.title}>{t.appName}</Text>
+      <View style={{ alignItems: 'center', gap: 12, marginBottom: 8 }}>
+        <Logo size={96} />
+        <Text style={styles.title}>{t.appName}</Text>
+      </View>
       <Text style={styles.heading}>{t.login}</Text>
       {isWebPlatform() ? <Text style={styles.muted}>{t.browserSessionNotice}</Text> : null}
       <SocialAuthButtons
