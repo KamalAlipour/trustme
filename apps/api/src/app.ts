@@ -124,6 +124,7 @@ export type ApiDependencies = {
   verifyGoogleIdToken?: import('./social-auth.js').MemberIdTokenVerifier;
   verifyAppleIdToken?: import('./social-auth.js').MemberIdTokenVerifier;
   checkShahkarMatch?: typeof import('./shahkar.js').checkShahkarMatch;
+  checkIbanMatch?: typeof import('./shahkar.js').checkIbanMatch;
 };
 
 function serviceTokenMatches(expected: string, provided: string | undefined): boolean {
@@ -202,6 +203,7 @@ export function createApp(dependencies: ApiDependencies): express.Express {
     ...(dependencies.emailSender === undefined ? {} : { emailSender: dependencies.emailSender }),
     logEmailCode,
     ...(dependencies.checkShahkarMatch === undefined ? {} : { checkShahkarMatch: dependencies.checkShahkarMatch }),
+    ...(dependencies.checkIbanMatch === undefined ? {} : { checkIbanMatch: dependencies.checkIbanMatch }),
   }));
   app.use('/v1/member', requireMember(config.memberJwtSecret, prisma), createMemberSecurityRouter({
     config,

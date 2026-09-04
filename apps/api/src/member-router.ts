@@ -34,6 +34,8 @@ import {
   evmAddressSchema,
   fourDigitCodeSchema,
   iranMobileSchema,
+  ibanSchema,
+  jalaliBirthDateSchema,
   nationalCodeSchema,
   microUsdtFromDecimal,
   phoneNumberSchema,
@@ -68,7 +70,7 @@ import { isWeakPin, issueEmailCode, memberClaims, requireCompletedSetup, securit
 import type { ApiConfig } from './config.js';
 import { deleteMediaFile, mediaPath, uploadMedia } from './media.js';
 import { hashIdentityValue } from './identity.js';
-import { checkShahkarMatch } from './shahkar.js';
+import { checkIbanMatch, checkShahkarMatch } from './shahkar.js';
 import { requireIdentityForWithdrawal } from './withdrawal-settings.js';
 import { parseIdentityRequiredCountries, requireIdentityForSpending } from './identity-required-countries.js';
 
@@ -79,6 +81,7 @@ export type MemberRouterDependencies = {
   emailSender?: import('./member-auth.js').EmailSender;
   logEmailCode?: (email: string, code: string) => void;
   checkShahkarMatch?: typeof checkShahkarMatch;
+  checkIbanMatch?: typeof checkIbanMatch;
 };
 
 const couponsSchema = z.string().regex(/^[1-9]\d*$/, 'amountCoupons must be a positive decimal string');
@@ -800,6 +803,85 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
     }
   });
 
+  router.post('/identity/iban', identityLimiter, async (request, response, next) => {
+    try {
+      const config = dependencies.config;
+      if (config.shahkarApiToken === undefined || config.identityHashPepper === undefined) {
+        throw new HttpError(503, 'identity verification is not configured');
+      }
+      const userId = memberClaims(request).sub;
+      const current = await member(prisma, userId);
+      if (current.country === null) throw new HttpError(400, 'account country is required');
+      const policy = identityPolicyFor(current.country, shahkarAccess(config));
+      if (policy.mode !== 'AUTOMATED' || policy.provider !== 'SHAHKAR') {
+        throw new HttpError(409, 'iban verification is not the active identity path for this account');
+      }
+      if (current.identityVerificationStatus !== IdentityVerificationStatus.VERIFIED) {
+        throw new HttpError(409, 'verify your identity with Shahkar before adding a bank account');
+      }
+      const body = z.object({
+        iban: ibanSchema,
+        nationalCode: nationalCodeSchema,
+        birthDate: jalaliBirthDateSchema,
+      }).parse(request.body);
+      const identityHashPepper = config.identityHashPepper;
+      const nationalIdHash = hashIdentityValue(body.nationalCode, identityHashPepper);
+      if (current.nationalIdHash !== nationalIdHash) {
+        throw new HttpError(400, 'national code does not match the verified identity');
+      }
+      if (current.ibanNumber === body.iban && current.ibanVerifiedAt !== null) {
+        response.json({ status: 'VERIFIED', iban: current.ibanNumber, ibanVerifiedAt: current.ibanVerifiedAt });
+        return;
+      }
+      const checkWindowStart = new Date(Date.now() - 24 * 60 * 60_000);
+      const recentChecks = await prisma.bankAccountCheck.count({
+        where: { userId, createdAt: { gte: checkWindowStart } },
+      });
+      if (recentChecks >= 10) throw new HttpError(429, 'bank account verification limit reached');
+      const check = dependencies.checkIbanMatch ?? checkIbanMatch;
+      const outcome = await check(
+        { iban: body.iban, nationalCode: body.nationalCode, birthDate: body.birthDate },
+        { token: config.shahkarApiToken, baseUrl: config.ibanMatchBaseUrl },
+      );
+      const updated = await prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${userId}::uuid FOR UPDATE`;
+        const locked = await tx.user.findUniqueOrThrow({ where: { id: userId } });
+        const now = new Date();
+        const recentLockedChecks = await tx.bankAccountCheck.count({
+          where: { userId, createdAt: { gte: new Date(now.getTime() - 24 * 60 * 60_000) } },
+        });
+        if (recentLockedChecks >= 10) throw new HttpError(429, 'bank account verification limit reached');
+        const status = outcome.status === 'MATCH'
+          ? IdentityVerificationStatus.VERIFIED
+          : outcome.status === 'MISMATCH'
+            ? IdentityVerificationStatus.MISMATCH
+            : IdentityVerificationStatus.INCONCLUSIVE;
+        await tx.bankAccountCheck.create({
+          data: {
+            userId,
+            status,
+            providerCode: outcome.providerCode,
+            ibanHash: hashIdentityValue(body.iban, identityHashPepper),
+            nationalIdHash,
+          },
+        });
+        return tx.user.update({
+          where: { id: userId },
+          data: outcome.status === 'MATCH'
+            ? { ibanNumber: body.iban, ibanVerifiedAt: now }
+            : {},
+        });
+      });
+      response.json({
+        status: outcome.status === 'MATCH' ? 'VERIFIED' : outcome.status,
+        iban: updated.ibanNumber,
+        ibanVerifiedAt: updated.ibanVerifiedAt,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get('/identity', async (request, response, next) => {
     try {
       const user = await prisma.user.findUniqueOrThrow({
@@ -822,6 +904,8 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
         plannedProviderLabel: policy?.plannedProviderLabel ?? null,
         status: user.identityVerificationStatus,
         verifiedAt: user.identityVerifiedAt,
+        iban: user.ibanNumber,
+        ibanVerifiedAt: user.ibanVerifiedAt,
         requiredForWithdrawal: requireIdentityForWithdrawalValue,
         review: user.identityReviews[0] === undefined ? null : serializeIdentityReview(user.identityReviews[0]),
       });

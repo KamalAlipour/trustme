@@ -53,6 +53,7 @@ const config = {
   appleOAuthAudiences: ['as.komasi.trustcoupon'],
   shahkarApiToken: undefined,
   shahkarBaseUrl: 'https://provider.test',
+  ibanMatchBaseUrl: 'https://iban-provider.test',
   identityHashPepper: undefined,
 };
 
@@ -79,7 +80,7 @@ function appFixture(
   queueOverride?: ApiDependencies['queue'],
   configOverride: Partial<typeof config> = {},
   captureEmailCode = true,
-  socialOverrides: Pick<ApiDependencies, 'verifyGoogleIdToken' | 'verifyAppleIdToken' | 'checkShahkarMatch'> = {},
+  socialOverrides: Pick<ApiDependencies, 'verifyGoogleIdToken' | 'verifyAppleIdToken' | 'checkShahkarMatch' | 'checkIbanMatch'> = {},
 ) {
   const calls: unknown[][] = [];
   const emailCodes = new Map<string, string>();
@@ -341,6 +342,119 @@ describe('member API', () => {
     expect(afterMismatch.identityVerifiedAt).toEqual(verifiedAt);
     expect(afterMismatch.nationalIdHash).toBe(nationalIdHash);
     expect(await prisma.identityCheck.count({ where: { userId: verified.id, status: 'MISMATCH' } })).toBe(1);
+  });
+
+  it('verifies and stores a matching IBAN for a Shahkar-verified member', async () => {
+    let calls = 0;
+    const { app } = appFixture(undefined, undefined, { ...identityConfig, ibanMatchBaseUrl: 'https://iban-provider.test' }, true, {
+      checkIbanMatch: async () => {
+        calls += 1;
+        return { status: 'MATCH', providerCode: 0 };
+      },
+    });
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '09000000012', barcodeId: 'iban-match' });
+    const accessToken = await memberToken(app, '09000000012');
+    const user = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '09000000012' } });
+    await prisma.user.update({ where: { id: user.id }, data: { identityVerificationStatus: 'VERIFIED', identityVerifiedAt: new Date(), nationalIdHash: hashIdentityValue(nationalCode, identityConfig.identityHashPepper) } });
+    const result = await request(app).post('/v1/me/identity/iban').set('Authorization', `Bearer ${accessToken}`).send({
+      iban: 'IR123456789012345678901234',
+      nationalCode,
+      birthDate: '1378/1/12',
+    });
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ status: 'VERIFIED', iban: 'IR123456789012345678901234', ibanVerifiedAt: expect.any(String) });
+    expect(calls).toBe(1);
+    const stored = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+    expect(stored.ibanNumber).toBe('IR123456789012345678901234');
+    expect(await prisma.bankAccountCheck.count({ where: { userId: user.id, status: 'VERIFIED' } })).toBe(1);
+  });
+
+  it('preserves an existing verified IBAN after a mismatch', async () => {
+    const { app } = appFixture(undefined, undefined, identityConfig, true, {
+      checkIbanMatch: async () => ({ status: 'MISMATCH', providerCode: 12 }),
+    });
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '09000000013', barcodeId: 'iban-mismatch' });
+    const accessToken = await memberToken(app, '09000000013');
+    const user = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '09000000013' } });
+    const verifiedAt = new Date(Date.now() - 1_000);
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        identityVerificationStatus: 'VERIFIED',
+        identityVerifiedAt: new Date(),
+        nationalIdHash: hashIdentityValue(nationalCode, identityConfig.identityHashPepper),
+        ibanNumber: 'IR987654321098765432109876',
+        ibanVerifiedAt: verifiedAt,
+      },
+    });
+    const result = await request(app).post('/v1/me/identity/iban').set('Authorization', `Bearer ${accessToken}`).send({
+      iban: 'IR123456789012345678901234',
+      nationalCode,
+      birthDate: '1378/1/12',
+    });
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ status: 'MISMATCH', iban: 'IR987654321098765432109876', ibanVerifiedAt: verifiedAt.toISOString() });
+    const stored = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+    expect(stored.ibanNumber).toBe('IR987654321098765432109876');
+    expect(stored.ibanVerifiedAt).toEqual(verifiedAt);
+  });
+
+  it('rejects an IBAN check when the national code differs from the verified identity', async () => {
+    let calls = 0;
+    const { app } = appFixture(undefined, undefined, identityConfig, true, {
+      checkIbanMatch: async () => {
+        calls += 1;
+        return { status: 'MATCH', providerCode: 0 };
+      },
+    });
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '09000000014', barcodeId: 'iban-national-mismatch' });
+    const accessToken = await memberToken(app, '09000000014');
+    const user = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '09000000014' } });
+    await prisma.user.update({ where: { id: user.id }, data: { identityVerificationStatus: 'VERIFIED', identityVerifiedAt: new Date(), nationalIdHash: hashIdentityValue(nationalCode, identityConfig.identityHashPepper) } });
+    const result = await request(app).post('/v1/me/identity/iban').set('Authorization', `Bearer ${accessToken}`).send({
+      iban: 'IR123456789012345678901234',
+      nationalCode: mismatchingNationalCode,
+      birthDate: '1378/1/12',
+    });
+    expect(result.status).toBe(400);
+    expect(result.body).toEqual({ error: 'national code does not match the verified identity' });
+    expect(calls).toBe(0);
+  });
+
+  it('requires a verified Shahkar identity before adding a bank account', async () => {
+    const { app } = appFixture(undefined, undefined, identityConfig, true, {
+      checkIbanMatch: async () => ({ status: 'MATCH', providerCode: 0 }),
+    });
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '09000000015', barcodeId: 'iban-unverified' });
+    const accessToken = await memberToken(app, '09000000015');
+    const result = await request(app).post('/v1/me/identity/iban').set('Authorization', `Bearer ${accessToken}`).send({
+      iban: 'IR123456789012345678901234',
+      nationalCode,
+      birthDate: '1378/1/12',
+    });
+    expect(result.status).toBe(409);
+    expect(result.body).toEqual({ error: 'verify your identity with Shahkar before adding a bank account' });
+  });
+
+  it('exposes the verified IBAN in the identity response', async () => {
+    const { app } = appFixture(undefined, undefined, identityConfig);
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '09000000016', barcodeId: 'iban-identity' });
+    const accessToken = await memberToken(app, '09000000016');
+    const user = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '09000000016' } });
+    const verifiedAt = new Date();
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        identityVerificationStatus: 'VERIFIED',
+        identityVerifiedAt: verifiedAt,
+        nationalIdHash: hashIdentityValue(nationalCode, identityConfig.identityHashPepper),
+        ibanNumber: 'IR123456789012345678901234',
+        ibanVerifiedAt: verifiedAt,
+      },
+    });
+    const result = await request(app).get('/v1/me/identity').set('Authorization', `Bearer ${accessToken}`);
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ iban: 'IR123456789012345678901234', ibanVerifiedAt: verifiedAt.toISOString() });
   });
 
   it('rejects non-Iranian stored phones and enforces the rolling 24-hour provider-call cap', async () => {

@@ -36,6 +36,12 @@ export default function Profile() {
   const [newPin, setNewPin] = useState('');
   const [pinEditing, setPinEditing] = useState(false);
   const [nationalCode, setNationalCode] = useState('');
+  const [iban, setIban] = useState('');
+  const [ibanNationalCode, setIbanNationalCode] = useState('');
+  const [ibanBirthDate, setIbanBirthDate] = useState('');
+  const [ibanEditing, setIbanEditing] = useState(false);
+  const [ibanLoading, setIbanLoading] = useState(false);
+  const [ibanError, setIbanError] = useState('');
   const [country, setCountry] = useState('');
   const [countryLoading, setCountryLoading] = useState(false);
   const [countryPickerOpen, setCountryPickerOpen] = useState(false);
@@ -146,6 +152,34 @@ export default function Profile() {
       setError(cause instanceof ApiError ? cause.message : t.unknownError);
     } finally {
       setIdentityLoading(false);
+    }
+  };
+  const normalizedIban = iban.replace(/\s/g, '').toUpperCase();
+  const ibanFormValid = /^IR\d{24}$/.test(normalizedIban) && /^\d{10}$/.test(ibanNationalCode) && ibanBirthDate.trim().length > 0;
+  const verifyIban = async () => {
+    if (!ibanFormValid || ibanLoading) return;
+    setIbanError(''); setError(''); setNotice(''); setIbanLoading(true);
+    try {
+      const result = await request<{ status: 'VERIFIED' | 'MISMATCH' | 'INCONCLUSIVE'; iban: string | null; ibanVerifiedAt: string | null }>('/v1/me/identity/iban', {
+        method: 'POST',
+        body: { iban: normalizedIban, nationalCode: ibanNationalCode, birthDate: ibanBirthDate },
+      });
+      if (result.status === 'VERIFIED') {
+        setIban('');
+        setIbanNationalCode('');
+        setIbanBirthDate('');
+        setIbanEditing(false);
+        setNotice(t.ibanVerifiedNotice);
+        await invalidate();
+      } else if (result.status === 'MISMATCH') {
+        setIbanError(t.ibanMismatch);
+      } else {
+        setIbanError(t.ibanInconclusive);
+      }
+    } catch (cause) {
+      setIbanError(cause instanceof ApiError ? cause.message : t.unknownError);
+    } finally {
+      setIbanLoading(false);
     }
   };
   const saveCountry = async () => {
@@ -280,6 +314,44 @@ export default function Profile() {
           </View>
         </Modal>
         <Text style={styles.text}>{identityCopy}</Text>
+        {identity.data?.mode === 'AUTOMATED' && identityStatus === 'VERIFIED' ? <View style={{ gap: 8 }}>
+          <Text style={styles.heading}>{t.bankAccount}</Text>
+          {identity.data.iban !== null && !ibanEditing ? <>
+            <Text style={styles.notice}>{t.ibanVerified(identity.data.iban)}</Text>
+            <Pressable onPress={() => { setIban(identity.data?.iban ?? ''); setIbanEditing(true); setIbanError(''); }} style={styles.secondaryButton}>
+              <Text style={styles.secondaryButtonText}>{t.changeIban}</Text>
+            </Pressable>
+          </> : <>
+            <TextInput
+              value={iban}
+              onChangeText={(value) => { setIban(value); setIbanError(''); }}
+              placeholder={t.iban}
+              style={styles.input}
+              autoCapitalize="characters"
+            />
+            <TextInput
+              value={ibanNationalCode}
+              onChangeText={(value) => setIbanNationalCode(value.replace(/\D/g, '').slice(0, 10))}
+              placeholder={t.nationalCode}
+              style={styles.input}
+              keyboardType="number-pad"
+              maxLength={10}
+            />
+            <TextInput
+              value={ibanBirthDate}
+              onChangeText={setIbanBirthDate}
+              placeholder={t.jalaliBirthDate}
+              style={styles.input}
+            />
+            <Pressable disabled={!ibanFormValid || ibanLoading} onPress={() => void verifyIban()} style={[styles.button, !ibanFormValid || ibanLoading ? styles.buttonDisabled : null]}>
+              <Text style={styles.buttonText}>{ibanLoading ? t.verifyingIban : t.verifyIban}</Text>
+            </Pressable>
+            {identity.data.iban !== null && ibanEditing ? <Pressable onPress={() => { setIban(''); setIbanNationalCode(''); setIbanBirthDate(''); setIbanEditing(false); setIbanError(''); }} style={styles.secondaryButton}>
+              <Text style={styles.secondaryButtonText}>{t.cancel}</Text>
+            </Pressable> : null}
+          </>}
+          {ibanError ? <Text style={styles.danger}>{ibanError}</Text> : null}
+        </View> : null}
         <Text style={styles.muted}>{t.kycStatusLabel}: {kycStatusLabel(current?.kycStatus ?? '', t)}</Text>
         {current?.country && identity.data?.mode === 'MANUAL' && identity.data.review?.status !== 'PENDING' && identityStatus !== 'VERIFIED' ? <>
           <LiveIdentityCapture onSubmitted={async () => { setNotice(t.manualReviewSubmitted); await invalidate(); }} />

@@ -217,6 +217,8 @@ model User {
   identityVerificationStatus IdentityVerificationStatus @default(UNVERIFIED)
   identityVerifiedAt   DateTime?
   nationalIdHash       String?
+  ibanNumber           String?
+  ibanVerifiedAt       DateTime?
   identityCheckCount   Int                 @default(0)
   lastIdentityCheckAt  DateTime?
   email                String?             @unique
@@ -256,6 +258,7 @@ model User {
   sellerRefunds        RefundRequest[]     @relation("RefundSeller")
   identities           UserIdentity[]
   identityChecks       IdentityCheck[]
+  bankAccountChecks    BankAccountCheck[]
   identityReviews      IdentityReview[]
   identityCaptureSessions IdentityCaptureSession[]
   balanceDisclosureRequests BalanceDisclosureRequest[]
@@ -284,6 +287,20 @@ model IdentityCheck {
   user          User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+}
+
+model BankAccountCheck {
+  id             String                     @id @default(uuid()) @db.Uuid
+  userId         String                     @db.Uuid
+  provider       String                     @default("IBAN_MATCH")
+  status         IdentityVerificationStatus
+  providerCode   Int?
+  ibanHash       String
+  nationalIdHash String
+  createdAt      DateTime                   @default(now())
+  user           User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
 }
 
 model BalanceDisclosureRequest {
