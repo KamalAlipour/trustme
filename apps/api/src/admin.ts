@@ -308,7 +308,6 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
           couponsInCirculation: demoCirculation.toString(),
           userCount: demoUserCount,
         },
-        commissionNetworkAverageBps,
         transactionCount24hByType,
         chain,
         hotWallet,

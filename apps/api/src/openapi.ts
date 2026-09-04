@@ -26,11 +26,11 @@ export const openapiDocument = {
         properties: {
           commission: {
             type: 'object',
-            required: ['rateBps', 'floorBps', 'networkAverageBps', 'marketer', 'trainer', 'dispute'],
+            required: ['rateBps', 'floorBps', 'canStrike', 'marketer', 'trainer', 'dispute'],
             properties: {
               rateBps: { type: 'integer' },
               floorBps: { type: 'integer' },
-              networkAverageBps: { type: 'integer' },
+              canStrike: { type: 'boolean' },
               marketer: { type: 'object', nullable: true, properties: { barcodeId: { type: 'string' }, displayName: { type: 'string', nullable: true } } },
               trainer: { type: 'object', nullable: true, properties: { barcodeId: { type: 'string' }, displayName: { type: 'string', nullable: true } } },
               dispute: { type: 'object', nullable: true },
