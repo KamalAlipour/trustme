@@ -72,6 +72,7 @@ import {
   networkAverageRateBps,
   setCommissionRate,
   setMarketer,
+  STRIKE_INTERVAL_MS,
 } from '@trustme/core';
 import { DomainError } from '@trustme/core';
 import type { QueueLike } from './app.js';
@@ -495,8 +496,8 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
           strikes: dispute.strikes,
           lastStrikeAt: dispute.lastStrikeAt,
           status: dispute.status,
-          nextStrikeAt: new Date(dispute.lastStrikeAt.getTime() + 10 * 24 * 60 * 60 * 1000),
-          autoResolveAt: new Date(dispute.lastStrikeAt.getTime() + 10 * 24 * 60 * 60 * 1000),
+          nextStrikeAt: dispute.strikes >= 3 ? null : new Date(dispute.lastStrikeAt.getTime() + STRIKE_INTERVAL_MS),
+          autoResolveAt: dispute.strikes === 3 ? new Date(dispute.lastStrikeAt.getTime() + STRIKE_INTERVAL_MS) : null,
         },
       },
       identityVerification: {
@@ -811,7 +812,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       const seller = await userByBarcode(prisma, body.sellerBarcodeId);
       const settings = new Map((await prisma.systemSetting.findMany({ where: { key: { in: ['COMMISSION_FLOOR_BPS', 'COMMISSION_FLOOR_BPS_BY_COUNTRY'] } } })).map((row) => [row.key, row.value]));
       const updated = await grantRateDiscount(prisma, { marketerId, sellerId: seller.id, newRateBps: parseRateBps(body.ratePercent), floorBps: commissionFloorBps(settings, seller.country) });
-      response.json(await memberPolicy(updated));
+      response.json({ sellerBarcodeId: seller.barcodeId, rateBps: updated.commissionRateBps });
     } catch (error) { next(error); }
   });
 

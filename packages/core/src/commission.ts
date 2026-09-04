@@ -9,7 +9,7 @@ import { DomainError } from './domain-error.js';
 import type { LedgerLeg } from './ledger.js';
 
 const BPS_DENOMINATOR = 10_000n;
-const STRIKE_INTERVAL_MS = 10 * 24 * 60 * 60 * 1000;
+export const STRIKE_INTERVAL_MS = 10 * 24 * 60 * 60 * 1000;
 
 export function splitCommission(amountCoupons: bigint, rateBps: number) {
   if (amountCoupons < 0n || rateBps < 0) throw new DomainError('commission inputs must be non-negative');

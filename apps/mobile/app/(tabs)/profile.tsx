@@ -15,6 +15,7 @@ import { isValidEmail, isValidEmailCode, submitEmailAction } from '../../src/lib
 import { LiveIdentityCapture } from '../../src/components/LiveIdentityCapture';
 import { kycStatusLabel } from '../../src/lib/kyc-status';
 import { HeaderIcons } from '../../src/components/HeaderIcons';
+import type { CommissionDiscountResponse } from '../../src/api/types';
 
 export default function Profile() {
   const { t, language } = useTranslation();
@@ -114,7 +115,7 @@ export default function Profile() {
   };
   const grantDiscount = async () => {
     try {
-      await request('/v1/me/commission-discounts', { method: 'POST', body: { sellerBarcodeId: discountSellerBarcode, ratePercent: discountRate, pin: await stepUp() } });
+      await request<CommissionDiscountResponse>('/v1/me/commission-discounts', { method: 'POST', body: { sellerBarcodeId: discountSellerBarcode, ratePercent: discountRate, pin: await stepUp() } });
       setDiscountSellerBarcode(''); setDiscountRate('');
       await invalidate();
     } catch (cause) { setError(cause instanceof ApiError ? cause.message : t.unknownError); }
@@ -273,9 +274,9 @@ export default function Profile() {
           <Pressable onPress={() => void saveMarketer()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.setMarketer}</Text></Pressable>
         </> : null}
         {current.commission.marketer !== null && current.commission.rateBps > current.commission.networkAverageBps ? <>
-          {current.commission.dispute ? <Text style={styles.muted}>{t.strikes(current.commission.dispute.strikes)} · {t.nextStrike(formatDate(current.commission.dispute.nextStrikeAt, language))}</Text> : null}
-          <Pressable onPress={() => void strike()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.strike}</Text></Pressable>
-          {current.commission.dispute?.strikes === 3 && new Date(current.commission.dispute.autoResolveAt) <= new Date() ? <Pressable onPress={() => void autoResolve()} style={styles.button}><Text style={styles.buttonText}>{t.autoResolve}</Text></Pressable> : null}
+          {current.commission.dispute ? <Text style={styles.muted}>{t.strikes(current.commission.dispute.strikes)}{current.commission.dispute.nextStrikeAt ? ` · ${t.nextStrike(formatDate(current.commission.dispute.nextStrikeAt, language))}` : ''}</Text> : null}
+          {current.commission.dispute?.strikes !== 3 ? <Pressable onPress={() => void strike()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.strike}</Text></Pressable> : null}
+          {current.commission.dispute?.strikes === 3 && current.commission.dispute.autoResolveAt !== null && new Date(current.commission.dispute.autoResolveAt) <= new Date() ? <Pressable onPress={() => void autoResolve()} style={styles.button}><Text style={styles.buttonText}>{t.autoResolve}</Text></Pressable> : null}
         </> : null}
         {current.commission.marketer !== null ? <>
           <Text style={styles.heading}>{t.grantDiscount}</Text>

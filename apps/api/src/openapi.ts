@@ -35,7 +35,7 @@ export const openapiDocument = {
     },
     '/v1/me/commission-rate': { put: { responses: { '200': { description: 'Updated commission profile' }, '400': { description: 'Rate is below the configured floor' } } } },
     '/v1/me/marketer': { put: { responses: { '200': { description: 'Updated marketer relationship' }, '409': { description: 'Marketer is already set' } } } },
-    '/v1/me/commission-discounts': { post: { responses: { '200': { description: 'Discount granted to a referred seller' }, '400': { description: 'Invalid discount' } } } },
+    '/v1/me/commission-discounts': { post: { responses: { '200': { description: 'Discount granted', content: { 'application/json': { schema: { type: 'object', required: ['sellerBarcodeId', 'rateBps'], properties: { sellerBarcodeId: { type: 'string' }, rateBps: { type: 'integer' } } } } } }, '400': { description: 'Invalid discount' } } } },
     '/v1/me/commission-disputes/strike': { post: { responses: { '200': { description: 'Commission dispute strike recorded' }, '409': { description: 'Strike is not allowed' } } } },
     '/v1/me/commission-disputes/auto-resolve': { post: { responses: { '200': { description: 'Commission dispute auto-resolved' }, '409': { description: 'Dispute is not eligible' } } } },
     '/v1/me/identity': {
