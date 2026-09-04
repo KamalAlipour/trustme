@@ -849,7 +849,6 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       );
       const updated = await prisma.$transaction(async (tx) => {
         await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${userId}::uuid FOR UPDATE`;
-        const locked = await tx.user.findUniqueOrThrow({ where: { id: userId } });
         const now = new Date();
         const recentLockedChecks = await tx.bankAccountCheck.count({
           where: { userId, createdAt: { gte: new Date(now.getTime() - 24 * 60 * 60_000) } },
