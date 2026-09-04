@@ -213,6 +213,28 @@ describe('member API', () => {
   const mismatchingNationalCode = '2718281820';
   const identityConfig = { shahkarApiToken: 'test-shahkar-token', identityHashPepper: 'identity-test-pepper-that-is-at-least-32-characters' };
 
+  it('rejects a commission rate below the configured floor', async () => {
+    const { app } = appFixture();
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000091', barcodeId: 'commission-floor-member' });
+    const accessToken = await memberToken(app, '+1555000091');
+    const result = await request(app)
+      .put('/v1/me/commission-rate')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ ratePercent: '2', pin: '2468' });
+    expect(result.status).toBe(400);
+    expect(result.body.error).toBe('commission rate is below the floor');
+  });
+
+  it('returns the public commission average', async () => {
+    const { app } = appFixture();
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000092', barcodeId: 'commission-average-one' });
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000093', barcodeId: 'commission-average-two' });
+    await prisma.user.updateMany({ where: { barcodeId: { in: ['commission-average-one', 'commission-average-two'] } }, data: { commissionRateBps: 300 } });
+    const result = await request(app).get('/v1/public/commission-average');
+    expect(result.status).toBe(200);
+    expect(result.body).toEqual({ networkAverageBps: 300 });
+  });
+
   it('disables prepaid escrow operations when no contract is configured', async () => {
     const { app } = appFixture();
     await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+15550000001', barcodeId: 'escrow-disabled' });
@@ -1939,6 +1961,27 @@ describe('public reserves and balance disclosure API', () => {
 });
 
 describe('admin API', () => {
+  it('round-trips country-specific commission floors through settings', async () => {
+    const { app } = appFixture();
+    const admin = await createAdmin(AdminRole.ADMIN, 'correct-password', 'commission-settings-admin');
+    const jwt = await adminToken(app, admin.username);
+    const updated = await request(app)
+      .patch('/admin/settings')
+      .set('Authorization', `Bearer ${jwt}`)
+      .send({ commissionFloorBps: 250, commissionFloorByCountry: [{ country: 'no', bps: 350 }] });
+    expect(updated.status).toBe(200);
+    expect(updated.body).toMatchObject({
+      commissionFloorBps: 250,
+      commissionFloorByCountry: [{ country: 'NO', bps: 350 }],
+    });
+    const read = await request(app).get('/admin/settings').set('Authorization', `Bearer ${jwt}`);
+    expect(read.status).toBe(200);
+    expect(read.body).toMatchObject({
+      commissionFloorBps: 250,
+      commissionFloorByCountry: [{ country: 'NO', bps: 350 }],
+    });
+  });
+
   it('lists and decides manual identity reviews, purges media, and preserves rejected identity state', async () => {
     const { app } = appFixture();
     const admin = await createAdmin(AdminRole.APPROVER);
