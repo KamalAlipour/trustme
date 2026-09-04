@@ -28,10 +28,11 @@ import {
   approveAidRequest,
   createAidRequest,
   revokePurchaseGuarantee,
+  splitCommission,
 } from '../src/index.js';
 
 const prisma = new PrismaClient();
-type Accounts = { issuance: string; external: string; vault: string; pending: string; fees: string; users: string[]; escrows: string[] };
+type Accounts = { issuance: string; external: string; vault: string; pending: string; fees: string; couponFees: string; users: string[]; escrows: string[] };
 
 async function account(type: AccountType, asset: Asset, userId?: string) {
   return prisma.ledgerAccount.create({ data: { type, asset, ...(userId === undefined ? {} : { userId }) } });
@@ -53,6 +54,7 @@ async function fixture(userCount = 2): Promise<Accounts & { users: string[] }> {
     vault: (await account(AccountType.SYSTEM_VAULT_USDT, Asset.USDT)).id,
     pending: (await account(AccountType.SYSTEM_WITHDRAWAL_PENDING, Asset.USDT)).id,
     fees: (await account(AccountType.SYSTEM_FEE_COLLECTION, Asset.USDT)).id,
+    couponFees: (await account(AccountType.SYSTEM_FEE_COLLECTION, Asset.COUPON)).id,
     users: userAccounts,
     escrows: escrowAccounts,
   };
@@ -69,6 +71,33 @@ afterAll(async () => {
 });
 
 describe('money and ledger domain', () => {
+  it('posts seller commission legs atomically with a coupon transfer', async () => {
+    const fixtureAccounts = await fixture(4);
+    const users = await prisma.user.findMany({ orderBy: { phoneNumber: 'asc' }, take: 4 });
+    const [buyer, seller, buyerMarketer, sellerMarketer] = users;
+    await prisma.user.update({ where: { id: buyer!.id }, data: { marketerId: buyerMarketer!.id } });
+    await prisma.user.update({ where: { id: seller!.id }, data: { marketerId: sellerMarketer!.id, commissionRateBps: 300 } });
+    await postDeposit(prisma, {
+      externalRef: 'deposit:commission:0',
+      userId: buyer!.id,
+      userCouponAccountId: fixtureAccounts.users[0]!,
+      externalOnchainAccountId: fixtureAccounts.external,
+      vaultAccountId: fixtureAccounts.vault,
+      issuanceAccountId: fixtureAccounts.issuance,
+      amountMicroUsdt: 10_000n * 10_000n,
+    });
+    await transferCoupons(prisma, { externalRef: 'transfer:commission:0', userId: buyer!.id, fromAccountId: fixtureAccounts.users[0]!, toAccountId: fixtureAccounts.users[1]!, amountCoupons: 1_000n });
+    const balances = await prisma.ledgerAccount.findMany({ where: { id: { in: [fixtureAccounts.users[0]!, fixtureAccounts.users[1]!, fixtureAccounts.users[2]!, fixtureAccounts.users[3]!, fixtureAccounts.couponFees] } } });
+    expect(Object.fromEntries(balances.map((account) => [account.id, account.balance]))).toMatchObject({
+      [fixtureAccounts.users[0]!]: 9_000n,
+      [fixtureAccounts.users[1]!]: 970n,
+      [fixtureAccounts.users[2]!]: 10n,
+      [fixtureAccounts.users[3]!]: 10n,
+      [fixtureAccounts.couponFees]: 10n,
+    });
+    expect(splitCommission(1_000n, 300)).toMatchObject({ fee: 30n });
+  });
+
   it('posts a deposit and records exact dust', async () => {
     const fixtureAccounts = await fixture(1);
     const transaction = await postDeposit(prisma, {

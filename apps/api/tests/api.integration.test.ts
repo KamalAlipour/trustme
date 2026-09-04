@@ -71,6 +71,7 @@ async function addSystemAccounts() {
     vault: await getOrCreate(AccountType.SYSTEM_VAULT_USDT, Asset.USDT),
     pending: await getOrCreate(AccountType.SYSTEM_WITHDRAWAL_PENDING, Asset.USDT),
     fees: await getOrCreate(AccountType.SYSTEM_FEE_COLLECTION, Asset.USDT),
+    couponFees: await getOrCreate(AccountType.SYSTEM_FEE_COLLECTION, Asset.COUPON),
     issuance: await getOrCreate(AccountType.SYSTEM_COUPON_ISSUANCE, Asset.COUPON),
   };
 }
