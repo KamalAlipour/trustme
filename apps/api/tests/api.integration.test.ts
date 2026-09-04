@@ -229,6 +229,28 @@ describe('member API', () => {
     expect(walletResult.body).toEqual({ error: 'escrow_not_configured' });
   });
 
+  it('requires verified identity for wallet registration and escrow unloads regardless of country', async () => {
+    const { app } = appFixture(undefined, undefined, { escrowContractAddress: getAddress(`0x${'46'.repeat(20)}`) });
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000320', barcodeId: 'unverified-escrow' });
+    const user = await prisma.user.findUniqueOrThrow({ where: { barcodeId: 'unverified-escrow' } });
+    const accessToken = await memberToken(app, '+1555000320');
+    const walletBody = { address: getAddress(`0x${'46'.repeat(20)}`), kind: 'IN_APP' };
+    const unverifiedWallet = await request(app).post('/v1/me/wallets').set('Authorization', `Bearer ${accessToken}`).send(walletBody);
+    expect(unverifiedWallet.status).toBe(403);
+    expect(unverifiedWallet.body).toEqual({ error: 'identity_verification_required' });
+    await prisma.escrowBalance.create({ data: { userId: user.id, lockedMicroUsdt: 1_000_000n } });
+    const unverifiedUnload = await request(app).post('/v1/me/escrow/unloads').set('Authorization', `Bearer ${accessToken}`).send({ amount: '1', pin: '2468' });
+    expect(unverifiedUnload.status).toBe(403);
+    expect(unverifiedUnload.body).toEqual({ error: 'identity_verification_required' });
+
+    await prisma.user.update({ where: { id: user.id }, data: { identityVerificationStatus: 'VERIFIED', identityVerifiedAt: new Date() } });
+    const verifiedToken = await memberTokenForUser(user.id);
+    const verifiedWallet = await request(app).post('/v1/me/wallets').set('Authorization', `Bearer ${verifiedToken}`).send(walletBody);
+    expect(verifiedWallet.status).toBe(201);
+    const verifiedUnload = await request(app).post('/v1/me/escrow/unloads').set('Authorization', `Bearer ${verifiedToken}`).send({ amount: '1', pin: '2468' });
+    expect(verifiedUnload.status).toBe(201);
+  });
+
   it('returns 503 when identity verification is not configured', async () => {
     const { app } = appFixture();
     await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '09000000001', barcodeId: 'identity-unconfigured' });
@@ -1732,10 +1754,30 @@ describe('directed escrow API', () => {
     expect(incoming.body.items).toMatchObject([{ id: created.body.id, amount: '1.25', amountCoupons: '125' }]);
   });
 
+  it('preserves decimal coupon amounts through pay-code settlement', async () => {
+    const { app } = appFixture(undefined, undefined, { escrowContractAddress: getAddress(`0x${'47'.repeat(20)}`) });
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000321', barcodeId: 'decimal-buyer' });
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000322', barcodeId: 'decimal-merchant' });
+    const buyerToken = await memberToken(app, '+1555000321');
+    const merchantToken = await memberToken(app, '+1555000322');
+    const buyer = await prisma.user.findUniqueOrThrow({ where: { barcodeId: 'decimal-buyer' } });
+    await addSystemAccounts();
+    await prisma.escrowBalance.create({ data: { userId: buyer.id, lockedMicroUsdt: 5_000_000n } });
+    const created = await request(app).post('/v1/me/escrow/pay-codes').set('Authorization', `Bearer ${buyerToken}`).send({ code: '3456', merchantBarcodeId: 'decimal-merchant', amountCoupons: '12.5', pin: '2468' });
+    expect(created.status).toBe(201);
+    expect(created.body).toMatchObject({ amount: '0.125', amountCoupons: '12.5' });
+    const incoming = await request(app).get('/v1/me/escrow/pay-codes/incoming').set('Authorization', `Bearer ${merchantToken}`);
+    expect(incoming.body.items).toMatchObject([{ amount: '0.125', amountCoupons: '12.5' }]);
+    const settlement = await request(app).post('/v1/me/escrow/settlements').set('Authorization', `Bearer ${merchantToken}`).send({ payCodeId: created.body.id, code: '3456', pin: '2468', idempotencyKey: 'decimal-settlement' });
+    expect(settlement.status).toBe(201);
+    expect((await prisma.escrowSettlement.findUniqueOrThrow({ where: { payCodeId: created.body.id } })).amountMicroUsdt).toBe(125_000n);
+  });
+
   it('removes an idle wallet and rejects locked or foreign wallets', async () => {
     const { app } = appFixture(undefined, undefined, { escrowContractAddress: getAddress(`0x${'55'.repeat(20)}`) });
     await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000313', barcodeId: 'wallet-owner' });
     await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000314', barcodeId: 'wallet-other' });
+    await prisma.user.update({ where: { barcodeId: 'wallet-owner' }, data: { identityVerificationStatus: 'VERIFIED', identityVerifiedAt: new Date() } });
     const ownerToken = await memberToken(app, '+1555000313');
     const otherToken = await memberToken(app, '+1555000314');
     const owner = await prisma.user.findUniqueOrThrow({ where: { barcodeId: 'wallet-owner' } });
