@@ -1,6 +1,7 @@
 import { beforeAll, afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { getAddress, HDNodeWallet } from 'ethers';
+import { generateKeyPairSync } from 'node:crypto';
 import { Redis } from 'ioredis';
 import bcrypt from 'bcryptjs';
 import { AccountType, AdminRole, Asset, BalanceDisclosureStatus, IdentityCaptureStep, PayCodeStatus, PrismaClient, TransactionType, WithdrawalStatus } from '@trustme/db';
@@ -44,6 +45,8 @@ const config = {
   escrowContractAddress: undefined,
   walletConnectProjectId: undefined,
   web3AuthClientId: undefined,
+  onramperApiKey: undefined,
+  onramperSigningKeyPem: undefined,
   hotWalletAddress: getAddress(`0x${'aa'.repeat(20)}`),
   port: 3100,
   bodyLimit: '32kb',
@@ -329,19 +332,45 @@ describe('member API', () => {
     const accessToken = await memberToken(app, '+15550000001');
     const configResult = await request(app).get('/v1/me/escrow/config').set('Authorization', `Bearer ${accessToken}`);
     expect(configResult.status).toBe(200);
-    expect(configResult.body).toMatchObject({ enabled: false, contractAddress: null, chainId: 137, decimals: 6, rpcUrl: null, onramperApiKey: null });
+    expect(configResult.body).toMatchObject({ enabled: false, contractAddress: null, chainId: 137, decimals: 6, rpcUrl: null, onramperEnabled: false });
     expect(configResult.body).not.toHaveProperty('polygonRpcUrl');
     expect(JSON.stringify(configResult.body)).not.toContain(config.polygonRpcUrl);
-    const configuredApp = appFixture(undefined, undefined, { onramperApiKey: 'test-onramper-key' }).app;
+    const configuredApp = appFixture(undefined, undefined, { onramperApiKey: 'test-onramper-key', onramperSigningKeyPem: 'test-signing-key' }).app;
     const configuredResult = await request(configuredApp).get('/v1/me/escrow/config').set('Authorization', `Bearer ${accessToken}`);
     expect(configuredResult.status).toBe(200);
-    expect(configuredResult.body.onramperApiKey).toBe('test-onramper-key');
+    expect(configuredResult.body.onramperEnabled).toBe(true);
     const walletResult = await request(app).post('/v1/me/wallets').set('Authorization', `Bearer ${accessToken}`).send({
       address: `0x${'11'.repeat(20)}`,
       kind: 'EXTERNAL',
     });
     expect(walletResult.status).toBe(503);
     expect(walletResult.body).toEqual({ error: 'escrow_not_configured' });
+  });
+
+  it('creates signed Onramper sessions only for verified members', async () => {
+    const { privateKey } = generateKeyPairSync('ed25519');
+    const signingKeyPem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+    const { app } = appFixture();
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000092', barcodeId: 'onramper-session-member' });
+    const accessToken = await memberToken(app, '+1555000092');
+    expect((await request(app).post('/v1/me/onramper/session').set('Authorization', `Bearer ${accessToken}`).send({})).status).toBe(503);
+
+    const configuredApp = appFixture(undefined, undefined, { onramperApiKey: 'pk_test_widget', onramperSigningKeyPem: signingKeyPem }).app;
+    const unverified = await request(configuredApp).post('/v1/me/onramper/session').set('Authorization', `Bearer ${accessToken}`).send({});
+    expect(unverified.status).toBe(403);
+    expect(unverified.body.error).toBe('identity_verification_required');
+    const user = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000092' } });
+    await prisma.user.update({ where: { id: user.id }, data: { identityVerificationStatus: 'VERIFIED', identityVerifiedAt: new Date() } });
+
+    const invalid = await request(configuredApp).post('/v1/me/onramper/session').set('Authorization', `Bearer ${accessToken}`).send({ amountUsdt: '1.234' });
+    expect(invalid.status).toBe(400);
+    const session = await request(configuredApp).post('/v1/me/onramper/session').set('Authorization', `Bearer ${accessToken}`).send({ amountUsdt: '12.50' });
+    expect(session.status).toBe(200);
+    const parsed = new URL(session.body.url as string);
+    expect(parsed.origin).toBe('https://buy.onramper.dev');
+    expect(session.body.url as string).toContain('wallets=usdt_polygon%3A');
+    expect(parsed.searchParams.get('sigV2')).toMatch(/^v2:/);
+    expect(parsed.searchParams.get('sigV2Fields')).toContain('wallets');
   });
 
   it('requires verified identity for wallet registration and escrow unloads regardless of country', async () => {

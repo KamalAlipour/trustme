@@ -8,7 +8,7 @@ import { BrowserProvider, Contract, JsonRpcProvider, MaxUint256, Wallet } from '
 import EthereumProvider from '@walletconnect/ethereum-provider';
 import { ApiError, LockedError, request } from '../src/api/client';
 import type { EscrowConfig, EscrowSettlement, EscrowWallet, WithdrawalQuote } from '../src/api/types';
-import { useAvailability, useBalance, useEscrowBalance, useEscrowConfig, useEscrowSettlements, useEscrowUnloads, useIdentity, useInvalidateMoney, useMember } from '../src/hooks';
+import { useAvailability, useBalance, useEscrowBalance, useEscrowConfig, useEscrowSettlements, useEscrowUnloads, useIdentity, useInvalidateMoney } from '../src/hooks';
 import { useSession } from '../src/auth/session';
 import { Page, LoadingScreen } from '../src/components/Screen';
 import { useTranslation } from '../src/i18n';
@@ -18,7 +18,6 @@ import { formatCoupons, formatDate, formatMicroUsdt } from '../src/lib/format';
 import { mapApiError } from '../src/lib/errors';
 import { colors, styles } from '../src/styles';
 import { HeaderIcons } from '../src/components/HeaderIcons';
-import { onramperWidgetUrl } from '../src/onramper';
 
 const ERC20_ABI = [
   'function allowance(address owner,address spender) view returns (uint256)',
@@ -64,7 +63,6 @@ export default function Tether() {
   const settlements = useEscrowSettlements(enabled);
   const unloads = useEscrowUnloads(enabled);
   const moneyBalance = useBalance();
-  const member = useMember();
   const availability = useAvailability();
   const invalidate = useInvalidateMoney();
   const [wallet, setWallet] = useState<EscrowWallet | null>(null);
@@ -403,16 +401,24 @@ export default function Tether() {
   const publicRpcUnavailable = wallet?.kind === 'IN_APP' && config.data?.rpcUrl === null;
   const identityRequired = identity.data !== undefined && identity.data.status !== 'VERIFIED';
   const openOnramper = async () => {
-    const apiKey = config.data?.onramperApiKey;
     const depositAddress = moneyBalance.data?.depositAddress;
-    const userId = member.data?.id;
-    if (apiKey === null || apiKey === undefined || depositAddress === null || depositAddress === undefined || userId === undefined) return;
-    const url = onramperWidgetUrl({ apiKey, depositAddress, language, userId, ...(cardAmount ? { amountUsdt: cardAmount } : {}) });
-    if (Platform.OS === 'web') {
-      window.open(url, '_blank');
-      return;
+    if (!config.data?.onramperEnabled || depositAddress === null || depositAddress === undefined) return;
+    setBusy('onramper');
+    try {
+      const session = await request<{ url: string }>('/v1/me/onramper/session', {
+        method: 'POST',
+        body: cardAmount ? { amountUsdt: cardAmount } : {},
+      });
+      if (Platform.OS === 'web') {
+        window.open(session.url, '_blank');
+      } else {
+        await WebBrowser.openBrowserAsync(session.url);
+      }
+    } catch (error) {
+      showError(mapApiError(error, t));
+    } finally {
+      setBusy('');
     }
-    await WebBrowser.openBrowserAsync(url);
   };
 
   return (
@@ -454,11 +460,11 @@ export default function Tether() {
         <Pressable disabled={busy !== '' || wallet === null || publicRpcUnavailable} onPress={() => void sendTopUp()} style={[styles.button, busy !== '' || wallet === null || publicRpcUnavailable ? styles.buttonDisabled : null]}><Text style={styles.buttonText}>{t.escrow.topUpButton}</Text></Pressable>
       </View> : null}
 
-      {!identityRequired && config.data?.onramperApiKey && moneyBalance.data?.depositAddress && member.data?.id ? <View style={styles.card}>
+      {!identityRequired && config.data?.onramperEnabled && moneyBalance.data?.depositAddress ? <View style={styles.card}>
         <Text style={styles.heading}>{t.escrow.onramperTopUp}</Text>
         <TextInput value={cardAmount} onChangeText={setCardAmount} placeholder={t.escrow.onramperAmount} style={styles.input} keyboardType="decimal-pad" />
         <Text style={styles.muted}>{t.escrow.onramperExplainer}</Text>
-        <Pressable onPress={() => void openOnramper()} style={styles.button}><Text style={styles.buttonText}>{t.escrow.onramperButton}</Text></Pressable>
+        <Pressable disabled={busy !== ''} onPress={() => void openOnramper()} style={[styles.button, busy !== '' ? styles.buttonDisabled : null]}><Text style={styles.buttonText}>{t.escrow.onramperButton}</Text></Pressable>
       </View> : null}
 
       {!identityRequired && (availableMicroUsdt > 0n || (unloads.data?.items ?? []).length > 0) ? <View style={styles.card}>

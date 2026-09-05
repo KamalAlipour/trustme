@@ -148,7 +148,7 @@ export const openapiDocument = {
               'application/json': {
                 schema: {
                   type: 'object',
-                  required: ['contractAddress', 'chainId', 'usdtAddress', 'rpcUrl', 'decimals', 'walletConnectProjectId', 'web3AuthClientId', 'onramperApiKey', 'enabled'],
+                  required: ['contractAddress', 'chainId', 'usdtAddress', 'rpcUrl', 'decimals', 'walletConnectProjectId', 'web3AuthClientId', 'onramperEnabled', 'enabled'],
                   properties: {
                     contractAddress: { type: 'string', nullable: true },
                     chainId: { type: 'integer' },
@@ -157,13 +157,39 @@ export const openapiDocument = {
                     decimals: { type: 'integer' },
                     walletConnectProjectId: { type: 'string', nullable: true },
                     web3AuthClientId: { type: 'string', nullable: true },
-                    onramperApiKey: { type: 'string', nullable: true },
+                    onramperEnabled: { type: 'boolean' },
                     enabled: { type: 'boolean' },
                   },
                 },
               },
             },
           },
+        },
+      },
+    },
+    '/v1/me/onramper/session': {
+      post: {
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: { amountUsdt: { type: 'string', pattern: '^(?:0|[1-9][0-9]*)(?:\\.[0-9]{1,2})?$' } },
+                example: { amountUsdt: '25.00' },
+              },
+            },
+          },
+        },
+        responses: {
+          '200': {
+            description: 'Signed Onramper widget session',
+            content: { 'application/json': { schema: { type: 'object', required: ['url', 'expiresAt'], properties: { url: { type: 'string', format: 'uri' }, expiresAt: { type: 'string', format: 'date-time' } } } } },
+          },
+          '400': { description: 'Invalid amount' },
+          '403': { description: 'Identity verification required' },
+          '409': { description: 'Deposit address is unavailable' },
+          '503': { description: 'Onramper signing is not configured' },
         },
       },
     },
