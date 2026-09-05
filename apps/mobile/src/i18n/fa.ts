@@ -1,6 +1,7 @@
 import type { DisplayUnit } from './display-unit';
+import type { Translations } from './en';
 
-export const fa = (unit: DisplayUnit) => ({
+export const fa = (unit: DisplayUnit): Translations => ({
   appName: 'تراست کوپن',
   login: 'ورود',
   register: 'ثبت‌نام',
@@ -496,4 +497,4 @@ export const fa = (unit: DisplayUnit) => ({
     ],
     closing: '«سرمایه واقعی ثروتی نیست که احتکار شود؛ بلکه خدمت، کالا و ارزشی است که به جامعه خود ارائه می‌کنیم. به تراست کوپن خوش آمدید.»',
   },
-} as const);
+});
