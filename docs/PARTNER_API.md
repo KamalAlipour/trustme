@@ -88,7 +88,7 @@ notice and credited transactions.
 `POST /api/v1/checkout/initiate`
 
 ```json
-{"buyerId":"uuid","sellerBarcodeId":"TC...","amountCoupons":"12.50","externalRef":"order-123"}
+{"buyerId":"uuid","sellerBarcodeId":"TCSELLER123","amountCoupons":"500","externalRef":"order-123","expiresInSeconds":900}
 ```
 
 Returns `201` with `checkoutId`, `status:"ACTIVE"`, `otp`, `amountCoupons`,
@@ -121,3 +121,115 @@ Buyer creation is idempotent by `(partner, externalRef)`, deposits by
 transaction hash and log index, and checkout initiation by
 `(partner, externalRef)`. OTPs are four digits, expire with the checkout, and
 lock after five wrong attempts.
+
+## Handover details
+
+### Key lifecycle and signing
+
+Create a real, non-demo treasury member before issuing partner credentials.
+The admin response returns `rawKey` and `rawSecret` once. Store them in a
+server-side secret manager. To rotate, issue a new key, deploy the new secret,
+verify a signed request, then revoke the old key. Revoked and expired keys
+cannot be used, and TrustMe cannot recover a raw secret after creation.
+
+The signed `originalUrl` is the path plus query string exactly as sent,
+without scheme, host, or `baseUrl`. The signed body is the exact bytes sent.
+For GET, hash the empty string. The timestamp is Unix seconds and must be
+within ±300 seconds.
+
+```js
+const method = 'POST';
+const originalUrl = '/api/v1/checkout/initiate?channel=web';
+const body = JSON.stringify({ buyerId, sellerBarcodeId: 'TCSELLER123', amountCoupons: '500', externalRef: 'checkout-123', expiresInSeconds: 900 });
+const timestamp = Math.floor(Date.now() / 1000).toString();
+const bodyHash = crypto.createHash('sha256').update(body).digest('hex');
+const canonical = `${timestamp}\n${method}\n${originalUrl}\n${bodyHash}`;
+const signature = crypto.createHmac('sha256', process.env.TRUSTME_PARTNER_SECRET).update(canonical).digest('hex');
+```
+
+```php
+$body = json_encode(['buyerId' => $buyerId, 'sellerBarcodeId' => 'TCSELLER123',
+  'amountCoupons' => '500', 'externalRef' => 'checkout-123',
+  'expiresInSeconds' => 900], JSON_UNESCAPED_SLASHES);
+$timestamp = (string) time();
+$originalUrl = '/api/v1/checkout/initiate?channel=web';
+$canonical = $timestamp . "\nPOST\n" . $originalUrl . "\n" . hash('sha256', $body);
+$signature = hash_hmac('sha256', $canonical, getenv('TRUSTME_PARTNER_SECRET'));
+```
+
+### Exact endpoint JSON
+
+```json
+POST /api/v1/buyers
+{"externalRef":"order-buyer-123","displayName":"Foreign Buyer"}
+201 {"buyerId":"uuid","barcodeId":"TC12345678","depositAddress":"0x...","balanceCoupons":"0"}
+
+GET /api/v1/buyers/{buyerId}
+200 {"buyerId":"uuid","barcodeId":"TC12345678","depositAddress":"0x...","balanceCoupons":"500"}
+```
+
+```json
+POST /api/v1/webhooks/usdt-deposit
+{"buyerId":"uuid","txHash":"0x1111111111111111111111111111111111111111111111111111111111111111"}
+202 {"status":"pending","reason":"not_found"}
+202 {"status":"pending","confirmations":7,"required":12}
+200 {"status":"credited","amountMicroUsdt":"5000000","amountCoupons":"500","transactionIds":["uuid"],"balanceCoupons":"500"}
+200 {"status":"rejected","reason":"tx_failed"}
+200 {"status":"rejected","reason":"no_transfer_to_buyer"}
+```
+
+```json
+GET /api/v1/webhooks/usdt-deposit/{txHash}
+200 {"id":"uuid","partnerUserId":"uuid","buyerUserId":"uuid","txHash":"0x...","status":"CREDITED","reason":null,"amountMicroUsdt":"5000000","createdAt":"2026-09-10T12:00:00.000Z","updatedAt":"2026-09-10T12:01:00.000Z","transactions":[{"id":"uuid","amountMicroUsdt":"5000000","amountCoupons":"500","status":"CONFIRMED"}]}
+```
+
+```json
+POST /api/v1/checkout/initiate
+{"buyerId":"uuid","sellerBarcodeId":"TCSELLER123","amountCoupons":"500","externalRef":"checkout-123","expiresInSeconds":900}
+201 {"checkoutId":"uuid","status":"ACTIVE","otp":"0427","amountCoupons":"500","expiresAt":"2026-09-10T12:15:00.000Z","sellerBarcodeId":"TCSELLER123"}
+200 {"checkoutId":"uuid","status":"ACTIVE","otp":null,"replayed":true,"amountCoupons":"500","expiresAt":"2026-09-10T12:15:00.000Z","sellerBarcodeId":"TCSELLER123"}
+```
+
+```json
+POST /api/v1/checkout/capture
+{"checkoutId":"uuid","otp":"0427"}
+200 {"checkoutId":"uuid","status":"RELEASED","amountCoupons":"500","sellerBarcodeId":"TCSELLER123"}
+400 {"error":"invalid_otp","attemptsRemaining":4}
+
+POST /api/v1/checkout/cancel
+{"checkoutId":"uuid"}
+200 {"checkoutId":"uuid","status":"CANCELLED"}
+
+GET /api/v1/checkout/{checkoutId}
+200 {"checkoutId":"uuid","status":"ACTIVE","amountCoupons":"500","expiresAt":"2026-09-10T12:15:00.000Z","sellerBarcodeId":"TCSELLER123"}
+```
+
+### Error table
+
+| HTTP | Code | Meaning / action |
+|---:|---|---|
+| 400 | `validation failed` | Correct the request and resend. |
+| 400 | `insufficient_balance` | Fund the buyer or lower the amount. |
+| 400 | `invalid_otp` | Ask for the correct OTP; stop when attempts reach zero. |
+| 400 | `partner_secret_key_not_configured` | Ask the TrustMe operator to configure the key. |
+| 401 | `signature_required` | Send both HMAC headers. |
+| 401 | `stale_timestamp` | Sign with the current Unix timestamp. |
+| 401 | `invalid_signature` | Recompute using exact URL and exact body bytes. |
+| 401 | `unauthorized` | Check key, expiry, and revocation. |
+| 403 | `insufficient_scope` | Request the required scope. |
+| 403 | `partner_not_linked` | Ask the admin to link the key to a real treasury. |
+| 404 | `buyer_not_found`, `seller_not_found`, `checkout_not_found` | Verify resource ownership and IDs. |
+| 409 | `not_active` | Read checkout status; it is no longer active. |
+| 410 | `expired` | Initiate a new checkout. |
+| 423 | `otp_locked` | Cancel/refund or create a new checkout; stop guessing. |
+| 503 | `chain_unavailable` | Retry later; the notice remains pending. |
+
+### Partner test checklist
+
+Use a staging database and admin-issued credentials. Verify buyer creation
+and replay, per-buyer deposit addresses, missing/failed/under-confirmed and
+wrong-destination deposits, a valid 5 USDT deposit producing 500 coupons,
+worker-style deposit replay, checkout lock/replay, decimal amount rejection,
+seller capture, commission balances, wrong OTP and five-attempt lock, expiry,
+cancellation/refund, cross-partner 404s, key rotation/revocation, and both
+route aliases. Whole coupons only: `"12.5"` is invalid.

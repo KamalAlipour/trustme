@@ -72,17 +72,215 @@ export const openapiDocument = {
         required: ['count', 'earnedCoupons'],
         properties: { count: { type: 'integer' }, earnedCoupons: { type: 'string' } },
       },
+      PartnerBuyerRequest: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['externalRef'],
+        properties: {
+          externalRef: { type: 'string', minLength: 1, maxLength: 128, example: 'order-buyer-123' },
+          displayName: { type: 'string', maxLength: 64, example: 'Foreign Buyer' },
+        },
+      },
+      PartnerBuyer: {
+        type: 'object',
+        required: ['buyerId', 'barcodeId', 'depositAddress', 'balanceCoupons'],
+        properties: {
+          buyerId: { type: 'string', format: 'uuid' },
+          barcodeId: { type: 'string', example: 'TC12345678' },
+          depositAddress: { type: 'string', nullable: true },
+          balanceCoupons: { type: 'string', example: '500' },
+        },
+      },
+      PartnerDepositRequest: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['buyerId', 'txHash'],
+        properties: {
+          buyerId: { type: 'string', format: 'uuid' },
+          txHash: { type: 'string', pattern: '^0x[0-9a-fA-F]{64}$', example: '0x1111111111111111111111111111111111111111111111111111111111111111' },
+        },
+      },
+      PartnerDepositResponse: {
+        type: 'object',
+        required: ['status', 'amountMicroUsdt', 'amountCoupons', 'transactionIds', 'balanceCoupons'],
+        properties: {
+          status: { type: 'string', enum: ['credited'] },
+          amountMicroUsdt: { type: 'string', example: '5000000' },
+          amountCoupons: { type: 'string', example: '500' },
+          transactionIds: { type: 'array', items: { type: 'string', format: 'uuid' } },
+          balanceCoupons: { type: 'string', example: '500' },
+        },
+      },
+      PartnerDepositNotice: {
+        type: 'object',
+        required: ['id', 'partnerUserId', 'buyerUserId', 'txHash', 'status', 'reason', 'amountMicroUsdt', 'createdAt', 'updatedAt', 'transactions'],
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+          partnerUserId: { type: 'string', format: 'uuid' },
+          buyerUserId: { type: 'string', format: 'uuid' },
+          txHash: { type: 'string' },
+          status: { type: 'string', enum: ['PENDING', 'CREDITED', 'REJECTED'] },
+          reason: { type: 'string', nullable: true },
+          amountMicroUsdt: { type: 'string', nullable: true },
+          createdAt: { type: 'string', format: 'date-time' },
+          updatedAt: { type: 'string', format: 'date-time' },
+          transactions: { type: 'array', items: { type: 'object', required: ['id', 'amountMicroUsdt', 'amountCoupons', 'status'], properties: { id: { type: 'string', format: 'uuid' }, amountMicroUsdt: { type: 'string' }, amountCoupons: { type: 'string' }, status: { type: 'string' } } } },
+        },
+      },
+      PartnerCheckoutInitiateRequest: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['buyerId', 'sellerBarcodeId', 'amountCoupons', 'externalRef'],
+        properties: {
+          buyerId: { type: 'string', format: 'uuid' },
+          sellerBarcodeId: { type: 'string', example: 'TCSELLER123' },
+          amountCoupons: { type: 'string', pattern: '^[1-9]\\d*$', example: '500', description: 'Whole coupons only. 100 coupons = 1 USDT.' },
+          externalRef: { type: 'string', minLength: 1, maxLength: 128, example: 'checkout-123' },
+          expiresInSeconds: { type: 'integer', minimum: 60, maximum: 3600, default: 900, example: 900 },
+        },
+      },
+      PartnerCheckout: {
+        type: 'object',
+        required: ['checkoutId', 'status', 'amountCoupons', 'expiresAt', 'sellerBarcodeId'],
+        properties: {
+          checkoutId: { type: 'string', format: 'uuid' },
+          status: { type: 'string', enum: ['ACTIVE', 'RELEASED', 'CANCELLED', 'EXPIRED', 'LOCKED'] },
+          otp: { type: 'string', pattern: '^\\d{4}$', nullable: true, example: '0427' },
+          replayed: { type: 'boolean', example: false },
+          amountCoupons: { type: 'string', example: '500' },
+          expiresAt: { type: 'string', format: 'date-time' },
+          settledAt: { type: 'string', format: 'date-time', nullable: true },
+          sellerBarcodeId: { type: 'string' },
+        },
+      },
+      PartnerCheckoutCaptureResponse: {
+        type: 'object',
+        required: ['checkoutId', 'status'],
+        properties: {
+          checkoutId: { type: 'string', format: 'uuid' },
+          status: { type: 'string', enum: ['RELEASED'] },
+          amountCoupons: { type: 'string', example: '500' },
+          sellerBarcodeId: { type: 'string' },
+          settledAt: { type: 'string', format: 'date-time', nullable: true },
+        },
+      },
+      PartnerCheckoutStatus: {
+        type: 'object',
+        required: ['checkoutId', 'status', 'amountCoupons', 'expiresAt', 'sellerBarcodeId'],
+        properties: {
+          checkoutId: { type: 'string', format: 'uuid' },
+          status: { type: 'string', enum: ['ACTIVE', 'RELEASED', 'CANCELLED', 'LOCKED'] },
+          amountCoupons: { type: 'string', example: '500' },
+          expiresAt: { type: 'string', format: 'date-time' },
+          sellerBarcodeId: { type: 'string' },
+        },
+      },
+      PartnerCaptureRequest: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['checkoutId', 'otp'],
+        properties: { checkoutId: { type: 'string', format: 'uuid' }, otp: { type: 'string', pattern: '^\\d{4}$', example: '0427' } },
+      },
+      PartnerCancelRequest: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['checkoutId'],
+        properties: { checkoutId: { type: 'string', format: 'uuid' } },
+      },
+      PartnerError: {
+        type: 'object',
+        required: ['error'],
+        properties: { error: { type: 'string', example: 'buyer_not_found' }, message: { type: 'string' } },
+      },
+    },
+    parameters: {
+      PartnerTimestamp: { name: 'X-TC-Timestamp', in: 'header', required: true, schema: { type: 'string', example: '1730000000' }, description: 'Unix timestamp in seconds; must be within ±300 seconds.' },
     },
   },
   paths: {
-    '/api/v1/buyers': { post: { tags: ['Partner'], security: [{ apiKey: [], HmacSignature: [] }], responses: { '201': { description: 'Buyer created' }, '200': { description: 'Existing buyer' } } } },
-    '/api/v1/buyers/{id}': { get: { tags: ['Partner'], security: [{ apiKey: [], HmacSignature: [] }], responses: { '200': { description: 'Buyer details' }, '404': { description: 'Buyer not found' } } } },
-    '/api/v1/webhooks/usdt-deposit': { post: { tags: ['Partner'], security: [{ apiKey: [], HmacSignature: [] }], responses: { '200': { description: 'Credited or rejected' }, '202': { description: 'Pending confirmations' }, '503': { description: 'Chain unavailable' } } } },
-    '/api/v1/webhooks/usdt-deposit/{txHash}': { get: { tags: ['Partner'], security: [{ apiKey: [], HmacSignature: [] }], responses: { '200': { description: 'Deposit notice' }, '404': { description: 'Notice not found' } } } },
-    '/api/v1/checkout/initiate': { post: { tags: ['Partner'], security: [{ apiKey: [], HmacSignature: [] }], responses: { '201': { description: 'Checkout initiated' }, '400': { description: 'Insufficient balance' } } } },
-    '/api/v1/checkout/capture': { post: { tags: ['Partner'], security: [{ apiKey: [], HmacSignature: [] }], responses: { '200': { description: 'Checkout released' }, '400': { description: 'Invalid OTP' }, '423': { description: 'OTP locked' } } } },
-    '/api/v1/checkout/cancel': { post: { tags: ['Partner'], security: [{ apiKey: [], HmacSignature: [] }], responses: { '200': { description: 'Checkout cancelled' } } } },
-    '/api/v1/checkout/{id}': { get: { tags: ['Partner'], security: [{ apiKey: [], HmacSignature: [] }], responses: { '200': { description: 'Checkout status' }, '404': { description: 'Checkout not found' } } } },
+    '/api/v1/buyers': {
+      post: {
+        tags: ['Partner'], security: [{ apiKey: [], HmacSignature: [] }], parameters: [{ $ref: '#/components/parameters/PartnerTimestamp' }],
+        requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/PartnerBuyerRequest' }, example: { externalRef: 'order-buyer-123', displayName: 'Foreign Buyer' } } } },
+        responses: {
+          '201': { description: 'Buyer created', content: { 'application/json': { schema: { $ref: '#/components/schemas/PartnerBuyer' } } } },
+          '200': { description: 'Existing buyer for the same partner and externalRef', content: { 'application/json': { schema: { $ref: '#/components/schemas/PartnerBuyer' } } } },
+          '400': { description: 'Invalid request', content: { 'application/json': { schema: { $ref: '#/components/schemas/PartnerError' } } } },
+        },
+      },
+    },
+    '/api/v1/buyers/{id}': {
+      get: {
+        tags: ['Partner'], security: [{ apiKey: [], HmacSignature: [] }], parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { $ref: '#/components/parameters/PartnerTimestamp' }],
+        responses: {
+          '200': { description: 'Buyer details', content: { 'application/json': { schema: { $ref: '#/components/schemas/PartnerBuyer' } } } },
+          '404': { description: 'Buyer is not owned by this partner', content: { 'application/json': { schema: { $ref: '#/components/schemas/PartnerError' } } } },
+        },
+      },
+    },
+    '/api/v1/webhooks/usdt-deposit': {
+      post: {
+        tags: ['Partner'], security: [{ apiKey: [], HmacSignature: [] }], parameters: [{ $ref: '#/components/parameters/PartnerTimestamp' }],
+        requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/PartnerDepositRequest' }, example: { buyerId: '00000000-0000-0000-0000-000000000001', txHash: '0x1111111111111111111111111111111111111111111111111111111111111111' } } } },
+        responses: {
+          '200': { description: 'Credited or rejected', content: { 'application/json': { schema: { oneOf: [{ $ref: '#/components/schemas/PartnerDepositResponse' }, { $ref: '#/components/schemas/PartnerError' }] } } } },
+          '202': { description: 'Receipt or confirmations are pending', content: { 'application/json': { schema: { type: 'object', properties: { status: { type: 'string', example: 'pending' }, reason: { type: 'string', example: 'not_found' }, confirmations: { type: 'integer' }, required: { type: 'integer' } } } } } },
+          '503': { description: 'Chain RPC unavailable', content: { 'application/json': { schema: { type: 'object', example: { error: 'chain_unavailable' } } } } },
+        },
+      },
+    },
+    '/api/v1/webhooks/usdt-deposit/{txHash}': {
+      get: {
+        tags: ['Partner'], security: [{ apiKey: [], HmacSignature: [] }], parameters: [{ name: 'txHash', in: 'path', required: true, schema: { type: 'string' } }, { $ref: '#/components/parameters/PartnerTimestamp' }],
+        responses: {
+          '200': { description: 'Partner-specific deposit notice and credited transactions', content: { 'application/json': { schema: { $ref: '#/components/schemas/PartnerDepositNotice' } } } },
+          '404': { description: 'Deposit notice not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/PartnerError' } } } },
+        },
+      },
+    },
+    '/api/v1/checkout/initiate': {
+      post: {
+        tags: ['Partner'], security: [{ apiKey: [], HmacSignature: [] }], parameters: [{ $ref: '#/components/parameters/PartnerTimestamp' }],
+        requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/PartnerCheckoutInitiateRequest' }, example: { buyerId: '00000000-0000-0000-0000-000000000001', sellerBarcodeId: 'TCSELLER123', amountCoupons: '500', externalRef: 'checkout-123', expiresInSeconds: 900 } } } },
+        responses: {
+          '201': { description: 'Checkout initiated; display the OTP once to the buyer', content: { 'application/json': { schema: { $ref: '#/components/schemas/PartnerCheckout' } } } },
+          '200': { description: 'Replay for the same partner and externalRef; otp is null and replayed is true', content: { 'application/json': { schema: { $ref: '#/components/schemas/PartnerCheckout' } } } },
+          '400': { description: 'Invalid amount or insufficient balance', content: { 'application/json': { schema: { $ref: '#/components/schemas/PartnerError' } } } },
+          '404': { description: 'Buyer or seller not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/PartnerError' } } } },
+        },
+      },
+    },
+    '/api/v1/checkout/capture': {
+      post: {
+        tags: ['Partner'], security: [{ apiKey: [], HmacSignature: [] }], parameters: [{ $ref: '#/components/parameters/PartnerTimestamp' }],
+        requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/PartnerCaptureRequest' }, example: { checkoutId: '00000000-0000-0000-0000-000000000002', otp: '0427' } } } },
+        responses: {
+          '200': { description: 'Checkout released or already released', content: { 'application/json': { schema: { $ref: '#/components/schemas/PartnerCheckoutCaptureResponse' } } } },
+          '400': { description: 'Invalid OTP', content: { 'application/json': { schema: { type: 'object', required: ['error', 'attemptsRemaining'], properties: { error: { type: 'string', example: 'invalid_otp' }, attemptsRemaining: { type: 'integer' } } } } } },
+          '410': { description: 'Checkout expired', content: { 'application/json': { schema: { $ref: '#/components/schemas/PartnerError' } } } },
+          '423': { description: 'OTP locked after five failed attempts', content: { 'application/json': { schema: { $ref: '#/components/schemas/PartnerError' } } } },
+        },
+      },
+    },
+    '/api/v1/checkout/cancel': {
+      post: {
+        tags: ['Partner'], security: [{ apiKey: [], HmacSignature: [] }], parameters: [{ $ref: '#/components/parameters/PartnerTimestamp' }],
+        requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/PartnerCancelRequest' }, example: { checkoutId: '00000000-0000-0000-0000-000000000002' } } } },
+        responses: {
+          '200': { description: 'Checkout cancelled and buyer refunded', content: { 'application/json': { schema: { type: 'object', required: ['checkoutId', 'status'], properties: { checkoutId: { type: 'string', format: 'uuid' }, status: { type: 'string', enum: ['CANCELLED', 'EXPIRED'] } } } } } },
+          '404': { description: 'Checkout not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/PartnerError' } } } },
+        },
+      },
+    },
+    '/api/v1/checkout/{id}': {
+      get: {
+        tags: ['Partner'], security: [{ apiKey: [], HmacSignature: [] }], parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }, { $ref: '#/components/parameters/PartnerTimestamp' }],
+        responses: {
+          '200': { description: 'Checkout status', content: { 'application/json': { schema: { $ref: '#/components/schemas/PartnerCheckoutStatus' } } } },
+          '404': { description: 'Checkout not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/PartnerError' } } } },
+        },
+      },
+    },
     '/v1/partner/market-average': {
       get: {
         security: [{ apiKey: [] }],

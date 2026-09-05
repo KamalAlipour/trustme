@@ -7,7 +7,6 @@ import {
   decodeTransfer,
   DomainError,
   generateBarcodeId,
-  microUsdtFromCouponAmount,
   networkAverageRateBps,
   postDeposit,
   releaseEscrow,
@@ -41,7 +40,7 @@ const depositBodySchema = z.object({ buyerId: z.string().uuid(), txHash: z.strin
 const checkoutBodySchema = z.object({
   buyerId: z.string().uuid(),
   sellerBarcodeId: z.string().min(1),
-  amountCoupons: z.string().refine((value) => { try { microUsdtFromCouponAmount(value); return true; } catch { return false; } }),
+  amountCoupons: z.string().regex(/^[1-9]\d*$/),
   externalRef: z.string().min(1).max(128),
   expiresInSeconds: z.coerce.number().int().min(60).max(3600).default(900),
 }).strict();
@@ -136,7 +135,7 @@ export function createPartnerRouter(prisma: PrismaClient, deps: PartnerRouterDep
       let head: number;
       try { head = await deps.chain.getBlockNumber(); } catch { response.status(503).json({ error: 'chain_unavailable' }); return; }
       const confirmations = head - receipt.blockNumber + 1;
-      if (confirmations < deps.confirmations) { response.status(202).json({ status: 'pending', confirmations: String(confirmations), required: String(deps.confirmations) }); return; }
+      if (confirmations < deps.confirmations) { response.status(202).json({ status: 'pending', confirmations, required: deps.confirmations }); return; }
       const destination = buyer.user.depositAddresses[0]?.address.toLowerCase();
       if (destination === undefined) throw new DomainError('buyer deposit address is unavailable');
       const matches = receipt.logs
@@ -159,7 +158,7 @@ export function createPartnerRouter(prisma: PrismaClient, deps: PartnerRouterDep
       const amountMicroUsdt = matches.reduce((sum, item) => sum + item.transfer.amount, 0n);
       await prisma.partnerDepositNotice.update({ where: { id: notice.id }, data: { status: PartnerDepositStatus.CREDITED, amountMicroUsdt, reason: null } });
       const balance = await couponAccount(prisma, buyer.userId);
-      response.json({ status: 'credited', amountMicroUsdt: amountMicroUsdt.toString(), amountCoupons: matches.reduce((sum, item) => sum + item.transfer.amount / 10_000n, 0n).toString(), transactionIds: transactions.map((tx) => tx.id), balanceCoupons: balance.balance.toString() });
+      response.json({ status: 'credited', amountMicroUsdt: amountMicroUsdt.toString(), amountCoupons: transactions.reduce((sum, tx) => sum + tx.amountCoupons, 0n).toString(), transactionIds: transactions.map((tx) => tx.id), balanceCoupons: balance.balance.toString() });
     } catch (error) { next(error); }
   });
   router.get('/webhooks/usdt-deposit/:txHash', auth(ApiKeyScope.PARTNER_DEPOSITS), async (request, response, next) => {
@@ -182,7 +181,7 @@ export function createPartnerRouter(prisma: PrismaClient, deps: PartnerRouterDep
       const seller = await prisma.user.findUnique({ where: { barcodeId: body.sellerBarcodeId } });
       if (!seller || seller.isDemo || seller.id === buyer.userId) { response.status(404).json({ error: 'seller_not_found' }); return; }
       const otp = randomInt(0, 10000).toString().padStart(4, '0');
-      const hold = await createEscrowHold(prisma, { senderId: buyer.userId, recipientId: seller.id, senderAccountId: (await couponAccount(prisma, buyer.userId)).id, escrowAccountId: (await escrowAccount(prisma, buyer.userId)).id, amountCoupons: microUsdtFromCouponAmount(body.amountCoupons) / 10_000n, code: otp, expiresAt: new Date(Date.now() + body.expiresInSeconds * 1000), externalRef: `partner:checkout:${partnerUserId}:${body.externalRef}` });
+      const hold = await createEscrowHold(prisma, { senderId: buyer.userId, recipientId: seller.id, senderAccountId: (await couponAccount(prisma, buyer.userId)).id, escrowAccountId: (await escrowAccount(prisma, buyer.userId)).id, amountCoupons: BigInt(body.amountCoupons), code: otp, expiresAt: new Date(Date.now() + body.expiresInSeconds * 1000), externalRef: `partner:checkout:${partnerUserId}:${body.externalRef}` });
       const checkout = await prisma.partnerCheckout.create({ data: { partnerUserId, buyerUserId: buyer.userId, sellerUserId: seller.id, escrowHoldId: hold.id, externalRef: body.externalRef } });
       response.status(201).json({ checkoutId: checkout.id, status: hold.status, otp, amountCoupons: hold.amountCoupons.toString(), expiresAt: hold.expiresAt, sellerBarcodeId: seller.barcodeId });
     } catch (error) {
@@ -199,6 +198,7 @@ export function createPartnerRouter(prisma: PrismaClient, deps: PartnerRouterDep
         const settled = checkout.escrowHold.releaseTransactionId === null ? null : await prisma.transaction.findUnique({ where: { id: checkout.escrowHold.releaseTransactionId } });
         response.json({ checkoutId: checkout.id, status: 'RELEASED', settledAt: settled?.createdAt ?? null }); return;
       }
+      if (checkout.escrowHold.status === EscrowStatus.LOCKED) { response.status(423).json({ error: 'otp_locked' }); return; }
       try {
         const released = await releaseEscrow(prisma, { holdId: checkout.escrowHoldId, recipientAccountId: (await couponAccount(prisma, checkout.sellerUserId)).id, code: body.otp });
         if (released === null) throw new DomainError('escrow is not active');

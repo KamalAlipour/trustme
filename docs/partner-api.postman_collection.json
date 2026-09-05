@@ -7,7 +7,11 @@
   "variable": [
     {"key": "apiKey", "value": "tck_replace"},
     {"key": "apiSecret", "value": "tcs_replace"},
-    {"key": "baseUrl", "value": "https://api-trustme.komasi.as"}
+    {"key": "baseUrl", "value": "https://api-trustme.komasi.as"},
+    {"key": "buyerId", "value": "00000000-0000-0000-0000-000000000001"},
+    {"key": "sellerBarcodeId", "value": "TCSELLER123"},
+    {"key": "checkoutId", "value": "00000000-0000-0000-0000-000000000002"},
+    {"key": "txHash", "value": "0x1111111111111111111111111111111111111111111111111111111111111111"}
   ],
   "event": [{"listen": "prerequest", "script": {"type": "text/javascript", "exec": [
     "const crypto = require('crypto-js');",
@@ -21,12 +25,12 @@
   ]}}],
   "item": [
     {"name":"Create buyer","request":{"method":"POST","header":[{"key":"Content-Type","value":"application/json"}],"body":{"mode":"raw","raw":"{\"externalRef\":\"order-123\",\"displayName\":\"Foreign buyer\"}"},"url":{"raw":"{{baseUrl}}/api/v1/buyers","host":["{{baseUrl}}"],"path":["api","v1","buyers"]}}},
-    {"name":"Get buyer","request":{"method":"GET","url":"{{baseUrl}}/api/v1/buyers/{{buyerId}}"}},
-    {"name":"Deposit webhook","request":{"method":"POST","header":[{"key":"Content-Type","value":"application/json"}],"body":{"mode":"raw","raw":"{\"buyerId\":\"{{buyerId}}\",\"txHash\":\"0x0000000000000000000000000000000000000000000000000000000000000000\"}"},"url":"{{baseUrl}}/api/v1/webhooks/usdt-deposit"}},
-    {"name":"Deposit status","request":{"method":"GET","url":"{{baseUrl}}/api/v1/webhooks/usdt-deposit/{{txHash}}"}},
-    {"name":"Initiate checkout","request":{"method":"POST","header":[{"key":"Content-Type","value":"application/json"}],"body":{"mode":"raw","raw":"{\"buyerId\":\"{{buyerId}}\",\"sellerBarcodeId\":\"{{sellerBarcodeId}}\",\"amountCoupons\":\"12.50\",\"externalRef\":\"order-123\"}"},"url":"{{baseUrl}}/api/v1/checkout/initiate"}},
-    {"name":"Capture checkout","request":{"method":"POST","header":[{"key":"Content-Type","value":"application/json"}],"body":{"mode":"raw","raw":"{\"checkoutId\":\"{{checkoutId}}\",\"otp\":\"0123\"}"},"url":"{{baseUrl}}/api/v1/checkout/capture"}},
-    {"name":"Cancel checkout","request":{"method":"POST","header":[{"key":"Content-Type","value":"application/json"}],"body":{"mode":"raw","raw":"{\"checkoutId\":\"{{checkoutId}}\"}"},"url":"{{baseUrl}}/api/v1/checkout/cancel"}},
-    {"name":"Get checkout","request":{"method":"GET","url":"{{baseUrl}}/api/v1/checkout/{{checkoutId}}"}}
+    {"name":"Get buyer","request":{"method":"GET","header":[],"url":{"raw":"{{baseUrl}}/api/v1/buyers/{{buyerId}}","host":["{{baseUrl}}"],"path":["api","v1","buyers","{{buyerId}}"]}}},
+    {"name":"Deposit webhook","request":{"method":"POST","header":[{"key":"Content-Type","value":"application/json"}],"body":{"mode":"raw","raw":"{\"buyerId\":\"{{buyerId}}\",\"txHash\":\"{{txHash}}\"}"},"url":{"raw":"{{baseUrl}}/api/v1/webhooks/usdt-deposit","host":["{{baseUrl}}"],"path":["api","v1","webhooks","usdt-deposit"]}}},
+    {"name":"Deposit status","request":{"method":"GET","header":[],"url":{"raw":"{{baseUrl}}/api/v1/webhooks/usdt-deposit/{{txHash}}","host":["{{baseUrl}}"],"path":["api","v1","webhooks","usdt-deposit","{{txHash}}"]}}},
+    {"name":"Initiate checkout","request":{"method":"POST","header":[{"key":"Content-Type","value":"application/json"}],"body":{"mode":"raw","raw":"{\"buyerId\":\"{{buyerId}}\",\"sellerBarcodeId\":\"{{sellerBarcodeId}}\",\"amountCoupons\":\"500\",\"externalRef\":\"order-123\",\"expiresInSeconds\":900}"},"url":{"raw":"{{baseUrl}}/api/v1/checkout/initiate","host":["{{baseUrl}}"],"path":["api","v1","checkout","initiate"]}}},
+    {"name":"Capture checkout","request":{"method":"POST","header":[{"key":"Content-Type","value":"application/json"}],"body":{"mode":"raw","raw":"{\"checkoutId\":\"{{checkoutId}}\",\"otp\":\"0123\"}"},"url":{"raw":"{{baseUrl}}/api/v1/checkout/capture","host":["{{baseUrl}}"],"path":["api","v1","checkout","capture"]}}},
+    {"name":"Cancel checkout","request":{"method":"POST","header":[{"key":"Content-Type","value":"application/json"}],"body":{"mode":"raw","raw":"{\"checkoutId\":\"{{checkoutId}}\"}"},"url":{"raw":"{{baseUrl}}/api/v1/checkout/cancel","host":["{{baseUrl}}"],"path":["api","v1","checkout","cancel"]}}},
+    {"name":"Get checkout","request":{"method":"GET","header":[],"url":{"raw":"{{baseUrl}}/api/v1/checkout/{{checkoutId}}","host":["{{baseUrl}}"],"path":["api","v1","checkout","{{checkoutId}}"]}}}
   ]
 }

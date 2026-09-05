@@ -59,4 +59,15 @@ describe('scoped API keys', () => {
     expect(result.apiKey.secretCiphertext).not.toBe(result.rawSecret);
     expect(decryptApiSecret(result.apiKey.secretCiphertext!, 'partner-secret-encryption-key-that-is-long-enough')).toBe(result.rawSecret);
   });
+
+  it('requires an encryption key for partner secrets', async () => {
+    const admin = await prisma.adminUser.create({ data: { username: 'partner-keys-no-secret-admin', passwordHash: 'hash', role: AdminRole.ADMIN } });
+    const partner = await prisma.user.create({ data: { barcodeId: 'partner-no-secret' } });
+    await expect(createApiKey(prisma, {
+      name: 'Partner',
+      scopes: [ApiKeyScope.PARTNER_BUYERS],
+      createdById: admin.id,
+      partnerUserId: partner.id,
+    })).rejects.toThrow('partner secret encryption key is required');
+  });
 });
