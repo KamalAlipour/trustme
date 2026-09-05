@@ -3,6 +3,7 @@ import { Platform, Pressable, Text, TextInput, View } from 'react-native';
 import { router } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import * as Linking from 'expo-linking';
+import * as WebBrowser from 'expo-web-browser';
 import { BrowserProvider, Contract, JsonRpcProvider, MaxUint256, Wallet } from 'ethers';
 import EthereumProvider from '@walletconnect/ethereum-provider';
 import { ApiError, LockedError, request } from '../src/api/client';
@@ -75,6 +76,7 @@ export default function Tether() {
   const [revealedWords, setRevealedWords] = useState<string[] | null>(null);
   const [walletConnectSession, setWalletConnectSession] = useState<WalletConnectSession | null>(null);
   const [topUpAmount, setTopUpAmount] = useState('');
+  const [cardAmount, setCardAmount] = useState('');
   const [unloadAmount, setUnloadAmount] = useState('');
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [destination, setDestination] = useState('');
@@ -398,6 +400,26 @@ export default function Tether() {
   };
   const publicRpcUnavailable = wallet?.kind === 'IN_APP' && config.data?.rpcUrl === null;
   const identityRequired = identity.data !== undefined && identity.data.status !== 'VERIFIED';
+  const openCardTopUp = async () => {
+    const depositAddress = moneyBalance.data?.depositAddress;
+    if (!config.data?.cardTopUpEnabled || depositAddress === null || depositAddress === undefined) return;
+    setBusy('card-top-up');
+    try {
+      const session = await request<{ url: string }>('/v1/me/card-topup/session', {
+        method: 'POST',
+        body: cardAmount ? { amountUsdt: cardAmount } : {},
+      });
+      if (Platform.OS === 'web') {
+        window.open(session.url, '_blank');
+      } else {
+        await WebBrowser.openBrowserAsync(session.url);
+      }
+    } catch (error) {
+      showError(mapApiError(error, t));
+    } finally {
+      setBusy('');
+    }
+  };
 
   return (
     <Page>
@@ -436,6 +458,13 @@ export default function Tether() {
         <Text style={styles.muted}>{t.escrow.twoSignatureNotice}</Text>
         {publicRpcUnavailable ? <Text style={styles.danger}>{t.escrow.publicRpcUnavailable}</Text> : null}
         <Pressable disabled={busy !== '' || wallet === null || publicRpcUnavailable} onPress={() => void sendTopUp()} style={[styles.button, busy !== '' || wallet === null || publicRpcUnavailable ? styles.buttonDisabled : null]}><Text style={styles.buttonText}>{t.escrow.topUpButton}</Text></Pressable>
+      </View> : null}
+
+      {!identityRequired && config.data?.cardTopUpEnabled && moneyBalance.data?.depositAddress ? <View style={styles.card}>
+        <Text style={styles.heading}>{t.escrow.cardTopUpTitle}</Text>
+        <TextInput value={cardAmount} onChangeText={setCardAmount} placeholder={t.escrow.cardTopUpAmount} style={styles.input} keyboardType="decimal-pad" />
+        <Text style={styles.muted}>{t.escrow.cardTopUpExplainer}</Text>
+        <Pressable disabled={busy !== ''} onPress={() => void openCardTopUp()} style={[styles.button, busy !== '' ? styles.buttonDisabled : null]}><Text style={styles.buttonText}>{t.escrow.cardTopUpButton}</Text></Pressable>
       </View> : null}
 
       {!identityRequired && (availableMicroUsdt > 0n || (unloads.data?.items ?? []).length > 0) ? <View style={styles.card}>

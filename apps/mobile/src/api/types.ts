@@ -151,6 +151,7 @@ export type EscrowConfig = {
   decimals: number;
   walletConnectProjectId: string | null;
   web3AuthClientId: string | null;
+  cardTopUpEnabled: boolean;
   enabled: boolean;
 };
 export type EscrowWallet = {
