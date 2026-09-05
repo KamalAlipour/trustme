@@ -400,12 +400,12 @@ export default function Tether() {
   };
   const publicRpcUnavailable = wallet?.kind === 'IN_APP' && config.data?.rpcUrl === null;
   const identityRequired = identity.data !== undefined && identity.data.status !== 'VERIFIED';
-  const openOnramper = async () => {
+  const openCardTopUp = async () => {
     const depositAddress = moneyBalance.data?.depositAddress;
-    if (!config.data?.onramperEnabled || depositAddress === null || depositAddress === undefined) return;
-    setBusy('onramper');
+    if (!config.data?.cardTopUpEnabled || depositAddress === null || depositAddress === undefined) return;
+    setBusy('card-top-up');
     try {
-      const session = await request<{ url: string }>('/v1/me/onramper/session', {
+      const session = await request<{ url: string }>('/v1/me/card-topup/session', {
         method: 'POST',
         body: cardAmount ? { amountUsdt: cardAmount } : {},
       });
@@ -460,11 +460,11 @@ export default function Tether() {
         <Pressable disabled={busy !== '' || wallet === null || publicRpcUnavailable} onPress={() => void sendTopUp()} style={[styles.button, busy !== '' || wallet === null || publicRpcUnavailable ? styles.buttonDisabled : null]}><Text style={styles.buttonText}>{t.escrow.topUpButton}</Text></Pressable>
       </View> : null}
 
-      {!identityRequired && config.data?.onramperEnabled && moneyBalance.data?.depositAddress ? <View style={styles.card}>
-        <Text style={styles.heading}>{t.escrow.onramperTopUp}</Text>
-        <TextInput value={cardAmount} onChangeText={setCardAmount} placeholder={t.escrow.onramperAmount} style={styles.input} keyboardType="decimal-pad" />
-        <Text style={styles.muted}>{t.escrow.onramperExplainer}</Text>
-        <Pressable disabled={busy !== ''} onPress={() => void openOnramper()} style={[styles.button, busy !== '' ? styles.buttonDisabled : null]}><Text style={styles.buttonText}>{t.escrow.onramperButton}</Text></Pressable>
+      {!identityRequired && config.data?.cardTopUpEnabled && moneyBalance.data?.depositAddress ? <View style={styles.card}>
+        <Text style={styles.heading}>{t.escrow.cardTopUpTitle}</Text>
+        <TextInput value={cardAmount} onChangeText={setCardAmount} placeholder={t.escrow.cardTopUpAmount} style={styles.input} keyboardType="decimal-pad" />
+        <Text style={styles.muted}>{t.escrow.cardTopUpExplainer}</Text>
+        <Pressable disabled={busy !== ''} onPress={() => void openCardTopUp()} style={[styles.button, busy !== '' ? styles.buttonDisabled : null]}><Text style={styles.buttonText}>{t.escrow.cardTopUpButton}</Text></Pressable>
       </View> : null}
 
       {!identityRequired && (availableMicroUsdt > 0n || (unloads.data?.items ?? []).length > 0) ? <View style={styles.card}>

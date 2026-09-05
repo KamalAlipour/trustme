@@ -26,14 +26,14 @@ manual `setSettler` step is needed.
 `ESCROW_PUBLIC_RPC_URL` is an optional API setting exposed as `rpcUrl` to the
 mobile app. It must be a public RPC endpoint without an embedded API key,
 because the app receives this value and users can inspect it.
-`ONRAMPER_API_KEY` is the publishable API key used to configure the mobile
-Onramper card top-up widget. It is used only by the API; the member escrow
-configuration endpoint exposes only whether the signed widget feature is enabled.
-`ONRAMPER_SIGNING_KEY_PEM` is the Ed25519 PKCS8 private key used to sign
-wallet-pinned Onramper widget URLs. Generate a keypair with
-`openssl genpkey -algorithm ed25519 -out onramper-signing.pem && openssl pkey -in onramper-signing.pem -pubout`
-and register the public key in the Onramper dashboard. Store the private key
-only in the API environment; escaped `\n` sequences are accepted.
+`TRANSAK_API_KEY` and `TRANSAK_API_SECRET` configure server-side Transak
+card top-up sessions. Keep the secret only in the API environment. Set
+`TRANSAK_ENVIRONMENT=staging` for
+`https://api-stg.transak.com` and
+`https://api-gateway-stg.transak.com`, or `production` for
+`https://api.transak.com` and `https://api-gateway.transak.com`.
+`TRANSAK_REFERRER_DOMAIN` defaults to `app-trustcoupon.komasi.as` and must
+match the domain or application identifier registered with Transak.
 `ESCROW_CONTRACT_ADDRESS` and `ESCROW_SETTLER_KEY` are worker settings. The
 settler key is worker-only and belongs in the root-owned, mode 0600
 `/etc/trustme/trustme-worker.env`, which only the worker unit reads; it must
