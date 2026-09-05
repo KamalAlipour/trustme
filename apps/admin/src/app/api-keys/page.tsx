@@ -17,6 +17,7 @@ type ApiKeyRow = {
   revokedAt: string | null;
   lastUsedAt: string | null;
   createdBy: { username: string };
+  partnerBarcodeId: string | null;
 };
 
 function date(value: string | null): string {
@@ -43,8 +44,8 @@ export default async function ApiKeysPage({ searchParams }: { searchParams: Prom
           <ApiKeyCreateForm />
           <div className="overflow-x-auto rounded-lg border bg-white shadow-sm">
             <table className="w-full text-left text-sm">
-              <thead><tr className="border-b bg-slate-50"><th className="p-3">{labels.apiKeyName}</th><th className="p-3">{labels.apiKeyPrefix}</th><th className="p-3">{labels.apiKeyScopes}</th><th className="p-3">{labels.apiKeyCreated}</th><th className="p-3">{labels.apiKeyExpires}</th><th className="p-3">{labels.apiKeyLastUsed}</th><th className="p-3">{labels.apiKeyStatus}</th><th className="p-3">{labels.actions}</th></tr></thead>
-              <tbody>{rows.map((row) => <tr className="border-b last:border-0" key={row.id}><td className="p-3">{row.name}</td><td className="p-3 font-mono">{row.keyPrefix}…</td><td className="p-3">{row.scopes.join(', ')}</td><td className="p-3">{date(row.createdAt)}</td><td className="p-3">{date(row.expiresAt)}</td><td className="p-3">{date(row.lastUsedAt)}</td><td className="p-3">{status(row)}</td><td className="p-3">{row.revokedAt === null ? <form action={revokeApiKeyAction}><input type="hidden" name="id" value={row.id} /><button type="submit" className="text-red-700" title={labels.apiKeyRevokeConfirm}>{labels.apiKeyRevoke}</button></form> : '—'}</td></tr>)}</tbody>
+              <thead><tr className="border-b bg-slate-50"><th className="p-3">{labels.apiKeyName}</th><th className="p-3">{labels.apiKeyPrefix}</th><th className="p-3">{labels.apiKeyScopes}</th><th className="p-3">{labels.apiKeyPartnerBarcode}</th><th className="p-3">{labels.apiKeyCreated}</th><th className="p-3">{labels.apiKeyExpires}</th><th className="p-3">{labels.apiKeyLastUsed}</th><th className="p-3">{labels.apiKeyStatus}</th><th className="p-3">{labels.actions}</th></tr></thead>
+              <tbody>{rows.map((row) => <tr className="border-b last:border-0" key={row.id}><td className="p-3">{row.name}</td><td className="p-3 font-mono">{row.keyPrefix}…</td><td className="p-3">{row.scopes.join(', ')}</td><td className="p-3 font-mono">{row.partnerBarcodeId ?? '—'}</td><td className="p-3">{date(row.createdAt)}</td><td className="p-3">{date(row.expiresAt)}</td><td className="p-3">{date(row.lastUsedAt)}</td><td className="p-3">{status(row)}</td><td className="p-3">{row.revokedAt === null ? <form action={revokeApiKeyAction}><input type="hidden" name="id" value={row.id} /><button type="submit" className="text-red-700" title={labels.apiKeyRevokeConfirm}>{labels.apiKeyRevoke}</button></form> : '—'}</td></tr>)}</tbody>
             </table>
           </div>
         </div>

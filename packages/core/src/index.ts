@@ -15,3 +15,4 @@ export * from './escrow-abi.js';
 export * from './escrow-payments.js';
 export * from './commission.js';
 export * from './api-keys.js';
+export * from './transfer-decoder.js';

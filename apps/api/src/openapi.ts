@@ -4,6 +4,12 @@ export const openapiDocument = {
   components: {
     securitySchemes: {
       apiKey: { type: 'http', scheme: 'bearer', bearerFormat: 'tck_...' },
+      HmacSignature: {
+        type: 'apiKey',
+        in: 'header',
+        name: 'X-TC-Signature',
+        description: 'Partner keys also require X-TC-Timestamp (Unix seconds, within 300 seconds). Sign `${timestamp}\\n${METHOD}\\n${originalUrl}\\n${sha256hex(rawBody)}` with the decrypted secret using HMAC-SHA256 and send lowercase hexadecimal.',
+      },
     },
     schemas: {
       ValidationError: {
@@ -69,6 +75,14 @@ export const openapiDocument = {
     },
   },
   paths: {
+    '/api/v1/buyers': { post: { tags: ['Partner'], security: [{ apiKey: [], HmacSignature: [] }], responses: { '201': { description: 'Buyer created' }, '200': { description: 'Existing buyer' } } } },
+    '/api/v1/buyers/{id}': { get: { tags: ['Partner'], security: [{ apiKey: [], HmacSignature: [] }], responses: { '200': { description: 'Buyer details' }, '404': { description: 'Buyer not found' } } } },
+    '/api/v1/webhooks/usdt-deposit': { post: { tags: ['Partner'], security: [{ apiKey: [], HmacSignature: [] }], responses: { '200': { description: 'Credited or rejected' }, '202': { description: 'Pending confirmations' }, '503': { description: 'Chain unavailable' } } } },
+    '/api/v1/webhooks/usdt-deposit/{txHash}': { get: { tags: ['Partner'], security: [{ apiKey: [], HmacSignature: [] }], responses: { '200': { description: 'Deposit notice' }, '404': { description: 'Notice not found' } } } },
+    '/api/v1/checkout/initiate': { post: { tags: ['Partner'], security: [{ apiKey: [], HmacSignature: [] }], responses: { '201': { description: 'Checkout initiated' }, '400': { description: 'Insufficient balance' } } } },
+    '/api/v1/checkout/capture': { post: { tags: ['Partner'], security: [{ apiKey: [], HmacSignature: [] }], responses: { '200': { description: 'Checkout released' }, '400': { description: 'Invalid OTP' }, '423': { description: 'OTP locked' } } } },
+    '/api/v1/checkout/cancel': { post: { tags: ['Partner'], security: [{ apiKey: [], HmacSignature: [] }], responses: { '200': { description: 'Checkout cancelled' } } } },
+    '/api/v1/checkout/{id}': { get: { tags: ['Partner'], security: [{ apiKey: [], HmacSignature: [] }], responses: { '200': { description: 'Checkout status' }, '404': { description: 'Checkout not found' } } } },
     '/v1/partner/market-average': {
       get: {
         security: [{ apiKey: [] }],

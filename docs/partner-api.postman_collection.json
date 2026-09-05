@@ -1,0 +1,32 @@
+{
+  "info": {
+    "name": "TrustMe Partner API",
+    "_postman_id": "trustme-partner-api",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {"key": "apiKey", "value": "tck_replace"},
+    {"key": "apiSecret", "value": "tcs_replace"},
+    {"key": "baseUrl", "value": "https://api-trustme.komasi.as"}
+  ],
+  "event": [{"listen": "prerequest", "script": {"type": "text/javascript", "exec": [
+    "const crypto = require('crypto-js');",
+    "const timestamp = Math.floor(Date.now() / 1000).toString();",
+    "const body = pm.request.body && pm.request.body.raw ? pm.request.body.raw : '';",
+    "const hash = crypto.SHA256(body).toString(crypto.enc.Hex);",
+    "const message = `${timestamp}\\n${pm.request.method}\\n${pm.request.url.getPathWithQuery()}\\n${hash}`;",
+    "pm.request.headers.upsert({key:'X-TC-Timestamp', value:timestamp});",
+    "pm.request.headers.upsert({key:'X-TC-Signature', value:crypto.HmacSHA256(message, pm.variables.get('apiSecret')).toString(crypto.enc.Hex)});",
+    "pm.request.headers.upsert({key:'Authorization', value:`Bearer ${pm.variables.get('apiKey')}`});"
+  ]}}],
+  "item": [
+    {"name":"Create buyer","request":{"method":"POST","header":[{"key":"Content-Type","value":"application/json"}],"body":{"mode":"raw","raw":"{\"externalRef\":\"order-123\",\"displayName\":\"Foreign buyer\"}"},"url":{"raw":"{{baseUrl}}/api/v1/buyers","host":["{{baseUrl}}"],"path":["api","v1","buyers"]}}},
+    {"name":"Get buyer","request":{"method":"GET","url":"{{baseUrl}}/api/v1/buyers/{{buyerId}}"}},
+    {"name":"Deposit webhook","request":{"method":"POST","header":[{"key":"Content-Type","value":"application/json"}],"body":{"mode":"raw","raw":"{\"buyerId\":\"{{buyerId}}\",\"txHash\":\"0x0000000000000000000000000000000000000000000000000000000000000000\"}"},"url":"{{baseUrl}}/api/v1/webhooks/usdt-deposit"}},
+    {"name":"Deposit status","request":{"method":"GET","url":"{{baseUrl}}/api/v1/webhooks/usdt-deposit/{{txHash}}"}},
+    {"name":"Initiate checkout","request":{"method":"POST","header":[{"key":"Content-Type","value":"application/json"}],"body":{"mode":"raw","raw":"{\"buyerId\":\"{{buyerId}}\",\"sellerBarcodeId\":\"{{sellerBarcodeId}}\",\"amountCoupons\":\"12.50\",\"externalRef\":\"order-123\"}"},"url":"{{baseUrl}}/api/v1/checkout/initiate"}},
+    {"name":"Capture checkout","request":{"method":"POST","header":[{"key":"Content-Type","value":"application/json"}],"body":{"mode":"raw","raw":"{\"checkoutId\":\"{{checkoutId}}\",\"otp\":\"0123\"}"},"url":"{{baseUrl}}/api/v1/checkout/capture"}},
+    {"name":"Cancel checkout","request":{"method":"POST","header":[{"key":"Content-Type","value":"application/json"}],"body":{"mode":"raw","raw":"{\"checkoutId\":\"{{checkoutId}}\"}"},"url":"{{baseUrl}}/api/v1/checkout/cancel"}},
+    {"name":"Get checkout","request":{"method":"GET","url":"{{baseUrl}}/api/v1/checkout/{{checkoutId}}"}}
+  ]
+}

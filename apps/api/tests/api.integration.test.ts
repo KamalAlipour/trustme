@@ -59,6 +59,8 @@ const config = {
   shahkarBaseUrl: 'https://provider.test',
   ibanMatchBaseUrl: 'https://iban-provider.test',
   identityHashPepper: undefined,
+  partnerSecretKey: 'test-partner-secret-key-that-is-at-least-32-characters',
+  confirmations: 12,
 };
 
 async function account(type: AccountType, asset: Asset, userId?: string) {

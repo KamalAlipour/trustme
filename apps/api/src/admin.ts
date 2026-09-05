@@ -106,6 +106,7 @@ const apiKeyCreateSchema = z.object({
     }
   }),
   expiresAt: z.string().datetime().optional(),
+  partnerBarcodeId: z.string().min(1).optional(),
 }).strict();
 const apiKeyIdSchema = z.object({ id: z.string().uuid() });
 
@@ -126,6 +127,7 @@ function serializeApiKey(row: {
   expiresAt: Date | null;
   revokedAt: Date | null;
   lastUsedAt: Date | null;
+  partnerUser?: { barcodeId: string } | null;
 }, createdByUsername: string) {
   return {
     id: row.id,
@@ -137,6 +139,7 @@ function serializeApiKey(row: {
     revokedAt: row.revokedAt,
     lastUsedAt: row.lastUsedAt,
     createdBy: { username: createdByUsername },
+    partnerBarcodeId: row.partnerUser?.barcodeId ?? null,
   };
 }
 
@@ -282,7 +285,7 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
   router.get('/api-keys', requireRole(AdminRole.ADMIN), async (_request, response, next) => {
     try {
       const rows = await prisma.apiKey.findMany({
-        include: { createdBy: { select: { username: true } } },
+        include: { createdBy: { select: { username: true } }, partnerUser: { select: { barcodeId: true } } },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       });
       response.json(rows.map((row) => serializeApiKey(row, row.createdBy.username)));
@@ -295,12 +298,21 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
     try {
       const body = apiKeyCreateSchema.parse(request.body);
       const claims = adminClaims(request);
+      const scopes = body.scopes.map((scope) => scopeFromName(scope)!).filter((scope): scope is ApiKeyScope => scope !== null);
+      const partnerScopes: ApiKeyScope[] = [ApiKeyScope.PARTNER_BUYERS, ApiKeyScope.PARTNER_DEPOSITS, ApiKeyScope.PARTNER_CHECKOUT];
+      const needsPartner = body.partnerBarcodeId !== undefined || scopes.some((scope) => partnerScopes.includes(scope));
+      if (needsPartner && config.partnerSecretKey === undefined) throw new HttpError(400, 'partner_secret_key_not_configured');
       const result = await prisma.$transaction(async (tx) => {
+        const partnerUser = body.partnerBarcodeId === undefined ? null : await tx.user.findUnique({ where: { barcodeId: body.partnerBarcodeId } });
+        if (body.partnerBarcodeId !== undefined && (partnerUser === null || partnerUser.isDemo)) throw new HttpError(400, 'invalid partnerBarcodeId');
+        if (scopes.some((scope) => partnerScopes.includes(scope)) && partnerUser === null) throw new HttpError(400, 'partnerBarcodeId is required for partner scopes');
         const created = await createApiKey(tx, {
           name: body.name,
-          scopes: body.scopes.map((scope) => scopeFromName(scope)!).filter((scope): scope is ApiKeyScope => scope !== null),
+          scopes,
           ...(body.expiresAt === undefined ? {} : { expiresAt: new Date(body.expiresAt) }),
           createdById: claims.sub,
+          ...(partnerUser === null ? {} : { partnerUserId: partnerUser.id }),
+          ...(config.partnerSecretKey === undefined ? {} : { secretEncryptionKey: config.partnerSecretKey }),
         });
         await tx.adminAuditLog.create({
           data: {
@@ -308,12 +320,12 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
             action: 'api_key.create',
             entityType: 'ApiKey',
             entityId: created.apiKey.id,
-            newValue: jsonValue({ name: body.name, scopes: body.scopes }),
+            newValue: jsonValue({ name: body.name, scopes: body.scopes, partnerBarcodeId: partnerUser?.barcodeId }),
           },
         });
         return created;
       });
-      response.status(201).json({ ...serializeApiKey(result.apiKey, claims.username), rawKey: result.rawKey });
+      response.status(201).json({ ...serializeApiKey(result.apiKey, claims.username), rawKey: result.rawKey, ...(result.rawSecret === undefined ? {} : { rawSecret: result.rawSecret }) });
     } catch (error) {
       next(error);
     }

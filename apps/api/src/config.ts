@@ -52,6 +52,8 @@ export const apiConfigSchema = z.object({
   ibanMatchBaseUrl: z.string().url().default('https://s.api.ir/api/sw1/IbanMatch'),
   identityHashPepper: z.string().min(32).optional(),
   allowedOrigins: z.string().default('').transform((value) => value.split(',').map((origin) => origin.trim()).filter(Boolean)),
+  partnerSecretKey: z.string().min(32).optional(),
+  confirmations: integer.default(12),
 });
 
 export type ApiConfig = z.infer<typeof apiConfigSchema>;
@@ -102,6 +104,8 @@ export function loadApiConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     ibanMatchBaseUrl: env.IBAN_MATCH_BASE_URL,
     identityHashPepper: env.IDENTITY_HASH_PEPPER || undefined,
     allowedOrigins: env.API_ALLOWED_ORIGINS,
+    partnerSecretKey: env.PARTNER_SECRET_KEY || undefined,
+    confirmations: env.CONFIRMATIONS,
   });
   if (config.nodeEnv === 'production' && config.emailDelivery === 'log') {
     throw new Error('EMAIL_DELIVERY=log is not allowed in production');

@@ -1,9 +1,7 @@
-import { id, getAddress } from 'ethers';
 import { AccountType, Asset, Prisma, PrismaClient } from '@trustme/db';
-import { postDeposit } from '@trustme/core';
+import { decodeTransfer, postDeposit, transferTopic } from '@trustme/core';
 import type { ChainLog, ChainProvider } from './provider.js';
 
-const transferTopic = id('Transfer(address,address,uint256)');
 
 export type IngestConfig = {
   usdtContractAddress: string;
@@ -27,18 +25,6 @@ async function getCursor(prisma: PrismaClient, startBlock: number) {
     (await prisma.chainCursor.findUnique({ where: { id: 1 } })) ??
     (await prisma.chainCursor.create({ data: { id: 1, nextBlock: BigInt(startBlock) } }))
   );
-}
-
-function decodeTransfer(log: ChainLog): { to: string; amount: bigint } | null {
-  if (log.topics[0] !== transferTopic || !log.topics[2] || !/^0x[0-9a-fA-F]{64}$/.test(log.topics[2])) return null;
-  try {
-    return {
-      to: getAddress(`0x${log.topics[2].slice(-40)}`),
-      amount: BigInt(log.data),
-    };
-  } catch {
-    return null;
-  }
 }
 
 async function matchingDeposits(prisma: PrismaClient, logs: ChainLog[]) {
