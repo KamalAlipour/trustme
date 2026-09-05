@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { HDNodeWallet, JsonRpcProvider } from 'ethers';
-import { Worker as BullWorker } from 'bullmq';
+import { UnrecoverableError, Worker as BullWorker } from 'bullmq';
 import { pino } from 'pino';
 import { DepositSweepStatus, PrismaClient, WithdrawalStatus } from '@trustme/db';
 import { createEthersProvider, createWalletSigner } from './provider.js';
@@ -14,7 +14,8 @@ import { cleanupUnattachedMedia } from './media-cleanup.js';
 import { expireBalanceDisclosures } from './disclosure-cleanup.js';
 import { churnDemoCoupons } from './demo-churn.js';
 import { fundSweepGas, sweepDepositAddress } from './sweep.js';
-import { CONFIRMATION_QUEUE, createQueues, DISPATCH_QUEUE, INGEST_QUEUE, SWEEP_QUEUE, type WorkerQueues } from './queues.js';
+import { CONFIRMATION_QUEUE, createQueues, DISPATCH_QUEUE, INGEST_QUEUE, SMS_QUEUE, SWEEP_QUEUE, type WorkerQueues } from './queues.js';
+import { sendOtp } from './sms-relay.js';
 
 export { loadWorkerConfig } from './config.js';
 export * from './provider.js';
@@ -111,6 +112,37 @@ export async function startWorker(config: WorkerConfig = loadWorkerConfig()): Pr
     },
     { connection: queues.connection, concurrency: 1 },
   );
+  const smsWorker = new BullWorker(
+    SMS_QUEUE,
+    async (job) => {
+      const row = await prisma.phoneVerification.findUnique({ where: { id: String(job.data.phoneVerificationId) } });
+      if (row === null || row.consumedAt !== null || row.expiresAt <= new Date() || row.deliveryStatus !== 'PENDING') return;
+      if (config.smsDelivery !== 'relay') {
+        await prisma.phoneVerification.update({ where: { id: row.id }, data: { deliveryStatus: 'FAILED', deliveryError: 'relay_not_configured' } });
+        throw new UnrecoverableError('SMS relay is not configured');
+      }
+      const result = await sendOtp(config, { recipient: String(job.data.phone), code: String(job.data.code) });
+      if (result.kind === 'sent') {
+        await prisma.phoneVerification.update({ where: { id: row.id }, data: { deliveryStatus: 'SENT', relayMessageId: result.messageId } });
+        return result;
+      }
+      if (result.kind === 'terminal') {
+        await prisma.phoneVerification.update({ where: { id: row.id }, data: { deliveryStatus: 'FAILED', deliveryError: `relay_${result.status}` } });
+        throw new UnrecoverableError(`SMS relay terminal status ${result.status}`);
+      }
+      if (job.attemptsMade + 1 >= (job.opts.attempts ?? 1)) {
+        await prisma.phoneVerification.update({ where: { id: row.id }, data: { deliveryStatus: 'FAILED', deliveryError: result.status === null ? 'network' : `relay_${result.status}` } });
+      }
+      throw new Error(result.status === null ? 'SMS relay network failure' : `SMS relay status ${result.status}`);
+    },
+    {
+      connection: queues.connection,
+      concurrency: 1,
+      settings: {
+        backoffStrategy: (attemptsMade, type) => type === 'sms-relay' ? [5_000, 30_000, 120_000][attemptsMade] ?? 120_000 : 0,
+      },
+    },
+  );
   const dispatchWorker = new BullWorker(
     DISPATCH_QUEUE,
     async (job) => {
@@ -203,7 +235,7 @@ export async function startWorker(config: WorkerConfig = loadWorkerConfig()): Pr
     },
     { connection: queues.connection, concurrency: 1 },
   );
-  const workers = [ingestWorker, dispatchWorker, confirmationWorker, sweepWorker];
+  const workers = [ingestWorker, dispatchWorker, confirmationWorker, sweepWorker, smsWorker];
   await queues.ingest.add('scan', {}, { jobId: 'chain-ingest-repeat', repeat: { every: 15_000 } });
   await queues.ingest.add('escrow-ingest', {}, { jobId: 'escrow-ingest-repeat', repeat: { every: 15_000 } });
   await queues.ingest.add('media-cleanup', {}, { jobId: 'media-cleanup-repeat', repeat: { every: 60 * 60_000 } });

@@ -48,6 +48,17 @@ export const openapiDocument = {
               customers: { $ref: '#/components/schemas/ReferralSummary' },
             },
           },
+          phoneVerified: { type: 'boolean' },
+          phoneVerification: {
+            type: 'object',
+            nullable: true,
+            properties: {
+              pendingExpiresAt: { type: 'string', format: 'date-time' },
+              deliveryStatus: { type: 'string', enum: ['PENDING', 'SENT', 'FAILED'] },
+              deliveryError: { type: 'string', nullable: true },
+              resendAvailableAt: { type: 'string', format: 'date-time' },
+            },
+          },
         },
       },
       ReferralSummary: {
@@ -98,6 +109,7 @@ export const openapiDocument = {
         responses: {
           '200': { description: 'Identity verification result: VERIFIED, MISMATCH, or INCONCLUSIVE' },
           '400': { description: 'Invalid national code, missing phone number, or invalid Iranian mobile number' },
+          '409': { description: 'Phone verification is required before Shahkar identity verification' },
           '429': { description: 'Rate limit or identity-check cap reached' },
           '503': { description: 'Identity verification is not configured' },
         },
@@ -119,7 +131,9 @@ export const openapiDocument = {
     '/v1/me/disclosures': { get: { responses: { '200': { description: 'Pending balance disclosure requests for the member' } } } },
     '/v1/me/disclosures/{id}/deny': { post: { responses: { '204': { description: 'Disclosure request denied' }, '404': { description: 'Disclosure request not found' }, '409': { description: 'Disclosure request is no longer pending' } } } },
     '/v1/me/country': { put: { responses: { '200': { description: 'Updated account country' }, '409': { description: 'Country cannot change after verification' } } } },
-    '/v1/me/phone': { post: { responses: { '200': { description: 'Updated member profile with masked phone number' }, '400': { description: 'Invalid phone number or PIN' }, '409': { description: 'Phone is already registered or identity verification is complete' }, '423': { description: 'PIN temporarily locked' } } } },
+    '/v1/me/phone': { post: { responses: { '200': { description: 'Updated member profile with masked phone number' }, '202': { description: 'Phone saved and verification code queued' }, '400': { description: 'Invalid phone number or PIN' }, '409': { description: 'Phone is already registered or identity verification is complete' }, '423': { description: 'PIN temporarily locked' } } } },
+    '/v1/me/phone/resend': { post: { responses: { '202': { description: 'Verification code queued' }, '400': { description: 'Phone is missing or invalid' }, '409': { description: 'Phone is already verified' }, '429': { description: 'Rate limit reached' } } } },
+    '/v1/me/phone/verify': { post: { responses: { '200': { description: 'Phone verified and updated member profile' }, '400': { description: 'Code must be exactly six digits' }, '401': { description: 'Invalid phone verification code' } } } },
     '/v1/me/barcodes': { get: { responses: { '200': { description: 'Member barcode search results' } } } },
     '/v1/me/barcodes/{barcodeId}': { get: { responses: { '200': { description: 'Member barcode details' }, '404': { description: 'Member not found' } } } },
     '/v1/me/pin': { post: { responses: { '204': { description: 'PIN changed' } } } },

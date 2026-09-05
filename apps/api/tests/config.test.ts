@@ -20,6 +20,14 @@ describe('API configuration', () => {
     expect(() => loadApiConfig({ ...validEnvironment, NODE_ENV: 'production', EMAIL_DELIVERY: 'log' })).toThrow('EMAIL_DELIVERY=log is not allowed in production');
   });
 
+  it('rejects SMS logging in production', () => {
+    expect(() => loadApiConfig({ ...validEnvironment, NODE_ENV: 'production', EMAIL_DELIVERY: 'none', SMS_DELIVERY: 'log' })).toThrow('SMS_DELIVERY=log is not allowed in production');
+  });
+
+  it('requires an SMS relay key in relay mode', () => {
+    expect(() => loadApiConfig({ ...validEnvironment, SMS_DELIVERY: 'relay' })).toThrow('SMS_RELAY_KEY is required when SMS_DELIVERY=relay');
+  });
+
   it('parses configured browser origins', () => {
     expect(loadApiConfig({ ...validEnvironment, API_ALLOWED_ORIGINS: 'https://app-trustcoupon.komasi.as, https://example.test ' }).allowedOrigins)
       .toEqual(['https://app-trustcoupon.komasi.as', 'https://example.test']);

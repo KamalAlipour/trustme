@@ -31,6 +31,7 @@ const app = createApp({
   config,
   prisma: {} as ApiDependencies['prisma'],
   queue: { add: async () => ({}) } as ApiDependencies['queue'],
+  smsQueue: { add: async () => ({}) } as ApiDependencies['smsQueue'],
   redis: { ping: async () => 'PONG' },
 });
 

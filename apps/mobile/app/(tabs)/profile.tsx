@@ -34,6 +34,9 @@ export default function Profile() {
   const [phoneBusy, setPhoneBusy] = useState(false);
   const [phoneFeedback, setPhoneFeedback] = useState('');
   const [phoneError, setPhoneError] = useState('');
+  const [phoneCode, setPhoneCode] = useState('');
+  const [phoneCodeBusy, setPhoneCodeBusy] = useState(false);
+  const [phoneClock, setPhoneClock] = useState(Date.now());
   const [currentPin, setCurrentPin] = useState('');
   const [newPin, setNewPin] = useState('');
   const [pinEditing, setPinEditing] = useState(false);
@@ -72,6 +75,11 @@ export default function Profile() {
     if (params.field === 'marketer' && params.barcodeId !== undefined) setMarketerBarcode(params.barcodeId);
     if (params.field === 'trainer' && params.barcodeId !== undefined) setTrainerBarcode(params.barcodeId);
   }, [params.barcodeId, params.field]);
+  useEffect(() => {
+    if (current?.phoneVerification === null) return undefined;
+    const timer = setInterval(() => setPhoneClock(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [current?.phoneVerification?.resendAvailableAt]);
   const emailIsValid = isValidEmail(email);
   const emailCodeIsValid = isValidEmailCode(emailCode);
   const devices = useQuery({
@@ -159,6 +167,20 @@ export default function Profile() {
     } finally {
       setPhoneBusy(false);
     }
+  };
+  const verifyPhone = async () => {
+    if (!/^\d{6}$/.test(phoneCode) || phoneCodeBusy) return;
+    setPhoneCodeBusy(true); setPhoneError('');
+    try {
+      await request('/v1/me/phone/verify', { method: 'POST', body: { code: phoneCode } });
+      setPhoneCode(''); setPhoneFeedback(t.phoneVerified); await invalidate();
+    } catch (cause) { setPhoneError(cause instanceof ApiError ? cause.message : t.unknownError); } finally { setPhoneCodeBusy(false); }
+  };
+  const resendPhone = async () => {
+    if (phoneCodeBusy || current?.phoneVerification === null || current?.phoneVerification === undefined || new Date(current.phoneVerification.resendAvailableAt).getTime() > phoneClock) return;
+    setPhoneCodeBusy(true); setPhoneError('');
+    try { await request('/v1/me/phone/resend', { method: 'POST' }); setPhoneFeedback(t.phoneCodeSent); await invalidate(); }
+    catch (cause) { setPhoneError(cause instanceof ApiError ? cause.message : t.unknownError); } finally { setPhoneCodeBusy(false); }
   };
   const verifyEmail = async () => {
     if (!emailCodeIsValid || emailBusy !== null) return;
@@ -306,7 +328,7 @@ export default function Profile() {
       </View> : null}
       <View style={styles.card}>
         <Text style={styles.heading}>{current?.displayName ?? t.member}</Text>
-        <Text style={styles.text}>{t.phoneLabel}: {current?.phone ?? t.phoneUnavailable}</Text>
+        <Text style={styles.text}>{t.phoneLabel}: {current?.phone ?? t.phoneUnavailable} {current?.phone ? (current.phoneVerified ? ` · ${t.phoneVerified}` : ` · ${t.phoneUnverified}`) : ''}</Text>
         <TextInput
           value={newPhone}
           onChangeText={(value) => { setNewPhone(value); setPhoneFeedback(''); setPhoneError(''); }}
@@ -334,6 +356,14 @@ export default function Profile() {
         </Pressable>
         {phoneFeedback ? <Text style={styles.notice}>{phoneFeedback}</Text> : null}
         {phoneError ? <Text style={styles.danger}>{phoneError}</Text> : null}
+        {current?.phoneVerification && !current.phoneVerified ? <>
+          {current.phoneVerification.deliveryStatus === 'FAILED' ? <Text style={styles.danger}>{t.phoneCodeDeliveryFailed}</Text> : null}
+          <TextInput value={phoneCode} onChangeText={(value) => setPhoneCode(value.replace(/\D/g, '').slice(0, 6))} placeholder={t.sixDigitCode} style={styles.input} keyboardType="number-pad" />
+          <Pressable disabled={!/^\d{6}$/.test(phoneCode) || phoneCodeBusy} onPress={() => void verifyPhone()} style={[styles.secondaryButton, !/^\d{6}$/.test(phoneCode) || phoneCodeBusy ? styles.buttonDisabled : null]}><Text style={styles.secondaryButtonText}>{t.verifyPhone}</Text></Pressable>
+          <Pressable disabled={phoneCodeBusy || new Date(current.phoneVerification.resendAvailableAt).getTime() > phoneClock} onPress={() => void resendPhone()} style={[styles.secondaryButton, phoneCodeBusy || new Date(current.phoneVerification.resendAvailableAt).getTime() > phoneClock ? styles.buttonDisabled : null]}>
+            <Text style={styles.secondaryButtonText}>{new Date(current.phoneVerification.resendAvailableAt).getTime() > phoneClock ? t.resendPhoneIn(Math.ceil((new Date(current.phoneVerification.resendAvailableAt).getTime() - phoneClock) / 1000)) : t.resendPhone}</Text>
+          </Pressable>
+        </> : null}
         <TextInput value={displayName} onChangeText={setDisplayName} placeholder={t.displayName} style={styles.input} />
         <Pressable onPress={() => void saveName()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.save}</Text></Pressable>
       </View>
@@ -447,7 +477,8 @@ export default function Profile() {
             keyboardType="number-pad"
             maxLength={10}
           />
-          <Pressable disabled={identityLoading || nationalCode.length !== 10} onPress={() => void verifyIdentity()} style={styles.button}><Text style={styles.buttonText}>{t.verifyIdentity}</Text></Pressable>
+          {!current?.phoneVerified ? <Text style={styles.danger}>{t.verifyPhoneFirst}</Text> : null}
+          <Pressable disabled={!current?.phoneVerified || identityLoading || nationalCode.length !== 10} onPress={() => void verifyIdentity()} style={[styles.button, !current?.phoneVerified || identityLoading || nationalCode.length !== 10 ? styles.buttonDisabled : null]}><Text style={styles.buttonText}>{t.verifyIdentity}</Text></Pressable>
         </> : null}
       </View>
       <View style={styles.card}>

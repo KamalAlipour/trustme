@@ -382,6 +382,13 @@ operator runs them.
 
 ## Browser origins
 
+## SMS relay
+
+The production SMS relay is IP-allowlisted to the production egress IPs. Configure
+`SMS_DELIVERY=relay`, `SMS_RELAY_URL`, and the server-side `SMS_RELAY_KEY` in the
+deployment environment. Never commit the relay key to source control or place it
+in a mobile bundle.
+
 The API answers browser requests only for origins listed in
 `API_ALLOWED_ORIGINS` (comma-separated, scheme included), for example
 `https://app-trustcoupon.komasi.as,https://komasi.as`. Without it the API sends

@@ -31,12 +31,20 @@ export const workerConfigSchema = z.object({
   sweepFailureBackoffMs: positiveInteger.default(900_000),
   sweepMaxAttempts: positiveInteger.default(5),
   escrowMaxAttempts: positiveInteger.default(5),
+  smsDelivery: z.enum(['none', 'log', 'relay']).default('none'),
+  smsRelayUrl: z.string().url().default('https://id.hktp.ir'),
+  smsRelayKey: optionalString,
+  smsRelayOtpPattern: z.string().default('61qgtphdqgtixtg'),
   failoverMarkerPath: z.string().default('/etc/trustme/FAILED_OVER'),
   mediaStorageDir: z.string().default('/var/lib/trustme/media'),
   allowDemoData: z.boolean().default(false),
   demoChurnIntervalMs: positiveInteger.default(30_000),
   demoChurnTransfersPerTick: positiveInteger.default(3),
   demoChurnMaxCoupons: positiveInteger.default(50),
+}).superRefine((config, context) => {
+  if (config.smsDelivery === 'relay' && config.smsRelayKey === undefined) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['smsRelayKey'], message: 'SMS_RELAY_KEY is required when SMS_DELIVERY=relay' });
+  }
 });
 
 export type WorkerConfig = z.infer<typeof workerConfigSchema>;
@@ -69,6 +77,10 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
     sweepFailureBackoffMs: env.SWEEP_FAILURE_BACKOFF_MS,
     sweepMaxAttempts: env.SWEEP_MAX_ATTEMPTS,
     escrowMaxAttempts: env.ESCROW_MAX_ATTEMPTS,
+    smsDelivery: env.SMS_DELIVERY,
+    smsRelayUrl: env.SMS_RELAY_URL,
+    smsRelayKey: env.SMS_RELAY_KEY,
+    smsRelayOtpPattern: env.SMS_RELAY_OTP_PATTERN,
     failoverMarkerPath: env.FAILOVER_MARKER_PATH,
     mediaStorageDir: env.MEDIA_STORAGE_DIR,
     allowDemoData: env.ALLOW_DEMO_DATA === 'true',

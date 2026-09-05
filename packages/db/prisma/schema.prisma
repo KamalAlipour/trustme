@@ -151,6 +151,12 @@ enum EmailVerificationPurpose {
   PIN_RESET
 }
 
+enum SmsDeliveryStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
 enum MediaKind {
   AUDIO
   IMAGE
@@ -248,6 +254,7 @@ model User {
   lastIdentityCheckAt  DateTime?
   email                String?             @unique
   emailVerifiedAt      DateTime?
+  phoneVerifiedAt      DateTime?
   pinHash              String?
   pinUpdatedAt         DateTime?
   pinAttempts          Int                 @default(0)
@@ -278,6 +285,7 @@ model User {
   contactedBy          Contact[]           @relation("ContactTarget")
   devices              MemberDevice[]
   emailCodes           EmailVerification[]
+  phoneVerifications   PhoneVerification[]
   charityAgents        CharityAgent[]
   aidRequests          AidRequest[]        @relation("AidApplicant")
   decidedAidRequests   AidRequest[]        @relation("AidDecider")
@@ -442,6 +450,24 @@ model EmailVerification {
   user       User                     @relation(fields: [userId], references: [id])
 
   @@index([userId, purpose, createdAt])
+}
+
+model PhoneVerification {
+  id             String            @id @default(uuid()) @db.Uuid
+  userId         String            @db.Uuid
+  phone          String
+  codeHash       String
+  attempts       Int               @default(0)
+  expiresAt      DateTime
+  consumedAt     DateTime?
+  deliveryStatus SmsDeliveryStatus @default(PENDING)
+  deliveryError  String?
+  relayMessageId String?
+  createdAt      DateTime          @default(now())
+  user           User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([phone, createdAt])
 }
 
 model Contact {
