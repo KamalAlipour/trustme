@@ -4,6 +4,7 @@ import type { MediaAsset, MediaKind } from './types';
 import { isWebPlatform } from '../lib/platform';
 import type { Translations } from '../i18n/en';
 import { en } from '../i18n/en';
+import { DEFAULT_DISPLAY_UNIT } from '../i18n/display-unit';
 
 const MAX_NON_VIDEO_BYTES = 10 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
@@ -23,7 +24,7 @@ export async function uploadMedia(input: {
   mimeType: string;
   captureSessionId?: string;
   step?: string;
-}, t: Translations = en): Promise<UploadedMedia> {
+}, t: Translations = en(DEFAULT_DISPLAY_UNIT)): Promise<UploadedMedia> {
   if (!isWebPlatform()) {
     const info = await FileSystem.getInfoAsync(input.uri, { size: true });
     if (info.exists && info.size !== undefined && info.size > (input.kind === 'VIDEO' ? MAX_VIDEO_BYTES : MAX_NON_VIDEO_BYTES)) {

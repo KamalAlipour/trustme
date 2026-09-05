@@ -250,7 +250,11 @@ passwords are argon2 hashes, and approval actions are written to an append-only
 - **Overview**: vault USDT, coupons in circulation, solvency ratio (invariant 4),
   fees collected, 24 h transaction count, RPC head/lag, hot-wallet balance.
 - **Settings**: withdrawal base fee (bps), minimum withdrawal, auto-approval
-  threshold — every change audited with old and new value.
+  threshold, and member-facing display-unit names — every change is stored in
+  `SystemSetting` and audited with old and new values. Display-unit defaults are
+  `US cent`, `US cents`, and `سنت دلار آمریکا`; the public
+  `/v1/public/display-unit` endpoint exposes the current values to the mobile
+  client without changing accounting or API field names.
 - **Withdrawal queue**: filter by status, approve-and-send / reject-and-refund,
   member barcode, consumption history, computed fee, destination, explorer link.
 - **Ledger logs**: every transaction and entry, searchable by barcode or id.

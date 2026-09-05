@@ -4,6 +4,7 @@ import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
 import { AccountType, Asset, BalanceDisclosureStatus, Prisma, PrismaClient, TransactionStatus, TransactionType } from '@trustme/db';
 import { barcodeIdSchema, decimalFromMicroUsdt, readDemoCirculation, readSolvency } from '@trustme/core';
+import { readDisplayUnit } from './display-unit.js';
 import { HttpError } from './http-error.js';
 
 const publicTypes = [
@@ -115,6 +116,14 @@ export function createPublicRouter(prisma: PrismaClient): express.Router {
   });
 
   let reservesCache: { expiresAt: number; value: unknown } | undefined;
+  router.get('/display-unit', readLimiter, async (_request, response, next) => {
+    try {
+      cacheHeaders(response);
+      response.json(await readDisplayUnit(prisma));
+    } catch (error) {
+      next(error);
+    }
+  });
   router.get('/reserves', readLimiter, async (_request, response, next) => {
     try {
       cacheHeaders(response);

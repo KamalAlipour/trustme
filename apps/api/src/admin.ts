@@ -35,6 +35,7 @@ import {
   SCOPE_NAMES,
 } from '@trustme/core';
 import type { QueueLike } from './app.js';
+import { readDisplayUnit, type DisplayUnit } from './display-unit.js';
 import { adminClaims, createAdminJwt, requireAdmin, requireRole, verifyAdminPassword } from './admin-auth.js';
 import type { ApiConfig } from './config.js';
 import { HttpError } from './http-error.js';
@@ -88,6 +89,13 @@ const settingSchema = z.object({
   commissionFloorBps: z.number().int().min(0),
   commissionFloorByCountry: z.array(z.object({ country: z.string().regex(/^[A-Za-z]{2}$/), bps: z.number().int().min(0) })).transform((rows) => rows.map((row) => ({ country: row.country.toUpperCase(), bps: row.bps }))),
   trainerCutBps: z.number().int().min(0).max(10_000),
+  displayUnit: z.object({
+    en: z.object({
+      singular: z.string().trim().min(1).max(40),
+      plural: z.string().trim().min(1).max(40),
+    }).strict(),
+    fa: z.string().trim().min(1).max(40),
+  }).strict(),
 }).strict();
 const patchSettingsSchema = settingSchema.partial().strict();
 const statusSchema = z.nativeEnum(WithdrawalStatus).optional();
@@ -257,6 +265,7 @@ async function readAdminSettings(prisma: PrismaClient) {
     commissionFloorBps: Number.parseInt(values.get('COMMISSION_FLOOR_BPS') ?? '300', 10),
     commissionFloorByCountry,
     trainerCutBps: Number.parseInt(values.get('TRAINER_CUT_BPS') ?? '2000', 10),
+    displayUnit: await readDisplayUnit(prisma),
   };
 }
 
@@ -458,11 +467,25 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
           commissionFloorByCountry: 'COMMISSION_FLOOR_BPS_BY_COUNTRY',
           trainerCutBps: 'TRAINER_CUT_BPS',
         };
-        const before = await tx.systemSetting.findMany({ where: { key: { in: keys.map((key) => keyMap[key]!) } } });
+        const settingKeys = keys.flatMap((field) => field === 'displayUnit'
+          ? ['DISPLAY_UNIT_EN_SINGULAR', 'DISPLAY_UNIT_EN_PLURAL', 'DISPLAY_UNIT_FA']
+          : [keyMap[field]!]);
+        const before = await tx.systemSetting.findMany({ where: { key: { in: settingKeys } } });
         const oldValues = Object.fromEntries(before.map((row) => [row.key, row.value]));
         for (const field of keys) {
           const value = body[field as keyof typeof body];
           if (value === undefined) continue;
+          if (field === 'displayUnit') {
+            const displayUnit = value as DisplayUnit;
+            for (const [key, storedValue] of [
+              ['DISPLAY_UNIT_EN_SINGULAR', displayUnit.en.singular.trim()],
+              ['DISPLAY_UNIT_EN_PLURAL', displayUnit.en.plural.trim()],
+              ['DISPLAY_UNIT_FA', displayUnit.fa.trim()],
+            ] as const) {
+              await tx.systemSetting.upsert({ where: { key }, update: { value: storedValue }, create: { key, value: storedValue } });
+            }
+            continue;
+          }
           const key = keyMap[field]!;
           const storedValue = field === 'withdrawalBaseFeeBps' || field === 'requireIdentityForWithdrawal' || field === 'commissionFloorBps' || field === 'trainerCutBps'
             ? String(value)
@@ -473,7 +496,7 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
               : decimalFromMicroUsdt(BigInt(value as string));
           await tx.systemSetting.upsert({ where: { key }, update: { value: storedValue }, create: { key, value: storedValue } });
         }
-        const after = await tx.systemSetting.findMany({ where: { key: { in: keys.map((key) => keyMap[key]!) } } });
+        const after = await tx.systemSetting.findMany({ where: { key: { in: settingKeys } } });
         await tx.adminAuditLog.create({
           data: {
             adminUserId: adminId(request),

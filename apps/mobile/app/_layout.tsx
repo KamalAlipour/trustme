@@ -65,13 +65,13 @@ function WebRedirectHandler() {
 
 export default function RootLayout() {
   return (
-    <LanguageProvider>
-      <QueryClientProvider client={queryClient}>
+    <QueryClientProvider client={queryClient}>
+      <LanguageProvider>
         <SessionProvider>
           <WebRedirectHandler />
           <Stack screenOptions={{ headerShown: false }} />
         </SessionProvider>
-      </QueryClientProvider>
-    </LanguageProvider>
+      </LanguageProvider>
+    </QueryClientProvider>
   );
 }
