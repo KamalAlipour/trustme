@@ -30,7 +30,6 @@ export default function Profile() {
   const [emailCodeSent, setEmailCodeSent] = useState(false);
   const [emailEditing, setEmailEditing] = useState(false);
   const [newPhone, setNewPhone] = useState('');
-  const [phonePin, setPhonePin] = useState('');
   const [phoneBusy, setPhoneBusy] = useState(false);
   const [phoneFeedback, setPhoneFeedback] = useState('');
   const [phoneError, setPhoneError] = useState('');
@@ -154,13 +153,12 @@ export default function Profile() {
     } catch (cause) { setEmailError(cause instanceof ApiError ? cause.message : t.unknownError); } finally { setEmailBusy(null); }
   };
   const savePhone = async () => {
-    if (!phoneIsValid || phonePin.length !== 4 || phoneBusy) return;
+    if (!phoneIsValid || phoneBusy) return;
     setPhoneFeedback(''); setPhoneError(''); setPhoneBusy(true);
     try {
-      await request('/v1/me/phone', { method: 'POST', body: { phone: newPhone.trim(), pin: phonePin } });
+      await request('/v1/me/phone', { method: 'POST', body: { phone: newPhone.trim(), pin: await stepUp() } });
       setNewPhone('');
-      setPhonePin('');
-      setPhoneFeedback(t.phoneSaved);
+      setPhoneFeedback(t.phoneCodeSent);
       await invalidate();
     } catch (cause) {
       setPhoneError(cause instanceof ApiError ? cause.message : t.unknownError);
@@ -338,19 +336,11 @@ export default function Profile() {
           textContentType="telephoneNumber"
           autoComplete="tel"
         />
-        <TextInput
-          value={phonePin}
-          onChangeText={(value) => setPhonePin(value.replace(/\D/g, '').slice(0, 4))}
-          placeholder={t.pin}
-          style={styles.input}
-          keyboardType="number-pad"
-          secureTextEntry
-        />
         {!phoneIsValid && newPhone.trim().length > 0 ? <Text style={styles.danger}>{t.invalidPhone}</Text> : null}
         <Pressable
-          disabled={!phoneIsValid || phonePin.length !== 4 || phoneBusy}
+          disabled={!phoneIsValid || phoneBusy}
           onPress={() => void savePhone()}
-          style={[styles.secondaryButton, !phoneIsValid || phonePin.length !== 4 || phoneBusy ? styles.buttonDisabled : null]}
+          style={[styles.secondaryButton, !phoneIsValid || phoneBusy ? styles.buttonDisabled : null]}
         >
           <Text style={styles.secondaryButtonText}>{phoneBusy ? t.savingPhone : t.savePhone}</Text>
         </Pressable>
@@ -358,7 +348,7 @@ export default function Profile() {
         {phoneError ? <Text style={styles.danger}>{phoneError}</Text> : null}
         {current?.phoneVerification && !current.phoneVerified ? <>
           {current.phoneVerification.deliveryStatus === 'FAILED' ? <Text style={styles.danger}>{t.phoneCodeDeliveryFailed}</Text> : null}
-          <TextInput value={phoneCode} onChangeText={(value) => setPhoneCode(value.replace(/\D/g, '').slice(0, 6))} placeholder={t.sixDigitCode} style={styles.input} keyboardType="number-pad" />
+          <TextInput value={phoneCode} onChangeText={(value) => setPhoneCode(value.replace(/\D/g, '').slice(0, 6))} placeholder={t.sixDigitCode} style={styles.input} keyboardType="number-pad" autoComplete="sms-otp" textContentType="oneTimeCode" autoFocus />
           <Pressable disabled={!/^\d{6}$/.test(phoneCode) || phoneCodeBusy} onPress={() => void verifyPhone()} style={[styles.secondaryButton, !/^\d{6}$/.test(phoneCode) || phoneCodeBusy ? styles.buttonDisabled : null]}><Text style={styles.secondaryButtonText}>{t.verifyPhone}</Text></Pressable>
           <Pressable disabled={phoneCodeBusy || new Date(current.phoneVerification.resendAvailableAt).getTime() > phoneClock} onPress={() => void resendPhone()} style={[styles.secondaryButton, phoneCodeBusy || new Date(current.phoneVerification.resendAvailableAt).getTime() > phoneClock ? styles.buttonDisabled : null]}>
             <Text style={styles.secondaryButtonText}>{new Date(current.phoneVerification.resendAvailableAt).getTime() > phoneClock ? t.resendPhoneIn(Math.ceil((new Date(current.phoneVerification.resendAvailableAt).getTime() - phoneClock) / 1000)) : t.resendPhone}</Text>
@@ -376,7 +366,7 @@ export default function Profile() {
           {!emailIsValid && email.trim().length > 0 ? <Text style={styles.danger}>{t.invalidEmail}</Text> : null}
           <Pressable disabled={!emailIsValid || emailBusy !== null} onPress={() => void requestEmail()} style={[styles.secondaryButton, !emailIsValid || emailBusy !== null ? styles.buttonDisabled : null]}><Text style={styles.secondaryButtonText}>{emailBusy === 'send' ? t.sendingEmailCode : t.sendCode}</Text></Pressable>
           {emailCodeSent ? <>
-            <TextInput value={emailCode} onChangeText={(value) => setEmailCode(value.replace(/\D/g, '').slice(0, 6))} placeholder={t.sixDigitCode} style={styles.input} keyboardType="number-pad" />
+            <TextInput value={emailCode} onChangeText={(value) => setEmailCode(value.replace(/\D/g, '').slice(0, 6))} placeholder={t.sixDigitCode} style={styles.input} keyboardType="number-pad" autoComplete="sms-otp" textContentType="oneTimeCode" autoFocus />
             <Pressable disabled={!emailCodeIsValid || emailBusy !== null} onPress={() => void verifyEmail()} style={[styles.secondaryButton, !emailCodeIsValid || emailBusy !== null ? styles.buttonDisabled : null]}><Text style={styles.secondaryButtonText}>{emailBusy === 'verify' ? t.verifyingEmail : t.verify}</Text></Pressable>
           </> : null}
           {current?.emailVerified ? <Pressable onPress={() => { setEmail(''); setEmailCode(''); setEmailCodeSent(false); setEmailFeedback(''); setEmailError(''); setEmailEditing(false); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.cancel}</Text></Pressable> : null}
