@@ -5,7 +5,7 @@ import { labels } from '../../labels';
 import { adminApiFetch, ApiResponseError } from '../../lib/api';
 import { decimalUsdtToMicro } from '../../lib/format';
 
-const fields = ['withdrawalBaseFeeBps', 'minimumFeeUsdt', 'minimumWithdrawalUsdt', 'autoApprovalLimitUsdt', 'commissionFloorBps', 'commissionFloorByCountry', 'trainerCutBps'] as const;
+const fields = ['withdrawalBaseFeeBps', 'minimumFeeUsdt', 'minimumWithdrawalUsdt', 'autoApprovalLimitUsdt', 'commissionFloorBps', 'commissionFloorByCountry', 'trainerCutBps', 'displayUnitEnSingular', 'displayUnitEnPlural', 'displayUnitFa'] as const;
 
 export async function updateSettingsAction(formData: FormData): Promise<void> {
   const values = Object.fromEntries(fields.map((field) => [field, formData.get(field)])) as Record<typeof fields[number], FormDataEntryValue | null>;
@@ -14,7 +14,7 @@ export async function updateSettingsAction(formData: FormData): Promise<void> {
       redirect(`/settings?errorField=${field}&error=${encodeURIComponent(labels.required)}`);
     }
   }
-  let body: Record<string, string | number | boolean | string[] | Array<{ country: string; bps: number }>>;
+  let body: Record<string, string | number | boolean | string[] | Array<{ country: string; bps: number }> | { en: { singular: string; plural: string }; fa: string }>;
   try {
     const minimumWithdrawalMicroUsdt = decimalUsdtToMicro(values.minimumWithdrawalUsdt as string);
     const minimumFeeMicroUsdt = decimalUsdtToMicro(values.minimumFeeUsdt as string);
@@ -32,6 +32,13 @@ export async function updateSettingsAction(formData: FormData): Promise<void> {
         return { country: country!.toUpperCase(), bps: Number(bps) };
       }),
       trainerCutBps: Number(formData.get('trainerCutBps') ?? 2000),
+      displayUnit: {
+        en: {
+          singular: values.displayUnitEnSingular as string,
+          plural: values.displayUnitEnPlural as string,
+        },
+        fa: values.displayUnitFa as string,
+      },
     };
   } catch {
     const invalidField = !/^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/.test(values.minimumFeeUsdt as string)

@@ -1,7 +1,10 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { I18nManager } from 'react-native';
+import { useQuery } from '@tanstack/react-query';
 import { en, type Translations } from './en';
 import { fa } from './fa';
+import { DEFAULT_DISPLAY_UNIT, type DisplayUnit } from './display-unit';
+import { request } from '../api/client';
 import { readLanguage, saveLanguage, type Language } from '../lib/storage';
 import { isWebPlatform } from '../lib/platform';
 
@@ -18,6 +21,11 @@ const LanguageContext = createContext<LanguageContextValue | null>(null);
 export function LanguageProvider({ children }: { children: React.ReactNode }) {
   const [language, setLanguageState] = useState<Language>('en');
   const [ready, setReady] = useState(false);
+  const displayUnit = useQuery<DisplayUnit>({
+    queryKey: ['display-unit'],
+    queryFn: () => request<DisplayUnit>('/v1/public/display-unit', { auth: 'none' }),
+    staleTime: 10 * 60_000,
+  });
 
   useEffect(() => {
     let active = true;
@@ -43,7 +51,14 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
       if (typeof window !== 'undefined') window.location.reload();
     }
   };
-  const value = useMemo(() => ({ t: language === 'fa' ? fa : en, language, direction, setLanguage, ready }), [direction, language, ready]);
+  const unit = displayUnit.data ?? DEFAULT_DISPLAY_UNIT;
+  const value = useMemo(() => ({
+    t: language === 'fa' ? fa(unit) : en(unit),
+    language,
+    direction,
+    setLanguage,
+    ready,
+  }), [direction, language, ready, unit]);
   if (!ready) return null;
   return <LanguageContext.Provider value={value}>{children}</LanguageContext.Provider>;
 }

@@ -2366,6 +2366,12 @@ describe('admin API', () => {
   it('validates and audits settings changes and searches ledger entries', async () => {
     const { app } = appFixture();
     await createAdmin(AdminRole.ADMIN);
+    const defaultDisplayUnit = await request(app).get('/v1/public/display-unit');
+    expect(defaultDisplayUnit.status).toBe(200);
+    expect(defaultDisplayUnit.body).toEqual({
+      en: { singular: 'US cent', plural: 'US cents' },
+      fa: 'سنت دلار آمریکا',
+    });
     const withdrawal = await createPendingWithdrawal(app, 'admin-ledger', '+1555000203');
     const jwt = await adminToken(app, 'admin@example.com');
     const settings = await request(app).get('/admin/settings').set('Authorization', `Bearer ${jwt}`);
@@ -2380,8 +2386,28 @@ describe('admin API', () => {
     });
     expect(updated.status).toBe(200);
     expect(updated.body).toMatchObject({ withdrawalBaseFeeBps: '250', minimumFeeMicroUsdt: '300000', minimumWithdrawalMicroUsdt: '2000000', identityRequiredCountries: ['IR', 'NO'] });
+    const displayUnitUpdate = await request(app).patch('/admin/settings').set('Authorization', `Bearer ${jwt}`).send({
+      displayUnit: { en: { singular: 'Credit cent', plural: 'Credit cents' }, fa: 'سنت اعتبار' },
+    });
+    expect(displayUnitUpdate.status).toBe(200);
+    expect(displayUnitUpdate.body.displayUnit).toEqual({
+      en: { singular: 'Credit cent', plural: 'Credit cents' },
+      fa: 'سنت اعتبار',
+    });
+    expect((await request(app).get('/admin/settings').set('Authorization', `Bearer ${jwt}`)).body.displayUnit).toEqual({
+      en: { singular: 'Credit cent', plural: 'Credit cents' },
+      fa: 'سنت اعتبار',
+    });
+    expect((await request(app).get('/v1/public/display-unit')).body).toEqual({
+      en: { singular: 'Credit cent', plural: 'Credit cents' },
+      fa: 'سنت اعتبار',
+    });
+    const invalidDisplayUnit = await request(app).patch('/admin/settings').set('Authorization', `Bearer ${jwt}`).send({
+      displayUnit: { en: { singular: '', plural: 'Credit cents' }, fa: 'سنت اعتبار' },
+    });
+    expect(invalidDisplayUnit.status).toBe(400);
     expect(await prisma.systemSetting.findUniqueOrThrow({ where: { key: 'IDENTITY_REQUIRED_COUNTRIES' } })).toMatchObject({ value: 'IR,NO' });
-    expect(await prisma.adminAuditLog.count({ where: { action: 'settings.update' } })).toBe(1);
+    expect(await prisma.adminAuditLog.count({ where: { action: 'settings.update' } })).toBe(2);
     const unknown = await request(app).patch('/admin/settings').set('Authorization', `Bearer ${jwt}`).send({ unexpected: '1' });
     expect(unknown.status).toBe(400);
     const invalidFee = await request(app).patch('/admin/settings').set('Authorization', `Bearer ${jwt}`).send({ withdrawalBaseFeeBps: '10001' });
@@ -2393,7 +2419,7 @@ describe('admin API', () => {
     const invalidCountry = await request(app).patch('/admin/settings').set('Authorization', `Bearer ${jwt}`).send({ identityRequiredCountries: ['IR', 'iran'] });
     expect(invalidCountry.status).toBe(400);
     expect(invalidCountry.body.fields[0]).toEqual({ path: 'identityRequiredCountries.1', message: 'country code must be exactly two letters' });
-    expect(await prisma.adminAuditLog.count({ where: { action: 'settings.update' } })).toBe(1);
+    expect(await prisma.adminAuditLog.count({ where: { action: 'settings.update' } })).toBe(2);
     const invalidMinimumFee = await request(app).patch('/admin/settings').set('Authorization', `Bearer ${jwt}`).send({ minimumFeeMicroUsdt: '100000001' });
     expect(invalidMinimumFee.status).toBe(400);
     expect(invalidMinimumFee.body.fields[0]).toEqual({ path: 'minimumFeeMicroUsdt', message: 'minimum fee must be at most 100 USDT' });

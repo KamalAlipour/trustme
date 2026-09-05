@@ -597,6 +597,34 @@ export const openapiDocument = {
     '/v1/escrows/{id}/cancel': { post: { responses: { '200': { description: 'Escrow cancelled' } } } },
     '/v1/withdrawals': { post: { responses: { '201': { description: 'Withdrawal requested' } } } },
     '/v1/withdrawals/availability': { get: { responses: { '200': { description: 'Withdrawal availability and blockers' } } } },
+    '/v1/public/display-unit': {
+      get: {
+        responses: {
+          '200': {
+            description: 'Public member-facing display unit names',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['en', 'fa'],
+                  properties: {
+                    en: {
+                      type: 'object',
+                      required: ['singular', 'plural'],
+                      properties: {
+                        singular: { type: 'string', example: 'US cent' },
+                        plural: { type: 'string', example: 'US cents' },
+                      },
+                    },
+                    fa: { type: 'string', example: 'سنت دلار آمریکا' },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
     '/v1/public/reserves': { get: { responses: { '200': { description: 'Public real and demo reserve figures' } } } },
     '/v1/public/ledger': { get: { responses: { '200': { description: 'Anonymized completed public ledger feed' } } } },
     '/v1/public/barcodes/{barcodeId}': { get: { responses: { '200': { description: 'Public barcode status only' }, '404': { description: 'Member not found' } } } },

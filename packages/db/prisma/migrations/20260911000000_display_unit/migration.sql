@@ -1,0 +1,6 @@
+INSERT INTO "SystemSetting" ("key", "value", "updatedAt")
+VALUES
+  ('DISPLAY_UNIT_EN_SINGULAR', 'US cent', CURRENT_TIMESTAMP),
+  ('DISPLAY_UNIT_EN_PLURAL', 'US cents', CURRENT_TIMESTAMP),
+  ('DISPLAY_UNIT_FA', 'سنت دلار آمریکا', CURRENT_TIMESTAMP)
+ON CONFLICT ("key") DO NOTHING;

@@ -13,6 +13,7 @@ type Settings = {
   commissionFloorBps: number;
   commissionFloorByCountry: Array<{ country: string; bps: number }>;
   trainerCutBps: number;
+  displayUnit: { en: { singular: string; plural: string }; fa: string };
 };
 
 export function SettingsForm({ settings, errorField, errorMessage }: Readonly<{ settings: Settings; errorField?: string | undefined; errorMessage?: string | undefined }>) {
@@ -75,6 +76,24 @@ export function SettingsForm({ settings, errorField, errorMessage }: Readonly<{ 
         <input className="w-full" name="autoApprovalLimitUsdt" defaultValue={microUsdtToDecimal(settings.autoApprovalLimitMicroUsdt)} inputMode="decimal" />
         {fieldError('autoApprovalLimitUsdt') ? <span className="mt-1 block text-sm text-red-700">{fieldError('autoApprovalLimitUsdt')}</span> : null}
       </label>
+      <fieldset className="space-y-3 border-t pt-4">
+        <legend className="mb-1 block text-sm font-medium">Display unit</legend>
+        <label className="block">
+          <span className="mb-1 block text-sm text-slate-600">English singular</span>
+          <input className="w-full" name="displayUnitEnSingular" defaultValue={settings.displayUnit.en.singular} maxLength={40} />
+          {fieldError('displayUnit.en.singular') ? <span className="mt-1 block text-sm text-red-700">{fieldError('displayUnit.en.singular')}</span> : null}
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-sm text-slate-600">English plural</span>
+          <input className="w-full" name="displayUnitEnPlural" defaultValue={settings.displayUnit.en.plural} maxLength={40} />
+          {fieldError('displayUnit.en.plural') ? <span className="mt-1 block text-sm text-red-700">{fieldError('displayUnit.en.plural')}</span> : null}
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-sm text-slate-600">Persian</span>
+          <input className="w-full" name="displayUnitFa" defaultValue={settings.displayUnit.fa} maxLength={40} dir="rtl" />
+          {fieldError('displayUnit.fa') ? <span className="mt-1 block text-sm text-red-700">{fieldError('displayUnit.fa')}</span> : null}
+        </label>
+      </fieldset>
       {errorField === undefined && errorMessage ? <p className="text-sm text-red-700">{errorMessage}</p> : null}
       <button type="submit" className="bg-blue-700 text-white hover:bg-blue-800">{labels.save}</button>
     </form>

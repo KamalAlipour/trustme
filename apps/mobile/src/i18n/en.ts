@@ -1,4 +1,6 @@
-export const en = {
+import type { DisplayUnit } from './display-unit';
+
+export const en = (unit: DisplayUnit) => ({
   appName: 'Trust Coupon',
   login: 'Log in',
   register: 'Register',
@@ -19,13 +21,13 @@ export const en = {
   phoneCodeDeliveryFailed: 'The code could not be sent — try again',
   verifyPhoneFirst: 'Verify your phone number first',
   myBarcode: 'My barcode',
-  myBarcodeInstructions: 'Show or scan this QR code to receive coupons.',
+  myBarcodeInstructions: `Show or scan this QR code to receive ${unit.en.plural}.`,
   shareBarcode: 'Share barcode',
   sharePayLink: 'Share payment link',
   myMarketers: 'My marketers',
   mySellers: 'My sellers',
   myCustomers: 'My customers',
-  earned: (coupons: string) => `earned: ${coupons} coupons`,
+  earned: (coupons: string) => `earned: ${coupons} ${unit.en.plural}`,
   barcodeShareUnavailable: 'Sharing is unavailable on this device.',
   pin: 'Four-digit PIN',
   pinIsSet: 'A four-digit PIN is set for this account.',
@@ -144,7 +146,7 @@ export const en = {
   verify: 'Verify',
   devices: 'Devices',
   devicesExplainer: 'These are the sessions currently signed in to your account.',
-  withdrawal: 'Withdraw credit (coupons)',
+  withdrawal: `Withdraw ${unit.en.plural} credit`,
   depositAddress: 'Deposit address',
   identityVerification: 'Identity verification',
   identityUnverified: 'Verify your identity to enable withdrawals.',
@@ -269,7 +271,7 @@ export const en = {
   addInstallment: 'Add installment',
   guarantors: 'Guarantors',
   submitRequest: 'Submit request',
-  loanTitle: (amount: string) => `Loan ${amount} coupons`,
+  loanTitle: (amount: string) => `Loan ${amount} ${unit.en.plural}`,
   loanStatus: (status: string, debt: string) => `Status: ${status} · Debt: ${debt}`,
   guaranteeStatus: (amount: string, status: string) => `Guarantee: ${amount} · ${status}`,
   approveGuarantee: 'Create code and approve guarantee',
@@ -312,7 +314,7 @@ export const en = {
   lockedGuarantee: 'Locked guarantee',
   debt: 'Debt',
   availableToWithdraw: 'Available to withdraw',
-  withdrawCreditExplainer: 'Cash out your coupon credit to an external address. Needs verified identity and approval.',
+  withdrawCreditExplainer: `Cash out your ${unit.en.plural} credit to an external address. Needs verified identity and approval.`,
   kycStatusLabel: 'Account status',
   kycUnverified: 'Not verified',
   kycPending: 'Under review',
@@ -345,8 +347,8 @@ export const en = {
   charityLimit: 'You can have at most three open requests for each charity. Complete an earlier request first.',
   approvedAmountTooHigh: 'The approved amount cannot exceed the requested amount.',
   decisionNoteRequired: 'Enter a decision note.',
-  charityLoan: (amount: string) => `Loan ${amount} coupons`,
-  couponBalance: (amount: string) => `${amount} coupon balance`,
+  charityLoan: (amount: string) => `Loan ${amount} ${unit.en.plural}`,
+  couponBalance: (amount: string) => `${amount} ${unit.en.singular} balance`,
   socialWorkerRequests: 'Social-worker requests',
   paidAmount: 'Paid amount',
   moreItems: 'More items',
@@ -363,9 +365,9 @@ export const en = {
   refundAlreadyPending: 'A refund request for this purchase is already under review.',
   refundExceedsAmount: 'The refund amount exceeds the refundable amount.',
   transactionNotRefundable: 'This transaction cannot be refunded.',
-  insufficientRefundBalance: 'The coupon balance is insufficient for this refund.',
+  insufficientRefundBalance: `The ${unit.en.singular} balance is insufficient for this refund.`,
   insufficientCharityBalance: 'The charity balance is insufficient.',
-  selectedLoan: (amount: string) => `Loan ${amount} coupons`,
+  selectedLoan: (amount: string) => `Loan ${amount} ${unit.en.plural}`,
   selected: 'Selected',
   unselected: 'Not selected',
   approvePayment: 'Approve and pay',
@@ -410,17 +412,17 @@ export const en = {
     cardTopUpTitle: 'Top up with card',
     cardTopUpAmount: 'USDT amount (optional)',
     cardTopUpButton: 'Continue with Transak',
-    cardTopUpExplainer: 'Card payment is handled by Transak, including its identity check and fee shown before you pay. USDT arrives at your deposit address and coupons are credited automatically after 12 confirmations. Not available to residents of Iran.',
+    cardTopUpExplainer: `Card payment is handled by Transak, including its identity check and fee shown before you pay. USDT arrives at your deposit address and ${unit.en.plural} are credited automatically after 12 confirmations. Not available to residents of Iran.`,
     publicRpcUnavailable: 'The operator has not configured a public RPC endpoint yet. In-app wallet top-ups are unavailable until it is configured.',
     insufficientUsdt: 'The wallet does not have enough USDT.',
     insufficientGas: 'The wallet does not have enough POL for gas.',
     confirmationNotice: 'On-chain confirmation takes a moment. This balance updates after the event is ingested.',
     payMerchantBarcode: 'Seller barcode',
     payMerchantRequired: 'Scan or enter the seller barcode first.',
-    payAmountCoupons: 'Amount in coupons (e.g. 12.5)',
+    payAmountCoupons: `Amount in ${unit.en.plural} (e.g. 12.5)`,
     identityRequiredForTether: 'Complete identity verification before depositing or withdrawing Tether.',
-    guaranteedBy: (name: string, amount: string) => `Guaranteed by ${name}: ${amount} coupons`,
-    payAmountRequired: 'Enter the amount in coupons.',
+    guaranteedBy: (name: string, amount: string) => `Guaranteed by ${name}: ${amount} ${unit.en.plural}`,
+    payAmountRequired: `Enter the amount in ${unit.en.plural}.`,
     payNow: 'Pay',
     payCodeShow: 'Give this code to the seller',
     payWaitingSeller: 'Waiting for the seller to enter the code.',
@@ -494,7 +496,7 @@ export const en = {
     ],
     closing: '“Real capital is not wealth to hoard; it is the service, goods, and value we provide to our community. Welcome to Trust Coupon.”',
   },
-} as const;
+} as const);
 
 type Widen<T> = T extends (...args: infer Args) => infer Result
   ? (...args: Args) => Widen<Result>
@@ -506,4 +508,4 @@ type Widen<T> = T extends (...args: infer Args) => infer Result
         ? { [Key in keyof T]: Widen<T[Key]> }
         : T;
 
-export type Translations = Widen<typeof en>;
+export type Translations = Widen<ReturnType<typeof en>>;
