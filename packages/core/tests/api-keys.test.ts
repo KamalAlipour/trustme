@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { beforeAll, afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminRole, ApiKeyScope, PrismaClient } from '@trustme/db';
-import { authenticateApiKey, createApiKey, revokeApiKey, scopeFromName, SCOPE_NAMES } from '../src/api-keys.js';
+import { authenticateApiKey, createApiKey, decryptApiSecret, revokeApiKey, scopeFromName, SCOPE_NAMES } from '../src/api-keys.js';
 
 const prisma = new PrismaClient();
 
@@ -43,5 +43,31 @@ describe('scoped API keys', () => {
     expect(await authenticateApiKey(prisma, expired.rawKey)).toBeNull();
     expect(await revokeApiKey(prisma, expired.apiKey.id)).toMatchObject({ id: expired.apiKey.id });
     expect(await revokeApiKey(prisma, expired.apiKey.id)).toMatchObject({ id: expired.apiKey.id });
+  });
+
+  it('encrypts and decrypts partner secrets without storing plaintext', async () => {
+    const admin = await prisma.adminUser.create({ data: { username: 'partner-keys-admin', passwordHash: 'hash', role: AdminRole.ADMIN } });
+    const partner = await prisma.user.create({ data: { barcodeId: 'partner-treasury' } });
+    const result = await createApiKey(prisma, {
+      name: 'Partner',
+      scopes: [ApiKeyScope.PARTNER_BUYERS],
+      createdById: admin.id,
+      partnerUserId: partner.id,
+      secretEncryptionKey: 'partner-secret-encryption-key-that-is-long-enough',
+    });
+    expect(result.rawSecret).toMatch(/^tcs_[A-Za-z0-9_-]{43}$/);
+    expect(result.apiKey.secretCiphertext).not.toBe(result.rawSecret);
+    expect(decryptApiSecret(result.apiKey.secretCiphertext!, 'partner-secret-encryption-key-that-is-long-enough')).toBe(result.rawSecret);
+  });
+
+  it('requires an encryption key for partner secrets', async () => {
+    const admin = await prisma.adminUser.create({ data: { username: 'partner-keys-no-secret-admin', passwordHash: 'hash', role: AdminRole.ADMIN } });
+    const partner = await prisma.user.create({ data: { barcodeId: 'partner-no-secret' } });
+    await expect(createApiKey(prisma, {
+      name: 'Partner',
+      scopes: [ApiKeyScope.PARTNER_BUYERS],
+      createdById: admin.id,
+      partnerUserId: partner.id,
+    })).rejects.toThrow('partner secret encryption key is required');
   });
 });

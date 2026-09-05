@@ -110,6 +110,15 @@ enum ApiKeyScope {
   READ_MARKET_AVERAGE
   READ_RESERVES
   WRITE_EXECUTE_TRANSFER_ON_BEHALF_OF_USER
+  PARTNER_BUYERS
+  PARTNER_DEPOSITS
+  PARTNER_CHECKOUT
+}
+
+enum PartnerDepositStatus {
+  PENDING
+  CREDITED
+  REJECTED
 }
 
 enum KycStatus {
@@ -317,6 +326,14 @@ model User {
   commissionPayoutsAttributed CommissionPayout[] @relation("PayoutSource")
   unloads              EscrowUnload[]
   escrowChainEvents    EscrowChainEvent[]
+  partnerApiKeys       ApiKey[]             @relation("PartnerTreasury")
+  partnerBuyers        PartnerBuyer[]       @relation("PartnerBuyerPartner")
+  partnerBuyerRecord   PartnerBuyer?        @relation("PartnerBuyerUser")
+  partnerDepositNotices PartnerDepositNotice[] @relation("PartnerDepositPartner")
+  buyerDepositNotices  PartnerDepositNotice[] @relation("PartnerDepositBuyer")
+  partnerCheckouts     PartnerCheckout[]    @relation("PartnerCheckoutPartner")
+  buyerCheckouts       PartnerCheckout[]    @relation("PartnerCheckoutBuyer")
+  sellerCheckouts      PartnerCheckout[]    @relation("PartnerCheckoutSeller")
 
   @@index([pinResetQuarantineUntil])
   @@index([isDemo])
@@ -732,6 +749,7 @@ model EscrowHold {
   escrowAccount        LedgerAccount @relation(fields: [escrowAccountId], references: [id])
   transaction          Transaction   @relation("EscrowHoldTransaction", fields: [transactionId], references: [id])
   releaseTransaction   Transaction?  @relation("EscrowRelease", fields: [releaseTransactionId], references: [id])
+  partnerCheckout      PartnerCheckout?
 
   @@index([senderId, status])
   @@index([expiresAt, status])
@@ -990,7 +1008,55 @@ model ApiKey {
   expiresAt   DateTime?
   revokedAt   DateTime?
   lastUsedAt  DateTime?
+  secretCiphertext String?
+  partnerUserId String? @db.Uuid
   createdBy   AdminUser    @relation(fields: [createdById], references: [id])
+  partnerUser User? @relation("PartnerTreasury", fields: [partnerUserId], references: [id])
 
   @@index([createdById])
+  @@index([partnerUserId])
+}
+
+model PartnerBuyer {
+  id           String   @id @default(uuid()) @db.Uuid
+  partnerUserId String   @db.Uuid
+  userId       String   @unique @db.Uuid
+  externalRef  String
+  createdAt    DateTime @default(now())
+  partner      User     @relation("PartnerBuyerPartner", fields: [partnerUserId], references: [id])
+  user         User     @relation("PartnerBuyerUser", fields: [userId], references: [id])
+
+  @@unique([partnerUserId, externalRef])
+}
+
+model PartnerDepositNotice {
+  id              String              @id @default(uuid()) @db.Uuid
+  partnerUserId   String              @db.Uuid
+  buyerUserId     String              @db.Uuid
+  txHash          String
+  status          PartnerDepositStatus @default(PENDING)
+  reason          String?
+  amountMicroUsdt BigInt?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  partner         User                @relation("PartnerDepositPartner", fields: [partnerUserId], references: [id])
+  buyer           User                @relation("PartnerDepositBuyer", fields: [buyerUserId], references: [id])
+
+  @@unique([partnerUserId, txHash])
+}
+
+model PartnerCheckout {
+  id            String      @id @default(uuid()) @db.Uuid
+  partnerUserId String      @db.Uuid
+  buyerUserId   String      @db.Uuid
+  sellerUserId  String      @db.Uuid
+  escrowHoldId  String      @unique @db.Uuid
+  externalRef   String
+  createdAt     DateTime    @default(now())
+  partner       User        @relation("PartnerCheckoutPartner", fields: [partnerUserId], references: [id])
+  buyer         User        @relation("PartnerCheckoutBuyer", fields: [buyerUserId], references: [id])
+  seller        User        @relation("PartnerCheckoutSeller", fields: [sellerUserId], references: [id])
+  escrowHold    EscrowHold @relation(fields: [escrowHoldId], references: [id])
+
+  @@unique([partnerUserId, externalRef])
 }

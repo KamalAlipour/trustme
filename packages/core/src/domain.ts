@@ -244,14 +244,21 @@ export async function releaseEscrow(
       });
       return { hold: null, error: wrongAttempts >= 5 ? 'escrow locked' : 'invalid escrow code' };
     }
+    const commission = await commissionLegs(tx, {
+      buyerId: hold.senderId,
+      sellerId: hold.recipientId,
+      sellerAccountId: input.recipientAccountId,
+      amountCoupons: hold.amountCoupons,
+    });
     const release = await postWithClient(tx, {
       type: TransactionType.ESCROW_RELEASE,
       externalRef: `escrow:${hold.id}:release`,
       userId: hold.recipientId,
       status: TransactionStatus.CONFIRMED,
       amountCoupons: hold.amountCoupons,
-      legs: [{ fromAccountId: hold.escrowAccountId, toAccountId: input.recipientAccountId, amount: hold.amountCoupons, asset: Asset.COUPON }],
+      legs: [{ fromAccountId: hold.escrowAccountId, toAccountId: input.recipientAccountId, amount: hold.amountCoupons, asset: Asset.COUPON }, ...commission.legs],
     });
+    await recordCommissionPayouts(tx, release.id, commission.payouts);
     await tx.escrowHold.update({ where: { id: hold.id }, data: { status: EscrowStatus.RELEASED, releaseTransactionId: release.id } });
     return { hold: await tx.escrowHold.findUniqueOrThrow({ where: { id: hold.id } }), error: null };
   });

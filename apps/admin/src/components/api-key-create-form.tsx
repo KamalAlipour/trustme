@@ -8,6 +8,9 @@ const scopes = [
   ['read:market_average', labels.apiKeyMarketAverage],
   ['read:reserves', labels.apiKeyReserves],
   ['write:execute_transfer_on_behalf_of_user', labels.apiKeyExecuteTransfer],
+  ['partner:buyers', labels.apiKeyPartnerBuyers],
+  ['partner:deposits', labels.apiKeyPartnerDeposits],
+  ['partner:checkout', labels.apiKeyPartnerCheckout],
 ] as const;
 
 export function ApiKeyCreateForm() {
@@ -34,13 +37,18 @@ export function ApiKeyCreateForm() {
           ))}
         </fieldset>
         <label className="block">
+          <span className="mb-1 block text-sm font-medium">{labels.apiKeyPartnerBarcode}</span>
+          <input className="w-full" name="partnerBarcodeId" maxLength={128} />
+          <span className="mt-1 block text-xs text-slate-500">{labels.apiKeyPartnerBarcodeDescription}</span>
+        </label>
+        <label className="block">
           <span className="mb-1 block text-sm font-medium">{labels.apiKeyOptionalExpiry}</span>
           <input className="w-full" type="date" name="expiresAt" />
         </label>
         {state.error ? <p role="alert" className="text-sm text-red-700">{state.error}</p> : null}
         <button type="submit" disabled={pending} className="bg-blue-700 text-white hover:bg-blue-800">{pending ? '…' : labels.createApiKey}</button>
       </form>
-      {state.rawKey ? <div className="rounded border-2 border-amber-400 bg-amber-50 p-4" role="status"><p className="font-semibold">{labels.apiKeyOneTimeWarning}</p><code className="mt-2 block break-all select-all">{state.rawKey}</code></div> : null}
+      {state.rawKey ? <div className="rounded border-2 border-amber-400 bg-amber-50 p-4" role="status"><p className="font-semibold">{labels.apiKeyOneTimeWarning}</p><p className="mt-2 text-sm">{labels.apiKeyRawKey}</p><code className="block break-all select-all">{state.rawKey}</code>{state.rawSecret ? <><p className="mt-2 text-sm">{labels.apiKeyRawSecret}</p><code className="block break-all select-all">{state.rawSecret}</code></> : null}</div> : null}
     </div>
   );
 }

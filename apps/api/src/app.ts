@@ -1,5 +1,6 @@
 import { timingSafeEqual } from 'node:crypto';
 import express, { type NextFunction, type Request, type Response } from 'express';
+import { JsonRpcProvider } from 'ethers';
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import { pino } from 'pino';
@@ -129,6 +130,7 @@ export type ApiDependencies = {
   verifyAppleIdToken?: import('./social-auth.js').MemberIdTokenVerifier;
   checkShahkarMatch?: typeof import('./shahkar.js').checkShahkarMatch;
   checkIbanMatch?: typeof import('./shahkar.js').checkIbanMatch;
+  partnerChainReader?: import('./partner-router.js').ChainReader;
   transakClient?: TransakClient;
 };
 
@@ -200,12 +202,26 @@ export function createApp(dependencies: ApiDependencies): express.Express {
       : undefined
   );
   app.use(helmet());
-  app.use(express.json({ limit: config.bodyLimit }));
+  app.use(express.json({
+    limit: config.bodyLimit,
+    verify: (request, _response, buffer) => {
+      (request as Request & { rawBody?: Buffer }).rawBody = Buffer.from(buffer);
+    },
+  }));
   app.use(pinoHttp({ logger }));
   app.use('/v1', rateLimit({ windowMs: config.rateLimitWindowMs, limit: config.rateLimitMax, standardHeaders: true, legacyHeaders: false }));
   useConfiguredCors(app, config.allowedOrigins);
   app.use('/v1/public', createPublicRouter(prisma));
-  app.use('/v1/partner', createPartnerRouter(prisma));
+  const chain = (dependencies.partnerChainReader ?? new JsonRpcProvider(config.polygonRpcUrl)) as unknown as import('./partner-router.js').ChainReader;
+  const partnerDeps = {
+    provisioning: { depositXpub: config.depositXpub },
+    chain,
+    confirmations: config.confirmations,
+    usdtContractAddress: config.usdtContractAddress,
+    ...(config.partnerSecretKey === undefined ? {} : { secretEncryptionKey: config.partnerSecretKey }),
+  };
+  app.use('/v1/partner', createPartnerRouter(prisma, partnerDeps));
+  app.use('/api/v1', createPartnerRouter(prisma, partnerDeps));
   const logEmailCode = dependencies.logEmailCode ?? ((email: string, code: string) => logger.info({ email }, `member email code ${code}`));
   app.use('/v1/auth', createMemberAuthRouter({
     config,

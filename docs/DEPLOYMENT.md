@@ -440,3 +440,10 @@ activation. It atomically activates the staged result at
 `TRUSTME_WEB_PREVIOUS_RETENTION` override the target and number of retained
 copies. To roll back, move the active root aside and move the desired retained
 `.prev-*` directory into its place.
+
+## Partner gateway environment
+
+| Variable | Purpose |
+|---|---|
+| `CONFIRMATIONS` | Polygon confirmations required before partner deposit crediting (default `12`). |
+| `PARTNER_SECRET_KEY` | At least 32 characters; encrypts partner HMAC secrets at rest. Keep server-side only. |

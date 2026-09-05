@@ -25,6 +25,8 @@ const config = {
   failoverMarkerPath: '/tmp/trustme-marker',
   mediaStorageDir: '/tmp/trustme-media',
   allowedOrigins: ['https://app-trustcoupon.komasi.as'],
+  partnerSecretKey: undefined,
+  confirmations: 12,
 } as ApiConfig;
 
 const app = createApp({

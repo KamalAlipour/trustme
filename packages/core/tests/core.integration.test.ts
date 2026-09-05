@@ -71,13 +71,70 @@ beforeAll(async () => {
   await prisma.$connect();
 });
 beforeEach(async () => {
-  await prisma.$executeRawUnsafe('TRUNCATE TABLE "ApiKey", "CommissionPayout", "EscrowChainEvent", "EscrowUnload", "EscrowSettlement", "PayCode", "EscrowBalance", "MemberWallet", "MediaAsset", "RefundRequest", "AidRequest", "CharityAgent", "AdminAuditLog", "AdminUser", "Withdrawal", "EscrowHold", "EmailVerification", "MemberDevice", "Contact", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User" CASCADE');
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "ApiKey", "CommissionPayout", "EscrowChainEvent", "EscrowUnload", "EscrowSettlement", "PayCode", "EscrowBalance", "MemberWallet", "MediaAsset", "RefundRequest", "AidRequest", "CharityAgent", "Charity", "AdminAuditLog", "AdminUser", "Withdrawal", "EscrowHold", "EmailVerification", "MemberDevice", "Contact", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User" CASCADE');
 });
 afterAll(async () => {
   await prisma.$disconnect();
 });
 
 describe('money and ledger domain', () => {
+  it('releases escrow with buyer-marketer commission and keeps zero-rate sellers unchanged', async () => {
+    const fixtureAccounts = await fixture(3);
+    const users = await prisma.user.findMany({ orderBy: { phoneNumber: 'asc' }, take: 3 });
+    const [buyer, seller, partner] = users;
+    await prisma.user.update({ where: { id: buyer!.id }, data: { marketerId: partner!.id } });
+    await prisma.user.update({ where: { id: seller!.id }, data: { commissionRateBps: 300 } });
+    await postDeposit(prisma, {
+      externalRef: 'deposit:escrow-commission:0',
+      userId: buyer!.id,
+      userCouponAccountId: fixtureAccounts.users[0]!,
+      externalOnchainAccountId: fixtureAccounts.external,
+      vaultAccountId: fixtureAccounts.vault,
+      issuanceAccountId: fixtureAccounts.issuance,
+      amountMicroUsdt: 20_000n * 10_000n,
+    });
+    const hold = await createEscrowHold(prisma, {
+      senderId: buyer!.id,
+      recipientId: seller!.id,
+      senderAccountId: fixtureAccounts.users[0]!,
+      escrowAccountId: fixtureAccounts.escrows[0]!,
+      amountCoupons: 1_000n,
+      code: '1234',
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    const beforeRelease = await prisma.ledgerAccount.findMany({ where: { asset: Asset.COUPON }, select: { id: true, balance: true } });
+    const released = await releaseEscrow(prisma, {
+      holdId: hold.id,
+      recipientAccountId: fixtureAccounts.users[1]!,
+      code: '1234',
+    });
+    expect(released.status).toBe('RELEASED');
+    expect(await prisma.ledgerAccount.findUniqueOrThrow({ where: { id: fixtureAccounts.users[1]! } })).toMatchObject({ balance: 970n });
+    expect(await prisma.ledgerAccount.findUniqueOrThrow({ where: { id: fixtureAccounts.users[2]! } })).toMatchObject({ balance: 10n });
+    expect(await prisma.ledgerAccount.findUniqueOrThrow({ where: { id: fixtureAccounts.couponFees } })).toMatchObject({ balance: 20n });
+    const payouts = await prisma.commissionPayout.findMany({ where: { transactionId: released.releaseTransactionId! } });
+    expect(payouts).toEqual([expect.objectContaining({ recipientId: partner!.id, role: 'BUYER_MARKETER', amount: 10n })]);
+    const afterRelease = await prisma.ledgerAccount.findMany({ where: { asset: Asset.COUPON }, select: { id: true, balance: true } });
+    const beforeBalances = new Map(beforeRelease.map((account) => [account.id, account.balance]));
+    expect(afterRelease.reduce((sum, account) => sum + account.balance - (beforeBalances.get(account.id) ?? 0n), 0n)).toBe(0n);
+
+    const zeroRate = await prisma.user.create({ data: { barcodeId: 'zero-rate-seller' } });
+    const zeroAccount = await account(AccountType.USER_COUPON, Asset.COUPON, zeroRate.id);
+    await prisma.user.update({ where: { id: zeroRate.id }, data: { commissionRateBps: 0 } });
+    const secondHold = await createEscrowHold(prisma, {
+      senderId: buyer!.id,
+      recipientId: zeroRate.id,
+      senderAccountId: fixtureAccounts.users[0]!,
+      escrowAccountId: fixtureAccounts.escrows[0]!,
+      amountCoupons: 100n,
+      code: '2345',
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    const secondRelease = await releaseEscrow(prisma, { holdId: secondHold.id, recipientAccountId: zeroAccount.id, code: '2345' });
+    expect(await prisma.ledgerAccount.findUniqueOrThrow({ where: { id: zeroAccount.id } })).toMatchObject({ balance: 100n });
+    expect(await prisma.ledgerEntry.count({ where: { transactionId: secondRelease.releaseTransactionId! } })).toBe(1);
+  });
+
   it('posts seller commission legs atomically with a coupon transfer', async () => {
     const fixtureAccounts = await fixture(4);
     const users = await prisma.user.findMany({ orderBy: { phoneNumber: 'asc' }, take: 4 });
