@@ -118,7 +118,7 @@ export type ApiDependencies = {
   config: ApiConfig;
   prisma: PrismaClient;
   queue: QueueLike;
-  smsQueue?: QueueLike;
+  smsQueue: QueueLike;
   redis: RedisLike;
   chainProvider?: AdminChainProvider;
   emailSender?: import('./member-auth.js').EmailSender;
@@ -158,7 +158,6 @@ function serializeUser(user: { id: string; phoneNumber: string | null; barcodeId
 
 export function createApp(dependencies: ApiDependencies): express.Express {
   const { config, prisma, queue, redis } = dependencies;
-  const smsQueue = dependencies.smsQueue ?? queue;
   const logger = pino({
     redact: [
       'code',
@@ -208,7 +207,7 @@ export function createApp(dependencies: ApiDependencies): express.Express {
     config,
     prisma,
     queue,
-    smsQueue,
+    smsQueue: dependencies.smsQueue,
     ...(dependencies.emailSender === undefined ? {} : { emailSender: dependencies.emailSender }),
     logEmailCode,
     ...(dependencies.logSmsCode === undefined ? {} : { logSmsCode: dependencies.logSmsCode }),

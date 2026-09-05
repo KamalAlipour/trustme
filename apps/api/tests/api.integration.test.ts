@@ -91,11 +91,13 @@ function appFixture(
   const emailCodes = new Map<string, string>();
   const smsCodes = new Map<string, string>();
   const queue = { add: async (...args: unknown[]) => { calls.push(args); return {}; } } as unknown as ApiDependencies['queue'];
+  const smsQueue = { add: async (...args: unknown[]) => { calls.push(args); return {}; } } as unknown as ApiDependencies['smsQueue'];
   const redis = { ping: async () => 'PONG' };
   const app = createApp({
     config: { ...config, ...configOverride },
     prisma,
     queue: queueOverride ?? queue,
+    smsQueue,
     redis,
     chainProvider,
     ...(captureEmailCode ? { logEmailCode: (email: string, code: string) => emailCodes.set(email, code) } : {}),
@@ -1652,7 +1654,13 @@ describe('member API', () => {
   it('reports readiness against the real isolated Redis service', async () => {
     const redis = new Redis(config.redisUrl);
     try {
-      const app = createApp({ config, prisma, queue: { add: async () => ({}) } as unknown as ApiDependencies['queue'], redis });
+      const app = createApp({
+        config,
+        prisma,
+        queue: { add: async () => ({}) } as unknown as ApiDependencies['queue'],
+        smsQueue: { add: async () => ({}) } as unknown as ApiDependencies['smsQueue'],
+        redis,
+      });
       const result = await request(app).get('/readyz');
       expect(result.status).toBe(200);
       expect(result.body.status).toBe('ready');

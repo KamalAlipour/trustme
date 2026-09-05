@@ -117,6 +117,10 @@ export async function startWorker(config: WorkerConfig = loadWorkerConfig()): Pr
     async (job) => {
       const row = await prisma.phoneVerification.findUnique({ where: { id: String(job.data.phoneVerificationId) } });
       if (row === null || row.consumedAt !== null || row.expiresAt <= new Date() || row.deliveryStatus !== 'PENDING') return;
+      if (config.smsDelivery !== 'relay') {
+        await prisma.phoneVerification.update({ where: { id: row.id }, data: { deliveryStatus: 'FAILED', deliveryError: 'relay_not_configured' } });
+        throw new UnrecoverableError('SMS relay is not configured');
+      }
       const result = await sendOtp(config, { recipient: String(job.data.phone), code: String(job.data.code) });
       if (result.kind === 'sent') {
         await prisma.phoneVerification.update({ where: { id: row.id }, data: { deliveryStatus: 'SENT', relayMessageId: result.messageId } });
