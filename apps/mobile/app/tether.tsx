@@ -78,6 +78,7 @@ export default function Tether() {
   const [revealedWords, setRevealedWords] = useState<string[] | null>(null);
   const [walletConnectSession, setWalletConnectSession] = useState<WalletConnectSession | null>(null);
   const [topUpAmount, setTopUpAmount] = useState('');
+  const [cardAmount, setCardAmount] = useState('');
   const [unloadAmount, setUnloadAmount] = useState('');
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [destination, setDestination] = useState('');
@@ -406,7 +407,7 @@ export default function Tether() {
     const depositAddress = moneyBalance.data?.depositAddress;
     const userId = member.data?.id;
     if (apiKey === null || apiKey === undefined || depositAddress === null || depositAddress === undefined || userId === undefined) return;
-    const url = onramperWidgetUrl({ apiKey, depositAddress, language, userId, ...(topUpAmount ? { amountUsdt: topUpAmount } : {}) });
+    const url = onramperWidgetUrl({ apiKey, depositAddress, language, userId, ...(cardAmount ? { amountUsdt: cardAmount } : {}) });
     if (Platform.OS === 'web') {
       window.open(url, '_blank');
       return;
@@ -455,7 +456,7 @@ export default function Tether() {
 
       {!identityRequired && config.data?.onramperApiKey && moneyBalance.data?.depositAddress && member.data?.id ? <View style={styles.card}>
         <Text style={styles.heading}>{t.escrow.onramperTopUp}</Text>
-        <TextInput value={topUpAmount} onChangeText={setTopUpAmount} placeholder={t.escrow.onramperAmount} style={styles.input} keyboardType="decimal-pad" />
+        <TextInput value={cardAmount} onChangeText={setCardAmount} placeholder={t.escrow.onramperAmount} style={styles.input} keyboardType="decimal-pad" />
         <Text style={styles.muted}>{t.escrow.onramperExplainer}</Text>
         <Pressable onPress={() => void openOnramper()} style={styles.button}><Text style={styles.buttonText}>{t.escrow.onramperButton}</Text></Pressable>
       </View> : null}
