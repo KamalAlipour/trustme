@@ -46,6 +46,7 @@ import { createMemberRouter } from './member-router.js';
 import { createPublicRouter } from './public-router.js';
 import { createPartnerRouter } from './partner-router.js';
 import { provisionUser } from './user-provisioning.js';
+import { createTransakClient, type TransakClient } from './transak.js';
 
 export { HttpError } from './http-error.js';
 
@@ -130,6 +131,7 @@ export type ApiDependencies = {
   checkShahkarMatch?: typeof import('./shahkar.js').checkShahkarMatch;
   checkIbanMatch?: typeof import('./shahkar.js').checkIbanMatch;
   partnerChainReader?: import('./partner-router.js').ChainReader;
+  transakClient?: TransakClient;
 };
 
 function serviceTokenMatches(expected: string, provided: string | undefined): boolean {
@@ -189,6 +191,16 @@ export function createApp(dependencies: ApiDependencies): express.Express {
     ],
   });
   const app = express();
+  const transakClient = dependencies.transakClient ?? (
+    config.transakApiKey !== undefined && config.transakApiSecret !== undefined
+      ? createTransakClient({
+        apiKey: config.transakApiKey,
+        apiSecret: config.transakApiSecret,
+        environment: config.transakEnvironment,
+        referrerDomain: config.transakReferrerDomain,
+      })
+      : undefined
+  );
   app.use(helmet());
   app.use(express.json({
     limit: config.bodyLimit,
@@ -229,6 +241,7 @@ export function createApp(dependencies: ApiDependencies): express.Express {
     ...(dependencies.logSmsCode === undefined ? {} : { logSmsCode: dependencies.logSmsCode }),
     ...(dependencies.checkShahkarMatch === undefined ? {} : { checkShahkarMatch: dependencies.checkShahkarMatch }),
     ...(dependencies.checkIbanMatch === undefined ? {} : { checkIbanMatch: dependencies.checkIbanMatch }),
+    ...(transakClient === undefined ? {} : { transakClient }),
   }));
   app.use('/v1/member', requireMember(config.memberJwtSecret, prisma), createMemberSecurityRouter({
     config,

@@ -360,7 +360,7 @@ export const openapiDocument = {
               'application/json': {
                 schema: {
                   type: 'object',
-                  required: ['contractAddress', 'chainId', 'usdtAddress', 'rpcUrl', 'decimals', 'walletConnectProjectId', 'web3AuthClientId', 'enabled'],
+                  required: ['contractAddress', 'chainId', 'usdtAddress', 'rpcUrl', 'decimals', 'walletConnectProjectId', 'web3AuthClientId', 'cardTopUpEnabled', 'enabled'],
                   properties: {
                     contractAddress: { type: 'string', nullable: true },
                     chainId: { type: 'integer' },
@@ -369,12 +369,40 @@ export const openapiDocument = {
                     decimals: { type: 'integer' },
                     walletConnectProjectId: { type: 'string', nullable: true },
                     web3AuthClientId: { type: 'string', nullable: true },
+                    cardTopUpEnabled: { type: 'boolean' },
                     enabled: { type: 'boolean' },
                   },
                 },
               },
             },
           },
+        },
+      },
+    },
+    '/v1/me/card-topup/session': {
+      post: {
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: { amountUsdt: { type: 'string', pattern: '^(?:0|[1-9][0-9]*)(?:\\.[0-9]{1,2})?$' } },
+                example: { amountUsdt: '25.00' },
+              },
+            },
+          },
+        },
+        responses: {
+          '200': {
+            description: 'Single-use Transak widget session',
+            content: { 'application/json': { schema: { type: 'object', required: ['url', 'expiresAt'], properties: { url: { type: 'string', format: 'uri' }, expiresAt: { type: 'string', format: 'date-time' } } } } },
+          },
+          '400': { description: 'Invalid amount' },
+          '403': { description: 'Identity verification required' },
+          '409': { description: 'Deposit address is unavailable' },
+          '502': { description: 'Transak card top-up is unavailable' },
+          '503': { description: 'Transak card top-up is not configured' },
         },
       },
     },

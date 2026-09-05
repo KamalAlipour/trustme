@@ -44,6 +44,10 @@ const config = {
   escrowContractAddress: undefined,
   walletConnectProjectId: undefined,
   web3AuthClientId: undefined,
+  transakApiKey: undefined,
+  transakApiSecret: undefined,
+  transakEnvironment: 'staging' as const,
+  transakReferrerDomain: 'app-trustcoupon.komasi.as',
   hotWalletAddress: getAddress(`0x${'aa'.repeat(20)}`),
   port: 3100,
   bodyLimit: '32kb',
@@ -88,6 +92,7 @@ function appFixture(
   configOverride: Partial<typeof config> = {},
   captureEmailCode = true,
   socialOverrides: Pick<ApiDependencies, 'verifyGoogleIdToken' | 'verifyAppleIdToken' | 'checkShahkarMatch' | 'checkIbanMatch'> = {},
+  transakClient: ApiDependencies['transakClient'] = undefined,
 ) {
   const calls: unknown[][] = [];
   const emailCodes = new Map<string, string>();
@@ -104,6 +109,7 @@ function appFixture(
     chainProvider,
     ...(captureEmailCode ? { logEmailCode: (email: string, code: string) => emailCodes.set(email, code) } : {}),
     logSmsCode: (phone: string, code: string) => smsCodes.set(phone, code),
+    ...(transakClient === undefined ? {} : { transakClient }),
     ...socialOverrides,
   });
   return { app, calls, emailCodes, smsCodes };
@@ -331,15 +337,44 @@ describe('member API', () => {
     const accessToken = await memberToken(app, '+15550000001');
     const configResult = await request(app).get('/v1/me/escrow/config').set('Authorization', `Bearer ${accessToken}`);
     expect(configResult.status).toBe(200);
-    expect(configResult.body).toMatchObject({ enabled: false, contractAddress: null, chainId: 137, decimals: 6, rpcUrl: null });
+    expect(configResult.body).toMatchObject({ enabled: false, contractAddress: null, chainId: 137, decimals: 6, rpcUrl: null, cardTopUpEnabled: false });
     expect(configResult.body).not.toHaveProperty('polygonRpcUrl');
     expect(JSON.stringify(configResult.body)).not.toContain(config.polygonRpcUrl);
+    const configuredApp = appFixture(undefined, undefined, { transakApiKey: 'test-transak-key', transakApiSecret: 'test-transak-secret' }).app;
+    const configuredResult = await request(configuredApp).get('/v1/me/escrow/config').set('Authorization', `Bearer ${accessToken}`);
+    expect(configuredResult.status).toBe(200);
+    expect(configuredResult.body.cardTopUpEnabled).toBe(true);
     const walletResult = await request(app).post('/v1/me/wallets').set('Authorization', `Bearer ${accessToken}`).send({
       address: `0x${'11'.repeat(20)}`,
       kind: 'EXTERNAL',
     });
     expect(walletResult.status).toBe(503);
     expect(walletResult.body).toEqual({ error: 'escrow_not_configured' });
+  });
+
+  it('creates Transak sessions only for verified members', async () => {
+    const { app } = appFixture();
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000092', barcodeId: 'transak-session-member' });
+    const accessToken = await memberToken(app, '+1555000092');
+    expect((await request(app).post('/v1/me/card-topup/session').set('Authorization', `Bearer ${accessToken}`).send({})).status).toBe(503);
+
+    const createWidgetSession = vi.fn(async () => ({
+      url: 'https://global-stg.transak.com/?sessionId=test-session',
+      expiresAt: '2026-01-15T10:35:00.000Z',
+    }));
+    const configuredApp = appFixture(undefined, undefined, { transakApiKey: 'test-transak-key', transakApiSecret: 'test-transak-secret' }, true, {}, { createWidgetSession }).app;
+    const unverified = await request(configuredApp).post('/v1/me/card-topup/session').set('Authorization', `Bearer ${accessToken}`).send({});
+    expect(unverified.status).toBe(403);
+    expect(unverified.body.error).toBe('identity_verification_required');
+    const user = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000092' } });
+    await prisma.user.update({ where: { id: user.id }, data: { identityVerificationStatus: 'VERIFIED', identityVerifiedAt: new Date() } });
+
+    const invalid = await request(configuredApp).post('/v1/me/card-topup/session').set('Authorization', `Bearer ${accessToken}`).send({ amountUsdt: '1.234' });
+    expect(invalid.status).toBe(400);
+    const session = await request(configuredApp).post('/v1/me/card-topup/session').set('Authorization', `Bearer ${accessToken}`).send({ amountUsdt: '12.50' });
+    expect(session.status).toBe(200);
+    expect(session.body).toEqual({ url: 'https://global-stg.transak.com/?sessionId=test-session', expiresAt: '2026-01-15T10:35:00.000Z' });
+    expect(createWidgetSession).toHaveBeenCalledWith({ walletAddress: expect.any(String), userId: user.id, amountUsdt: '12.50' });
   });
 
   it('requires verified identity for wallet registration and escrow unloads regardless of country', async () => {
