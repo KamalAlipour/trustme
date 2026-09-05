@@ -189,6 +189,7 @@ export function serializeMember(user: {
   country: string | null;
   email: string | null;
   emailVerifiedAt: Date | null;
+  phoneVerifiedAt: Date | null;
   kycStatus: string;
   activeGuaranteeCount: number;
   identityVerificationStatus: string;
@@ -201,6 +202,7 @@ export function serializeMember(user: {
     phone: maskPhone(user.phoneNumber),
     email: maskEmail(user.email),
     emailVerified: user.emailVerifiedAt !== null,
+    phoneVerified: user.phoneVerifiedAt !== null,
     country: user.country,
     kycStatus: user.kycStatus,
     activeGuaranteeCount: user.activeGuaranteeCount,

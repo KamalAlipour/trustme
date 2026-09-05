@@ -18,6 +18,7 @@ export const apiConfigSchema = z.object({
   memberJwtTtlSeconds: integer.default(900),
   memberRefreshTtlDays: integer.default(60),
   emailDelivery: z.enum(['none', 'log', 'smtp']).default('none'),
+  smsDelivery: z.enum(['none', 'log', 'relay']).default('none'),
   requireEmailVerification: boolean.default(false),
   pinResetQuarantineHours: integer.default(72),
   smtpHost: z.string().optional(),
@@ -25,6 +26,9 @@ export const apiConfigSchema = z.object({
   smtpUser: z.string().optional(),
   smtpPassword: z.string().optional(),
   smtpFrom: z.string().optional(),
+  smsRelayUrl: z.string().url().default('https://id.hktp.ir'),
+  smsRelayKey: z.string().optional(),
+  smsRelayOtpPattern: z.string().default('61qgtphdqgtixtg'),
   nodeEnv: z.string().default('development'),
   polygonRpcUrl: z.string().url(),
   escrowPublicRpcUrl: z.string().url().optional(),
@@ -64,6 +68,7 @@ export function loadApiConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     memberJwtTtlSeconds: env.MEMBER_JWT_TTL_SECONDS,
     memberRefreshTtlDays: env.MEMBER_REFRESH_TTL_DAYS,
     emailDelivery: env.EMAIL_DELIVERY,
+    smsDelivery: env.SMS_DELIVERY,
     requireEmailVerification: env.REQUIRE_EMAIL_VERIFICATION,
     pinResetQuarantineHours: env.PIN_RESET_QUARANTINE_HOURS,
     smtpHost: env.SMTP_HOST,
@@ -71,6 +76,9 @@ export function loadApiConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     smtpUser: env.SMTP_USER,
     smtpPassword: env.SMTP_PASSWORD,
     smtpFrom: env.SMTP_FROM,
+    smsRelayUrl: env.SMS_RELAY_URL,
+    smsRelayKey: env.SMS_RELAY_KEY || undefined,
+    smsRelayOtpPattern: env.SMS_RELAY_OTP_PATTERN,
     nodeEnv: env.NODE_ENV,
     polygonRpcUrl: env.POLYGON_RPC_URL,
     escrowPublicRpcUrl: env.ESCROW_PUBLIC_RPC_URL || undefined,
@@ -97,6 +105,12 @@ export function loadApiConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
   });
   if (config.nodeEnv === 'production' && config.emailDelivery === 'log') {
     throw new Error('EMAIL_DELIVERY=log is not allowed in production');
+  }
+  if (config.nodeEnv === 'production' && config.smsDelivery === 'log') {
+    throw new Error('SMS_DELIVERY=log is not allowed in production');
+  }
+  if (config.smsDelivery === 'relay' && config.smsRelayKey === undefined) {
+    throw new Error('SMS_RELAY_KEY is required when SMS_DELIVERY=relay');
   }
   if (config.emailDelivery === 'smtp' && (
     config.smtpHost === undefined ||

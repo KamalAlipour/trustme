@@ -26,6 +26,10 @@ const config = {
   memberJwtTtlSeconds: 900,
   memberRefreshTtlDays: 60,
   emailDelivery: 'log' as const,
+  smsDelivery: 'log' as const,
+  smsRelayUrl: 'https://id.hktp.ir',
+  smsRelayKey: undefined,
+  smsRelayOtpPattern: '61qgtphdqgtixtg',
   requireEmailVerification: false,
   pinResetQuarantineHours: 72,
   smtpHost: undefined,
@@ -85,6 +89,7 @@ function appFixture(
 ) {
   const calls: unknown[][] = [];
   const emailCodes = new Map<string, string>();
+  const smsCodes = new Map<string, string>();
   const queue = { add: async (...args: unknown[]) => { calls.push(args); return {}; } } as unknown as ApiDependencies['queue'];
   const redis = { ping: async () => 'PONG' };
   const app = createApp({
@@ -94,9 +99,10 @@ function appFixture(
     redis,
     chainProvider,
     ...(captureEmailCode ? { logEmailCode: (email: string, code: string) => emailCodes.set(email, code) } : {}),
+    logSmsCode: (phone: string, code: string) => smsCodes.set(phone, code),
     ...socialOverrides,
   });
-  return { app, calls, emailCodes };
+  return { app, calls, emailCodes, smsCodes };
 }
 
 async function createAdmin(role: AdminRole, password = 'correct-password', username = `${role.toLowerCase()}@example.com`) {
@@ -111,9 +117,9 @@ async function adminToken(app: ReturnType<typeof appFixture>['app'], username: s
   return result.body.token as string;
 }
 
-async function memberToken(app: ReturnType<typeof appFixture>['app'], phone: string, displayName?: string) {
+async function memberToken(app: ReturnType<typeof appFixture>['app'], phone: string, displayName?: string, verifyPhone = false) {
   const user = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: phone } });
-  await prisma.user.update({ where: { id: user.id }, data: { pinHash: await bcrypt.hash('2468', 12), biometricEnrolledAt: new Date(), securitySetupCompletedAt: new Date(), ...(phone.startsWith('09') ? { country: 'IR' } : {}), ...(displayName === undefined ? {} : { displayName }) } });
+  await prisma.user.update({ where: { id: user.id }, data: { pinHash: await bcrypt.hash('2468', 12), biometricEnrolledAt: new Date(), securitySetupCompletedAt: new Date(), ...(phone.startsWith('09') ? { country: 'IR' } : {}), ...(verifyPhone ? { phoneVerifiedAt: new Date() } : {}), ...(displayName === undefined ? {} : { displayName }) } });
   const login = await request(app).post('/v1/auth/login').send({ phone, pin: '2468' });
   expect(login.status).toBe(200);
   return login.body.tokens.accessToken as string;
@@ -225,6 +231,65 @@ describe('member API', () => {
     expect(result.body.error).toBe('commission rate is below the floor');
   });
 
+  it('issues, rate-limits, and verifies an Iranian phone code', async () => {
+    const { app, smsCodes } = appFixture();
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000410', barcodeId: 'phone-verify-member' });
+    const accessToken = await memberToken(app, '+1555000410');
+    const saved = await request(app).post('/v1/me/phone').set('Authorization', `Bearer ${accessToken}`).send({ phone: '09000000410', pin: '2468' });
+    expect(saved.status).toBe(202);
+    expect(smsCodes.get('09000000410')).toMatch(/^\d{6}$/);
+    expect((await prisma.phoneVerification.findFirstOrThrow({ where: { phone: '09000000410' } })).deliveryStatus).toBe('SENT');
+    expect(saved.body.phoneVerified).toBe(false);
+    const wrong = await request(app).post('/v1/me/phone/verify').set('Authorization', `Bearer ${accessToken}`).send({ code: '000000' });
+    expect(wrong.status).toBe(401);
+    const limited = await request(app).post('/v1/me/phone/resend').set('Authorization', `Bearer ${accessToken}`).send();
+    expect(limited.status).toBe(429);
+    const verified = await request(app).post('/v1/me/phone/verify').set('Authorization', `Bearer ${accessToken}`).send({ code: smsCodes.get('09000000410') });
+    expect(verified.status).toBe(200);
+    expect(verified.body.phoneVerified).toBe(true);
+    expect((await request(app).get('/v1/me').set('Authorization', `Bearer ${accessToken}`)).body.phoneVerified).toBe(true);
+  });
+
+  it('keeps non-Iranian phone saves synchronous without issuing an SMS code', async () => {
+    const { app, smsCodes } = appFixture();
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000411', barcodeId: 'phone-non-iranian' });
+    const accessToken = await memberToken(app, '+1555000411');
+    const result = await request(app).post('/v1/me/phone').set('Authorization', `Bearer ${accessToken}`).send({ phone: '+1555000412', pin: '2468' });
+    expect(result.status).toBe(200);
+    expect(smsCodes.size).toBe(0);
+    expect(await prisma.phoneVerification.count()).toBe(0);
+  });
+
+  it('enqueues relay delivery without storing the raw code in the database', async () => {
+    const { app, calls } = appFixture(undefined, undefined, { smsDelivery: 'relay', smsRelayKey: 'test-relay-key' });
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000413', barcodeId: 'phone-relay-member' });
+    const accessToken = await memberToken(app, '+1555000413');
+    expect((await request(app).post('/v1/me/phone').set('Authorization', `Bearer ${accessToken}`).send({ phone: '09000000413', pin: '2468' })).status).toBe(202);
+    const row = await prisma.phoneVerification.findFirstOrThrow({ where: { phone: '09000000413' } });
+    const job = calls.find((args) => args[0] === 'send-otp');
+    expect(job?.[2]).toMatchObject({ jobId: row.id, attempts: 3, removeOnFail: true, removeOnComplete: true, backoff: { type: 'sms-relay' } });
+    expect(job?.[1]).toMatchObject({ phoneVerificationId: row.id, phone: '09000000413' });
+    expect(row.codeHash).not.toMatch(/^\d{6}$/);
+  });
+
+  it('consumes a phone verification after five wrong codes and rejects expired codes', async () => {
+    const { app, smsCodes } = appFixture();
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000414', barcodeId: 'phone-attempts-member' });
+    const accessToken = await memberToken(app, '+1555000414');
+    expect((await request(app).post('/v1/me/phone').set('Authorization', `Bearer ${accessToken}`).send({ phone: '09000000414', pin: '2468' })).status).toBe(202);
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      expect((await request(app).post('/v1/me/phone/verify').set('Authorization', `Bearer ${accessToken}`).send({ code: '000000' })).status).toBe(401);
+    }
+    const row = await prisma.phoneVerification.findFirstOrThrow({ where: { phone: '09000000414' } });
+    expect(row.consumedAt).not.toBeNull();
+
+    await prisma.phoneVerification.update({ where: { id: row.id }, data: { createdAt: new Date(Date.now() - 61 * 60_000) } });
+    await request(app).post('/v1/me/phone').set('Authorization', `Bearer ${accessToken}`).send({ phone: '09000000414', pin: '2468' });
+    const expired = await prisma.phoneVerification.findFirstOrThrow({ where: { phone: '09000000414', consumedAt: null } });
+    await prisma.phoneVerification.update({ where: { id: expired.id }, data: { expiresAt: new Date(Date.now() - 1_000) } });
+    expect((await request(app).post('/v1/me/phone/verify').set('Authorization', `Bearer ${accessToken}`).send({ code: smsCodes.get('09000000414') })).status).toBe(401);
+  });
+
   it('does not expose the network commission average publicly', async () => {
     const { app } = appFixture();
     const result = await request(app).get('/v1/public/commission-average').set('Authorization', `Bearer ${token}`);
@@ -330,7 +395,7 @@ describe('member API', () => {
       checkShahkarMatch: async () => ({ status: 'MATCH', providerCode: 0 }),
     });
     await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '09000000002', barcodeId: 'identity-match' });
-    const accessToken = await memberToken(app, '09000000002');
+    const accessToken = await memberToken(app, '09000000002', undefined, true);
     const result = await request(app).post('/v1/me/identity').set('Authorization', `Bearer ${accessToken}`).send({ nationalCode });
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({ status: 'VERIFIED', verifiedAt: expect.any(String) });
@@ -354,7 +419,7 @@ describe('member API', () => {
     const phone = `0900000000${3 + ['PENDING', 'VERIFIED', 'REJECTED'].indexOf(kycStatus)}`;
     await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone, barcodeId: `identity-${kycStatus.toLowerCase()}` });
     await prisma.user.update({ where: { phoneNumber: phone }, data: { kycStatus: kycStatus as 'PENDING' | 'VERIFIED' | 'REJECTED' } });
-    const accessToken = await memberToken(app, phone);
+    const accessToken = await memberToken(app, phone, undefined, true);
     expect((await request(app).post('/v1/me/identity').set('Authorization', `Bearer ${accessToken}`).send({ nationalCode })).status).toBe(200);
     expect((await prisma.user.findUniqueOrThrow({ where: { phoneNumber: phone } })).kycStatus).toBe(kycStatus);
   });
@@ -368,7 +433,7 @@ describe('member API', () => {
       },
     });
     await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '09000000006', barcodeId: 'identity-mismatch' });
-    const mismatchToken = await memberToken(app, '09000000006');
+    const mismatchToken = await memberToken(app, '09000000006', undefined, true);
     expect((await request(app).post('/v1/me/identity').set('Authorization', `Bearer ${mismatchToken}`).send({ nationalCode })).status).toBe(200);
     const mismatchUser = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '09000000006' } });
     expect(mismatchUser.identityVerificationStatus).toBe('MISMATCH');
@@ -378,7 +443,7 @@ describe('member API', () => {
     await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '09000000007', barcodeId: 'identity-short-circuit' });
     const verified = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '09000000007' } });
     await prisma.user.update({ where: { id: verified.id }, data: { identityVerificationStatus: 'VERIFIED', identityVerifiedAt: new Date(), nationalIdHash: hashIdentityValue(nationalCode, identityConfig.identityHashPepper) } });
-    const verifiedToken = await memberToken(app, '09000000007');
+    const verifiedToken = await memberToken(app, '09000000007', undefined, true);
     const shortCircuit = await request(app).post('/v1/me/identity').set('Authorization', `Bearer ${verifiedToken}`).send({ nationalCode });
     expect(shortCircuit.status).toBe(200);
     expect(shortCircuit.body.status).toBe('VERIFIED');
@@ -395,7 +460,7 @@ describe('member API', () => {
       },
     });
     await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '09000000011', barcodeId: 'identity-mismatch-verified' });
-    const accessToken = await memberToken(app, '09000000011');
+    const accessToken = await memberToken(app, '09000000011', undefined, true);
     const first = await request(app).post('/v1/me/identity').set('Authorization', `Bearer ${accessToken}`).send({ nationalCode });
     expect(first.body.status).toBe('VERIFIED');
     const verified = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '09000000011' } });
@@ -533,7 +598,7 @@ describe('member API', () => {
     });
     await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000008', barcodeId: 'identity-invalid-phone' });
     await prisma.user.update({ where: { phoneNumber: '+1555000008' }, data: { country: 'IR' } });
-    const invalidToken = await memberToken(app, '+1555000008');
+    const invalidToken = await memberToken(app, '+1555000008', undefined, true);
     const invalid = await request(app).post('/v1/me/identity').set('Authorization', `Bearer ${invalidToken}`).send({ nationalCode });
     expect(invalid.status).toBe(400);
     expect(invalid.body).toEqual({ error: 'phone number must be a valid Iranian mobile number' });
@@ -549,7 +614,7 @@ describe('member API', () => {
         createdAt: new Date(),
       })),
     });
-    const cappedToken = await memberToken(app, '09000000009');
+    const cappedToken = await memberToken(app, '09000000009', undefined, true);
     const cappedResult = await request(app).post('/v1/me/identity').set('Authorization', `Bearer ${cappedToken}`).send({ nationalCode });
     expect(cappedResult.status).toBe(429);
     expect(calls).toBe(0);
@@ -562,7 +627,7 @@ describe('member API', () => {
     await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '09000000010', barcodeId: 'identity-inconclusive' });
     const user = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '09000000010' } });
     await prisma.user.update({ where: { id: user.id }, data: { identityVerificationStatus: 'VERIFIED', identityVerifiedAt: new Date(), nationalIdHash: 'different-hash' } });
-    const accessToken = await memberToken(app, '09000000010');
+    const accessToken = await memberToken(app, '09000000010', undefined, true);
     const result = await request(app).post('/v1/me/identity').set('Authorization', `Bearer ${accessToken}`).send({ nationalCode });
     expect(result.body.status).toBe('VERIFIED');
     expect(await prisma.identityCheck.count({ where: { userId: user.id, status: 'INCONCLUSIVE' } })).toBe(1);

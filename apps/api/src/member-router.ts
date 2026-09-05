@@ -86,13 +86,16 @@ import { hashIdentityValue } from './identity.js';
 import { checkIbanMatch, checkShahkarMatch } from './shahkar.js';
 import { requireIdentityForWithdrawal } from './withdrawal-settings.js';
 import { parseIdentityRequiredCountries, requireIdentityForSpending, requireVerifiedIdentity } from './identity-required-countries.js';
+import { issuePhoneCode, verifyPhoneCode } from './phone-verification.js';
 
 export type MemberRouterDependencies = {
   config: ApiConfig;
   prisma: PrismaClient;
   queue: QueueLike;
+  smsQueue: QueueLike;
   emailSender?: import('./member-auth.js').EmailSender;
   logEmailCode?: (email: string, code: string) => void;
+  logSmsCode?: (phone: string, code: string) => void;
   checkShahkarMatch?: typeof checkShahkarMatch;
   checkIbanMatch?: typeof checkIbanMatch;
 };
@@ -491,6 +494,10 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       prisma.$transaction((tx) => networkAverageRateBps(tx)),
       referralSummary(prisma, user.id),
     ]);
+    const pendingPhoneVerification = user.phoneNumber === null ? null : await prisma.phoneVerification.findFirst({
+      where: { userId: user.id, phone: user.phoneNumber, consumedAt: null, expiresAt: { gt: new Date() } },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    });
     const floor = commissionFloorBps(settings, user.country);
     return {
       ...serialized,
@@ -509,6 +516,12 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
         },
       },
       referrals,
+      phoneVerification: pendingPhoneVerification === null ? null : {
+        pendingExpiresAt: pendingPhoneVerification.expiresAt,
+        deliveryStatus: pendingPhoneVerification.deliveryStatus,
+        deliveryError: pendingPhoneVerification.deliveryError,
+        resendAvailableAt: new Date(pendingPhoneVerification.createdAt.getTime() + 60_000),
+      },
       identityVerification: {
         ...serialized.identityVerification,
         mode: policy?.mode ?? null,
@@ -871,6 +884,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       const body = z.object({ nationalCode: nationalCodeSchema }).parse(request.body);
       const userId = memberClaims(request).sub;
       if (current.phoneNumber === null) throw new HttpError(400, 'identity verification requires a phone number');
+      if (current.phoneVerifiedAt === null) throw new HttpError(409, 'verify your phone number before identity verification');
       const mobile = iranMobileSchema.safeParse(current.phoneNumber);
       if (!mobile.success) throw new HttpError(400, 'phone number must be a valid Iranian mobile number');
       const nationalIdHash = hashIdentityValue(body.nationalCode, identityHashPepper);
@@ -1202,14 +1216,25 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       await verifyMemberPin(prisma, userId, body.pin);
       const current = await member(prisma, userId);
       if (current.phoneNumber === body.phone) {
-        response.json(await memberPolicy(current));
+        if (current.phoneVerifiedAt !== null || dependencies.config.smsDelivery === 'none' || !iranMobileSchema.safeParse(body.phone).success) {
+          response.json(await memberPolicy(current));
+          return;
+        }
+        await issuePhoneCode(prisma, dependencies.config, dependencies.smsQueue, dependencies.logSmsCode, userId, body.phone);
+        response.status(202).json(await memberPolicy(current));
         return;
       }
       if (current.identityVerificationStatus === IdentityVerificationStatus.VERIFIED) {
         throw new HttpError(409, 'phone cannot be changed after identity verification');
       }
-      const updated = await prisma.user.update({ where: { id: userId }, data: { phoneNumber: body.phone } });
-      response.json(await memberPolicy(updated));
+      const updated = await prisma.user.update({ where: { id: userId }, data: { phoneNumber: body.phone, phoneVerifiedAt: null } });
+      const mobile = iranMobileSchema.safeParse(body.phone);
+      if (mobile.success && dependencies.config.smsDelivery !== 'none') {
+        await issuePhoneCode(prisma, dependencies.config, dependencies.smsQueue, dependencies.logSmsCode, userId, body.phone);
+        response.status(202).json(await memberPolicy(updated));
+      } else {
+        response.json(await memberPolicy(updated));
+      }
     } catch (error) {
       if (isPhoneUniqueViolation(error)) {
         next(new HttpError(409, 'phone already registered'));
@@ -1217,6 +1242,30 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       }
       next(error);
     }
+  });
+
+  router.post('/phone/resend', identityLimiter, async (request, response, next) => {
+    try {
+      const userId = memberClaims(request).sub;
+      const current = await member(prisma, userId);
+      if (current.phoneNumber === null) throw new HttpError(400, 'phone number is required');
+      if (current.phoneVerifiedAt !== null) throw new HttpError(409, 'phone number is already verified');
+      const mobile = iranMobileSchema.safeParse(current.phoneNumber);
+      if (!mobile.success) throw new HttpError(400, 'phone number must be a valid Iranian mobile number');
+      const code = await issuePhoneCode(prisma, dependencies.config, dependencies.smsQueue, dependencies.logSmsCode, userId, current.phoneNumber);
+      response.status(202).json({ expiresAt: code.expiresAt, resendAvailableAt: code.resendAvailableAt });
+    } catch (error) { next(error); }
+  });
+
+  router.post('/phone/verify', async (request, response, next) => {
+    try {
+      const body = z.object({ code: z.string().regex(/^\d{6}$/, 'code must be exactly six digits') }).strict().parse(request.body);
+      const userId = memberClaims(request).sub;
+      const current = await member(prisma, userId);
+      if (current.phoneNumber === null) throw new HttpError(400, 'phone number is required');
+      await verifyPhoneCode(prisma, userId, current.phoneNumber, body.code);
+      response.json(await memberPolicy(await member(prisma, userId)));
+    } catch (error) { next(error); }
   });
 
   router.patch('/', async (request, response, next) => {

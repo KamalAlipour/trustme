@@ -4,6 +4,13 @@ export type Member = {
   barcodeId: string;
   country: string | null;
   phone: string | null;
+  phoneVerified: boolean;
+  phoneVerification: {
+    pendingExpiresAt: string;
+    deliveryStatus: 'PENDING' | 'SENT' | 'FAILED';
+    deliveryError: string | null;
+    resendAvailableAt: string;
+  } | null;
   email: string | null;
   emailVerified: boolean;
   kycStatus: string;

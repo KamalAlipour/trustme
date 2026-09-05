@@ -118,10 +118,12 @@ export type ApiDependencies = {
   config: ApiConfig;
   prisma: PrismaClient;
   queue: QueueLike;
+  smsQueue?: QueueLike;
   redis: RedisLike;
   chainProvider?: AdminChainProvider;
   emailSender?: import('./member-auth.js').EmailSender;
   logEmailCode?: (email: string, code: string) => void;
+  logSmsCode?: (phone: string, code: string) => void;
   verifyGoogleIdToken?: import('./social-auth.js').MemberIdTokenVerifier;
   verifyAppleIdToken?: import('./social-auth.js').MemberIdTokenVerifier;
   checkShahkarMatch?: typeof import('./shahkar.js').checkShahkarMatch;
@@ -156,6 +158,7 @@ function serializeUser(user: { id: string; phoneNumber: string | null; barcodeId
 
 export function createApp(dependencies: ApiDependencies): express.Express {
   const { config, prisma, queue, redis } = dependencies;
+  const smsQueue = dependencies.smsQueue ?? queue;
   const logger = pino({
     redact: [
       'code',
@@ -205,8 +208,10 @@ export function createApp(dependencies: ApiDependencies): express.Express {
     config,
     prisma,
     queue,
+    smsQueue,
     ...(dependencies.emailSender === undefined ? {} : { emailSender: dependencies.emailSender }),
     logEmailCode,
+    ...(dependencies.logSmsCode === undefined ? {} : { logSmsCode: dependencies.logSmsCode }),
     ...(dependencies.checkShahkarMatch === undefined ? {} : { checkShahkarMatch: dependencies.checkShahkarMatch }),
     ...(dependencies.checkIbanMatch === undefined ? {} : { checkIbanMatch: dependencies.checkIbanMatch }),
   }));
@@ -606,9 +611,10 @@ function serializeGuarantee(guarantee: {
   };
 }
 
-export async function createApiRuntime(config: ApiConfig): Promise<{ app: express.Express; prisma: PrismaClient; redis: Redis; queue: Queue }> {
+export async function createApiRuntime(config: ApiConfig): Promise<{ app: express.Express; prisma: PrismaClient; redis: Redis; queue: Queue; smsQueue: Queue }> {
   const prisma = new PrismaClient({ datasources: { db: { url: config.databaseUrl } } });
   const redis = new Redis(config.redisUrl);
   const queue = new Queue('trustme-withdrawal-dispatch', { connection: redis });
-  return { app: createApp({ config, prisma, queue, redis, chainProvider: new EthersAdminChainProvider(config.polygonRpcUrl) }), prisma, redis, queue };
+  const smsQueue = new Queue('trustme-sms-otp', { connection: redis });
+  return { app: createApp({ config, prisma, queue, smsQueue, redis, chainProvider: new EthersAdminChainProvider(config.polygonRpcUrl) }), prisma, redis, queue, smsQueue };
 }
