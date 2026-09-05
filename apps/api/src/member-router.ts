@@ -558,6 +558,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       decimals: 6,
       walletConnectProjectId: dependencies.config.walletConnectProjectId ?? null,
       web3AuthClientId: dependencies.config.web3AuthClientId ?? null,
+      onramperApiKey: dependencies.config.onramperApiKey ?? null,
       enabled: dependencies.config.escrowContractAddress !== undefined,
     });
   });

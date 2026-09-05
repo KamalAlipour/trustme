@@ -148,7 +148,7 @@ export const openapiDocument = {
               'application/json': {
                 schema: {
                   type: 'object',
-                  required: ['contractAddress', 'chainId', 'usdtAddress', 'rpcUrl', 'decimals', 'walletConnectProjectId', 'web3AuthClientId', 'enabled'],
+                  required: ['contractAddress', 'chainId', 'usdtAddress', 'rpcUrl', 'decimals', 'walletConnectProjectId', 'web3AuthClientId', 'onramperApiKey', 'enabled'],
                   properties: {
                     contractAddress: { type: 'string', nullable: true },
                     chainId: { type: 'integer' },
@@ -157,6 +157,7 @@ export const openapiDocument = {
                     decimals: { type: 'integer' },
                     walletConnectProjectId: { type: 'string', nullable: true },
                     web3AuthClientId: { type: 'string', nullable: true },
+                    onramperApiKey: { type: 'string', nullable: true },
                     enabled: { type: 'boolean' },
                   },
                 },

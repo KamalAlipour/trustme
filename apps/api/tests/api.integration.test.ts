@@ -329,9 +329,13 @@ describe('member API', () => {
     const accessToken = await memberToken(app, '+15550000001');
     const configResult = await request(app).get('/v1/me/escrow/config').set('Authorization', `Bearer ${accessToken}`);
     expect(configResult.status).toBe(200);
-    expect(configResult.body).toMatchObject({ enabled: false, contractAddress: null, chainId: 137, decimals: 6, rpcUrl: null });
+    expect(configResult.body).toMatchObject({ enabled: false, contractAddress: null, chainId: 137, decimals: 6, rpcUrl: null, onramperApiKey: null });
     expect(configResult.body).not.toHaveProperty('polygonRpcUrl');
     expect(JSON.stringify(configResult.body)).not.toContain(config.polygonRpcUrl);
+    const configuredApp = appFixture(undefined, undefined, { onramperApiKey: 'test-onramper-key' }).app;
+    const configuredResult = await request(configuredApp).get('/v1/me/escrow/config').set('Authorization', `Bearer ${accessToken}`);
+    expect(configuredResult.status).toBe(200);
+    expect(configuredResult.body.onramperApiKey).toBe('test-onramper-key');
     const walletResult = await request(app).post('/v1/me/wallets').set('Authorization', `Bearer ${accessToken}`).send({
       address: `0x${'11'.repeat(20)}`,
       kind: 'EXTERNAL',

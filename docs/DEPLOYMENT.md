@@ -26,6 +26,9 @@ manual `setSettler` step is needed.
 `ESCROW_PUBLIC_RPC_URL` is an optional API setting exposed as `rpcUrl` to the
 mobile app. It must be a public RPC endpoint without an embedded API key,
 because the app receives this value and users can inspect it.
+`ONRAMPER_API_KEY` is the publishable API key used to configure the mobile
+Onramper card top-up widget. The API serves it through the member escrow
+configuration endpoint.
 `ESCROW_CONTRACT_ADDRESS` and `ESCROW_SETTLER_KEY` are worker settings. The
 settler key is worker-only and belongs in the root-owned, mode 0600
 `/etc/trustme/trustme-worker.env`, which only the worker unit reads; it must
