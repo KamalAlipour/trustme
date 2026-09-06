@@ -30,6 +30,10 @@ const config = {
   smsRelayUrl: 'https://id.hktp.ir',
   smsRelayKey: undefined,
   smsRelayOtpPattern: '61qgtphdqgtixtg',
+  twilioAccountSid: undefined,
+  twilioAuthToken: undefined,
+  twilioFrom: undefined,
+  twilioConfigured: false,
   requireEmailVerification: false,
   pinResetQuarantineHours: 72,
   smtpHost: undefined,
@@ -267,11 +271,11 @@ describe('member API', () => {
   });
 
   it('starts and completes a Vipps identity attempt, then rejects replay', async () => {
-    const vipps = vippsStub({ sub: 'vipps-user', name: 'Vipps User', phoneNumber: '4791234567', email: 'vipps@example.com', nin: null });
+    const vipps = vippsStub({ sub: 'vipps-user', name: 'Vipps User', phoneNumber: '4740174601', email: 'vipps@example.com', nin: null });
     const { app } = appFixture(undefined, undefined, vippsConfig, true, {}, undefined, vipps);
-    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000102', barcodeId: 'vipps-happy' });
-    await prisma.user.update({ where: { phoneNumber: '+1555000102' }, data: { country: 'NO' } });
-    const accessToken = await memberToken(app, '+1555000102');
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '40174601', barcodeId: 'vipps-happy' });
+    await prisma.user.update({ where: { phoneNumber: '40174601' }, data: { country: 'NO' } });
+    const accessToken = await memberToken(app, '40174601');
     const start = await request(app).post('/v1/me/identity/vipps/start').set('Authorization', `Bearer ${accessToken}`).send();
     expect(start.status).toBe(200);
     const state = new URL(start.body.url as string).searchParams.get('state');
@@ -281,10 +285,12 @@ describe('member API', () => {
     expect(callback.status).toBe(302);
     expect(callback.headers.location).toContain('identity=vipps');
     expect(callback.headers.location).toContain('result=verified');
-    const user = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000102' } });
+    const user = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '40174601' } });
     expect(user.identityVerificationStatus).toBe('VERIFIED');
+    expect(user.kycStatus).toBe('VERIFIED');
+    expect(user.phoneVerifiedAt).not.toBeNull();
     expect(user.displayName).toBe('Vipps User');
-    expect(user.phoneNumber).toBe('+1555000102');
+    expect(user.phoneNumber).toBe('40174601');
     expect(await prisma.identityCheck.findFirstOrThrow({ where: { userId: user.id } })).toMatchObject({ provider: 'VIPPS_NO', status: 'VERIFIED' });
     const replay = await request(app).get('/v1/me/identity/vipps/callback').query({ state, code: 'auth-code' });
     expect(replay.status).toBe(302);
@@ -348,6 +354,27 @@ describe('member API', () => {
     expect(result.status).toBe(200);
     expect(smsCodes.size).toBe(0);
     expect(await prisma.phoneVerification.count()).toBe(0);
+  });
+
+  it('enqueues Twilio delivery for an international phone', async () => {
+    const { app, calls } = appFixture(undefined, undefined, {
+      smsDelivery: 'relay',
+      smsRelayKey: 'test-relay-key',
+      twilioAccountSid: 'AC-test',
+      twilioAuthToken: 'test-token',
+      twilioFrom: '+15005550006',
+      twilioConfigured: true,
+    });
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000415', barcodeId: 'phone-twilio-member' });
+    const accessToken = await memberToken(app, '+1555000415');
+    const result = await request(app)
+      .post('/v1/me/phone')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ phone: '+47 401 74 601', pin: '2468' });
+    expect(result.status).toBe(202);
+    const row = await prisma.phoneVerification.findFirstOrThrow({ where: { phone: '+47 401 74 601' } });
+    const job = calls.find((args) => args[0] === 'send-otp');
+    expect(job?.[1]).toMatchObject({ phoneVerificationId: row.id, phone: '+4740174601', route: 'twilio' });
   });
 
   it('enqueues relay delivery without storing the raw code in the database', async () => {

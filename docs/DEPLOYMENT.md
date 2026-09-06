@@ -417,6 +417,11 @@ The production SMS relay is IP-allowlisted to the production egress IPs. Configu
 deployment environment. Never commit the relay key to source control or place it
 in a mobile bundle.
 
+For international SMS OTP, configure `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`,
+and `TWILIO_FROM` in both the API and worker environments. Iranian numbers
+continue to use the relay; Twilio is used for supported international numbers
+when all three Twilio settings are present.
+
 The API answers browser requests only for origins listed in
 `API_ALLOWED_ORIGINS` (comma-separated, scheme included), for example
 `https://app-trustcoupon.komasi.as,https://komasi.as`. Without it the API sends

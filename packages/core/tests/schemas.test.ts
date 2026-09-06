@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { couponAmountSchema, generateBarcodeId, ibanSchema, iranMobileSchema, jalaliBirthDateSchema, nationalCodeSchema } from '../src/index.js';
+import { couponAmountSchema, generateBarcodeId, ibanSchema, iranMobileSchema, jalaliBirthDateSchema, nationalCodeSchema, normalizeInternationalPhone } from '../src/index.js';
 
 describe('barcode IDs', () => {
   it('generates cryptographically random Crockford IDs in the documented format', () => {
@@ -33,6 +33,14 @@ describe('identity schemas', () => {
     expect(iranMobileSchema.parse('00989123456789')).toBe(canonical);
     expect(iranMobileSchema.parse('989123456789')).toBe(canonical);
     expect(iranMobileSchema.safeParse('0912345678').success).toBe(false);
+  });
+
+  it('normalizes supported international phone formats', () => {
+    expect(normalizeInternationalPhone('40174601', 'NO')).toBe('+4740174601');
+    expect(normalizeInternationalPhone('+47 401 74 601', 'NO')).toBe('+4740174601');
+    expect(normalizeInternationalPhone('004740174601', 'NO')).toBe('+4740174601');
+    expect(normalizeInternationalPhone('۰۹۱۲۳۴۵۶۷۸۹', 'IR')).toBeNull();
+    expect(normalizeInternationalPhone('12345', 'NO')).toBeNull();
   });
 
   it('normalizes and validates Iranian IBANs', () => {

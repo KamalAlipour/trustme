@@ -16,6 +16,7 @@ import { churnDemoCoupons } from './demo-churn.js';
 import { fundSweepGas, sweepDepositAddress } from './sweep.js';
 import { CONFIRMATION_QUEUE, createQueues, DISPATCH_QUEUE, INGEST_QUEUE, SMS_QUEUE, SWEEP_QUEUE, type WorkerQueues } from './queues.js';
 import { sendOtp } from './sms-relay.js';
+import { sendTwilioSms } from './twilio-sms.js';
 
 export { loadWorkerConfig } from './config.js';
 export * from './provider.js';
@@ -117,6 +118,29 @@ export async function startWorker(config: WorkerConfig = loadWorkerConfig()): Pr
     async (job) => {
       const row = await prisma.phoneVerification.findUnique({ where: { id: String(job.data.phoneVerificationId) } });
       if (row === null || row.consumedAt !== null || row.expiresAt <= new Date() || row.deliveryStatus !== 'PENDING') return;
+      const route = job.data.route === 'twilio' ? 'twilio' : 'relay';
+      if (route === 'twilio') {
+        if (config.twilioAccountSid === undefined || config.twilioAuthToken === undefined || config.twilioFrom === undefined) {
+          await prisma.phoneVerification.update({ where: { id: row.id }, data: { deliveryStatus: 'FAILED', deliveryError: 'twilio_not_configured' } });
+          throw new UnrecoverableError('Twilio is not configured');
+        }
+        const result = await sendTwilioSms(config, {
+          to: String(job.data.phone),
+          body: `Trust Coupon: your six-digit verification code is ${String(job.data.code)}. It expires in 5 minutes.`,
+        });
+        if (result.kind === 'sent') {
+          await prisma.phoneVerification.update({ where: { id: row.id }, data: { deliveryStatus: 'SENT', relayMessageId: result.messageId } });
+          return result;
+        }
+        if (result.kind === 'terminal') {
+          await prisma.phoneVerification.update({ where: { id: row.id }, data: { deliveryStatus: 'FAILED', deliveryError: `twilio_${result.status}` } });
+          throw new UnrecoverableError(`Twilio terminal status ${result.status}`);
+        }
+        if (job.attemptsMade + 1 >= (job.opts.attempts ?? 1)) {
+          await prisma.phoneVerification.update({ where: { id: row.id }, data: { deliveryStatus: 'FAILED', deliveryError: result.status === null ? 'twilio_network' : `twilio_${result.status}` } });
+        }
+        throw new Error(result.status === null ? 'Twilio network failure' : `Twilio status ${result.status}`);
+      }
       if (config.smsDelivery !== 'relay') {
         await prisma.phoneVerification.update({ where: { id: row.id }, data: { deliveryStatus: 'FAILED', deliveryError: 'relay_not_configured' } });
         throw new UnrecoverableError('SMS relay is not configured');
