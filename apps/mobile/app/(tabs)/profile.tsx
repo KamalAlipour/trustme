@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { FlatList, Modal, Pressable, Text, TextInput, View } from 'react-native';
+import { FlatList, Modal, Platform, Pressable, Text, TextInput, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
+import * as Linking from 'expo-linking';
+import * as WebBrowser from 'expo-web-browser';
 import { useQuery } from '@tanstack/react-query';
 import { request, ApiError } from '../../src/api/client';
 import { useSession } from '../../src/auth/session';
@@ -19,10 +21,11 @@ import type { CommissionDiscountResponse } from '../../src/api/types';
 
 export default function Profile() {
   const { t, language } = useTranslation();
-  const params = useLocalSearchParams<{ barcodeId?: string; field?: string }>();
+  const params = useLocalSearchParams<{ barcodeId?: string; field?: string; identity?: string; result?: string; reason?: string }>();
   const { signOut, getStepUpPin, refreshSetup, setup, biometric } = useSession();
   const member = useMember();
   const identity = useIdentity();
+  const refetchIdentity = identity.refetch;
   const invalidate = useInvalidateMoney();
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
@@ -98,6 +101,16 @@ export default function Profile() {
     setDisplayName(name);
     displayNamePrefilled.current = true;
   }, [current?.displayName]);
+  useEffect(() => {
+    if (params.identity !== 'vipps') return;
+    if (params.result === 'verified') {
+      setError('');
+      setNotice(t.vippsIdentityVerified);
+      void refetchIdentity();
+    } else if (params.result === 'failed') {
+      setError(t.vippsIdentityFailed(params.reason));
+    }
+  }, [params.identity, params.reason, params.result, refetchIdentity, t]);
   if (member.isLoading) return <LoadingScreen />;
   const saveName = async () => {
     setError(''); setNotice('');
@@ -221,6 +234,22 @@ export default function Profile() {
       setNationalCode('');
       setNotice(t.identityVerificationSubmitted);
       await invalidate();
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : t.unknownError);
+    } finally {
+      setIdentityLoading(false);
+    }
+  };
+  const verifyWithVipps = async () => {
+    setError(''); setNotice(''); setIdentityLoading(true);
+    try {
+      const result = await request<{ url: string }>('/v1/me/identity/vipps/start', { method: 'POST' });
+      if (Platform.OS === 'web') {
+        window.location.assign(result.url);
+      } else {
+        const auth = await WebBrowser.openAuthSessionAsync(result.url, Linking.createURL('/profile'));
+        if (auth.type === 'success') await refetchIdentity();
+      }
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : t.unknownError);
     } finally {
@@ -416,7 +445,7 @@ export default function Profile() {
           </View>
         </Modal>
         <Text style={styles.text}>{identityCopy}</Text>
-        {identity.data?.mode === 'AUTOMATED' && identityStatus === 'VERIFIED' ? <View style={{ gap: 8 }}>
+        {identity.data?.mode === 'AUTOMATED' && identityStatus === 'VERIFIED' && identity.data.provider === 'SHAHKAR' ? <View style={{ gap: 8 }}>
           <Text style={styles.heading}>{t.bankAccount}</Text>
           {identity.data.iban !== null && !ibanEditing ? <>
             <Text style={styles.notice}>{t.ibanVerified(identity.data.iban)}</Text>
@@ -458,7 +487,12 @@ export default function Profile() {
         {current?.country && identity.data?.mode === 'MANUAL' && identity.data.review?.status !== 'PENDING' && identityStatus !== 'VERIFIED' ? <>
           <LiveIdentityCapture onSubmitted={async () => { setNotice(t.manualReviewSubmitted); await invalidate(); }} />
         </> : null}
-        {current?.country && identity.data?.mode === 'AUTOMATED' && identityStatus !== 'VERIFIED' ? <>
+        {current?.country && identity.data?.mode === 'AUTOMATED' && identityStatus !== 'VERIFIED' ? identity.data.provider === 'VIPPS_NO' ? <>
+          <Text style={styles.muted}>{t.vippsIdentityExplainer}</Text>
+          <Pressable disabled={identityLoading} onPress={() => void verifyWithVipps()} style={[styles.button, identityLoading ? styles.buttonDisabled : null]}>
+            <Text style={styles.buttonText}>{identityLoading ? t.verifyIdentity : t.verifyWithVipps}</Text>
+          </Pressable>
+        </> : <>
           <TextInput
             value={nationalCode}
             onChangeText={(value) => setNationalCode(value.replace(/\D/g, '').slice(0, 10))}

@@ -64,6 +64,14 @@ const config = {
   shahkarBaseUrl: 'https://provider.test',
   ibanMatchBaseUrl: 'https://iban-provider.test',
   identityHashPepper: undefined,
+  vippsClientId: undefined,
+  vippsClientSecret: undefined,
+  vippsSubscriptionKey: undefined,
+  vippsMsn: undefined,
+  vippsApiBase: 'https://api.vipps.no',
+  vippsScope: 'openid name phoneNumber email',
+  vippsRedirectUri: 'https://api-trustme.komasi.as/v1/me/identity/vipps/callback',
+  vippsReturnUrl: 'https://app-trustcoupon.komasi.as/profile',
   partnerSecretKey: 'test-partner-secret-key-that-is-at-least-32-characters',
   confirmations: 12,
 };
@@ -94,6 +102,7 @@ function appFixture(
   captureEmailCode = true,
   socialOverrides: Pick<ApiDependencies, 'verifyGoogleIdToken' | 'verifyAppleIdToken' | 'checkShahkarMatch' | 'checkIbanMatch'> = {},
   transakClient: ApiDependencies['transakClient'] = undefined,
+  vippsClient: ApiDependencies['vippsClient'] = undefined,
 ) {
   const calls: unknown[][] = [];
   const emailCodes = new Map<string, string>();
@@ -111,6 +120,7 @@ function appFixture(
     ...(captureEmailCode ? { logEmailCode: (email: string, code: string) => emailCodes.set(email, code) } : {}),
     logSmsCode: (phone: string, code: string) => smsCodes.set(phone, code),
     ...(transakClient === undefined ? {} : { transakClient }),
+    ...(vippsClient === undefined ? {} : { vippsClient }),
     ...socialOverrides,
   });
   return { app, calls, emailCodes, smsCodes };
@@ -212,7 +222,7 @@ beforeAll(async () => {
   await prisma.$connect();
 });
 beforeEach(async () => {
-  await prisma.$executeRawUnsafe('TRUNCATE TABLE "ApiKey", "EscrowChainEvent", "EscrowUnload", "EscrowSettlement", "PayCode", "EscrowBalance", "MemberWallet", "BalanceDisclosureRequest", "MediaAsset", "IdentityReview", "IdentityCaptureSession", "RefundRequest", "AidRequest", "CharityAgent", "Charity", "AdminAllowedEmail", "AdminAuditLog", "AdminUser", "Withdrawal", "EscrowHold", "EmailVerification", "MemberDevice", "Contact", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User", "ChainCursor", "SystemSetting" CASCADE');
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "ApiKey", "EscrowChainEvent", "EscrowUnload", "EscrowSettlement", "PayCode", "EscrowBalance", "MemberWallet", "BalanceDisclosureRequest", "MediaAsset", "IdentityReview", "IdentityCaptureSession", "IdentityLoginAttempt", "IdentityCheck", "RefundRequest", "AidRequest", "CharityAgent", "Charity", "AdminAllowedEmail", "AdminAuditLog", "AdminUser", "Withdrawal", "EscrowHold", "EmailVerification", "MemberDevice", "Contact", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User", "ChainCursor", "SystemSetting" CASCADE');
   await prisma.systemSetting.createMany({ data: [
     { key: 'WITHDRAWAL_BASE_FEE_BPS', value: '100' },
     { key: 'WITHDRAWAL_MIN_FEE_USDT', value: '0.20' },
@@ -229,6 +239,75 @@ describe('member API', () => {
   const nationalCode = '3141592659';
   const mismatchingNationalCode = '2718281820';
   const identityConfig = { shahkarApiToken: 'test-shahkar-token', identityHashPepper: 'identity-test-pepper-that-is-at-least-32-characters' };
+  const vippsConfig = {
+    identityHashPepper: 'vipps-identity-test-pepper-that-is-at-least-32-characters',
+    vippsClientId: 'vipps-client',
+    vippsClientSecret: 'vipps-secret',
+    vippsSubscriptionKey: 'vipps-subscription',
+    vippsMsn: 'vipps-msn',
+  };
+
+  function vippsStub(claims: { sub: string; name: string; phoneNumber: string; email: string; nin: string | null }) {
+    return {
+      authorizationUrl: async ({ state }: { state: string }) => `https://vipps.test/auth?state=${encodeURIComponent(state)}`,
+      exchangeCode: async () => ({ idToken: 'id-token', accessToken: 'access-token' }),
+      verifyIdToken: async () => ({ ...claims, givenName: claims.name, familyName: '', emailVerified: true }),
+      userInfo: async () => ({ ...claims, givenName: claims.name, familyName: '', emailVerified: true }),
+    };
+  }
+
+  it('rejects Vipps start when the provider is not configured', async () => {
+    const { app } = appFixture();
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000101', barcodeId: 'vipps-unconfigured' });
+    await prisma.user.update({ where: { phoneNumber: '+1555000101' }, data: { country: 'NO' } });
+    const accessToken = await memberToken(app, '+1555000101');
+    const result = await request(app).post('/v1/me/identity/vipps/start').set('Authorization', `Bearer ${accessToken}`).send();
+    expect(result.status).toBe(503);
+    expect(result.body).toEqual({ error: 'vipps_not_configured' });
+  });
+
+  it('starts and completes a Vipps identity attempt, then rejects replay', async () => {
+    const vipps = vippsStub({ sub: 'vipps-user', name: 'Vipps User', phoneNumber: '4791234567', email: 'vipps@example.com', nin: null });
+    const { app } = appFixture(undefined, undefined, vippsConfig, true, {}, undefined, vipps);
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000102', barcodeId: 'vipps-happy' });
+    await prisma.user.update({ where: { phoneNumber: '+1555000102' }, data: { country: 'NO' } });
+    const accessToken = await memberToken(app, '+1555000102');
+    const start = await request(app).post('/v1/me/identity/vipps/start').set('Authorization', `Bearer ${accessToken}`).send();
+    expect(start.status).toBe(200);
+    const state = new URL(start.body.url as string).searchParams.get('state');
+    expect(state).toBeTruthy();
+    expect(await prisma.identityLoginAttempt.count()).toBe(1);
+    const callback = await request(app).get('/v1/me/identity/vipps/callback').query({ state, code: 'auth-code' });
+    expect(callback.status).toBe(302);
+    expect(callback.headers.location).toContain('identity=vipps');
+    expect(callback.headers.location).toContain('result=verified');
+    const user = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000102' } });
+    expect(user.identityVerificationStatus).toBe('VERIFIED');
+    expect(user.displayName).toBe('Vipps User');
+    expect(user.phoneNumber).toBe('+1555000102');
+    expect(await prisma.identityCheck.findFirstOrThrow({ where: { userId: user.id } })).toMatchObject({ provider: 'VIPPS_NO', status: 'VERIFIED' });
+    const replay = await request(app).get('/v1/me/identity/vipps/callback').query({ state, code: 'auth-code' });
+    expect(replay.status).toBe(302);
+    expect(replay.headers.location).toContain('reason=invalid_state');
+  });
+
+  it('records a mismatch when a verified Vipps identity is already linked', async () => {
+    const vipps = vippsStub({ sub: 'vipps-duplicate', name: 'Duplicate User', phoneNumber: '4797654321', email: 'duplicate@example.com', nin: '12345678901' });
+    const { app } = appFixture(undefined, undefined, vippsConfig, true, {}, undefined, vipps);
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000103', barcodeId: 'vipps-first' });
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000104', barcodeId: 'vipps-second' });
+    const first = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000103' } });
+    await prisma.user.update({ where: { id: first.id }, data: { identityVerificationStatus: 'VERIFIED', nationalIdHash: hashIdentityValue('nin:12345678901', vippsConfig.identityHashPepper) } });
+    await prisma.user.update({ where: { phoneNumber: '+1555000104' }, data: { country: 'NO' } });
+    const accessToken = await memberToken(app, '+1555000104');
+    const start = await request(app).post('/v1/me/identity/vipps/start').set('Authorization', `Bearer ${accessToken}`).send();
+    const state = new URL(start.body.url as string).searchParams.get('state');
+    const callback = await request(app).get('/v1/me/identity/vipps/callback').query({ state, code: 'auth-code' });
+    expect(callback.headers.location).toContain('reason=identity_in_use');
+    const second = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: '+1555000104' } });
+    expect(second.identityVerificationStatus).toBe('UNVERIFIED');
+    expect(await prisma.identityCheck.findFirstOrThrow({ where: { userId: second.id } })).toMatchObject({ provider: 'VIPPS_NO', status: 'MISMATCH' });
+  });
 
   it('rejects a commission rate below the configured floor', async () => {
     const { app } = appFixture();

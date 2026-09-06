@@ -1,5 +1,5 @@
 export type IdentityVerificationMode = 'AUTOMATED' | 'MANUAL';
-export type IdentityProviderKey = 'SHAHKAR' | 'BANKID_NO' | 'BANKID_SE' | 'MITID_DK'
+export type IdentityProviderKey = 'SHAHKAR' | 'VIPPS_NO' | 'BANKID_NO' | 'BANKID_SE' | 'MITID_DK'
   | 'FTN_FI' | 'IDIN_NL' | 'ITSME_BE' | 'EID_DE' | 'SMARTID_EE' | 'SMARTID_LV'
   | 'SMARTID_LT' | 'AADHAAR_IN' | 'IDSP_GB';
 export type CountryIdentityPolicy = {
@@ -9,10 +9,10 @@ export type CountryIdentityPolicy = {
   providerLabel: string | null;
   plannedProviderLabel: string | null;
 };
-export type IdentityProviderAccess = { shahkar: boolean };
+export type IdentityProviderAccess = { shahkar: boolean; vipps: boolean };
 export const identityCountryRegistry: ReadonlyArray<{ country: string; provider: IdentityProviderKey; providerLabel: string; implemented: boolean }> = [
   { country: 'IR', provider: 'SHAHKAR', providerLabel: 'Shahkar', implemented: true },
-  { country: 'NO', provider: 'BANKID_NO', providerLabel: 'BankID', implemented: false },
+  { country: 'NO', provider: 'VIPPS_NO', providerLabel: 'Vipps', implemented: true },
   { country: 'SE', provider: 'BANKID_SE', providerLabel: 'BankID (Sweden)', implemented: false },
   { country: 'DK', provider: 'MITID_DK', providerLabel: 'MitID', implemented: false },
   { country: 'FI', provider: 'FTN_FI', providerLabel: 'Finnish Trust Network (FTN)', implemented: false },
@@ -29,7 +29,10 @@ export function identityPolicyFor(country: string, access: IdentityProviderAcces
   const normalized = country.trim().toUpperCase();
   const row = identityCountryRegistry.find((item) => item.country === normalized);
   if (!row) return { country: normalized, mode: 'MANUAL', provider: null, providerLabel: null, plannedProviderLabel: null };
-  if (!row.implemented || (row.provider === 'SHAHKAR' && !access.shahkar)) {
+  if (!row.implemented ||
+    (row.provider === 'SHAHKAR' && !access.shahkar) ||
+    (row.provider === 'VIPPS_NO' && !access.vipps)
+  ) {
     return { country: normalized, mode: 'MANUAL', provider: null, providerLabel: null, plannedProviderLabel: row.providerLabel };
   }
   return { country: normalized, mode: 'AUTOMATED', provider: row.provider, providerLabel: row.providerLabel, plannedProviderLabel: null };

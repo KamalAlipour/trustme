@@ -739,6 +739,10 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
       if (decision === 'APPROVED') {
         const policy = identityPolicyFor(current.country, {
           shahkar: config.shahkarApiToken !== undefined && config.identityHashPepper !== undefined,
+          vipps: config.vippsClientId !== undefined &&
+            config.vippsClientSecret !== undefined &&
+            config.vippsSubscriptionKey !== undefined &&
+            config.vippsMsn !== undefined,
         });
         if (policy.mode !== 'MANUAL') throw new HttpError(409, 'manual identity review is not the active identity path for this account');
       }

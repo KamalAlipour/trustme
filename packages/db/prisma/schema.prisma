@@ -306,6 +306,7 @@ model User {
   bankAccountChecks    BankAccountCheck[]
   identityReviews      IdentityReview[]
   identityCaptureSessions IdentityCaptureSession[]
+  identityLoginAttempts IdentityLoginAttempt[]
   balanceDisclosureRequests BalanceDisclosureRequest[]
   wallets              MemberWallet[]
   escrowBalance        EscrowBalance?
@@ -349,6 +350,21 @@ model IdentityCheck {
   mobileHash    String
   createdAt     DateTime                   @default(now())
   user          User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model IdentityLoginAttempt {
+  id           String    @id @default(uuid()) @db.Uuid
+  userId       String    @db.Uuid
+  provider     String    @default("VIPPS_NO")
+  state        String    @unique
+  nonce        String
+  codeVerifier String
+  expiresAt    DateTime
+  consumedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
 }

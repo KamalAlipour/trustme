@@ -1,4 +1,4 @@
-import { randomInt, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomInt, randomUUID } from 'node:crypto';
 import { getAddress } from 'ethers';
 import express from 'express';
 import rateLimit from 'express-rate-limit';
@@ -88,6 +88,7 @@ import { requireIdentityForWithdrawal } from './withdrawal-settings.js';
 import { parseIdentityRequiredCountries, requireIdentityForSpending, requireVerifiedIdentity } from './identity-required-countries.js';
 import { issuePhoneCode, verifyPhoneCode } from './phone-verification.js';
 import { TransakApiError, type TransakClient } from './transak.js';
+import type { VippsIdentityClient } from './vipps-identity.js';
 
 export type MemberRouterDependencies = {
   config: ApiConfig;
@@ -100,6 +101,7 @@ export type MemberRouterDependencies = {
   checkShahkarMatch?: typeof checkShahkarMatch;
   checkIbanMatch?: typeof checkIbanMatch;
   transakClient?: TransakClient;
+  vippsClient?: VippsIdentityClient;
 };
 
 const couponsSchema = z.string().regex(/^[1-9]\d*$/, 'amountCoupons must be a positive decimal string');
@@ -184,9 +186,13 @@ function shuffledCaptureSteps(): IdentityCaptureStep[] {
   return steps;
 }
 
-function shahkarAccess(config: ApiConfig): { shahkar: boolean } {
+function identityProviderAccess(config: ApiConfig): { shahkar: boolean; vipps: boolean } {
   return {
     shahkar: config.shahkarApiToken !== undefined && config.identityHashPepper !== undefined,
+    vipps: config.vippsClientId !== undefined &&
+      config.vippsClientSecret !== undefined &&
+      config.vippsSubscriptionKey !== undefined &&
+      config.vippsMsn !== undefined,
   };
 }
 
@@ -478,6 +484,119 @@ function serializeAid(request: {
   };
 }
 
+function vippsRedirect(config: ApiConfig, result: 'verified' | 'failed', reason?: string): string {
+  const url = new URL(config.vippsReturnUrl);
+  url.searchParams.set('identity', 'vipps');
+  url.searchParams.set('result', result);
+  if (reason !== undefined) url.searchParams.set('reason', reason);
+  return url.toString();
+}
+
+export function createVippsCallbackRouter(dependencies: MemberRouterDependencies): express.Router {
+  const router = express.Router();
+  router.get('/callback', async (request, response) => {
+    const state = typeof request.query.state === 'string' ? request.query.state : null;
+    const redirectFailure = (reason: string) => response.redirect(302, vippsRedirect(dependencies.config, 'failed', reason));
+    if (state === null || dependencies.vippsClient === undefined) {
+      redirectFailure('invalid_state');
+      return;
+    }
+    const attempt = await dependencies.prisma.identityLoginAttempt.findUnique({ where: { state } });
+    if (attempt === null || attempt.provider !== 'VIPPS_NO' || attempt.consumedAt !== null || attempt.expiresAt <= new Date()) {
+      redirectFailure('invalid_state');
+      return;
+    }
+    const consumed = await dependencies.prisma.identityLoginAttempt.updateMany({
+      where: { id: attempt.id, consumedAt: null, expiresAt: { gt: new Date() } },
+      data: { consumedAt: new Date() },
+    });
+    if (consumed.count !== 1) {
+      redirectFailure('invalid_state');
+      return;
+    }
+    if (typeof request.query.error === 'string' || typeof request.query.code !== 'string') {
+      redirectFailure('provider_error');
+      return;
+    }
+    try {
+      const tokens = await dependencies.vippsClient.exchangeCode({ code: request.query.code, codeVerifier: attempt.codeVerifier });
+      const idClaims = await dependencies.vippsClient.verifyIdToken(tokens.idToken, attempt.nonce);
+      const claims = await dependencies.vippsClient.userInfo(tokens.accessToken);
+      if (idClaims.sub !== claims.sub || claims.phoneNumber === null) throw new Error('Vipps identity claims are incomplete');
+      const pepper = dependencies.config.identityHashPepper;
+      if (pepper === undefined) throw new Error('identity hash pepper is not configured');
+      const phone = claims.phoneNumber.startsWith('+') ? claims.phoneNumber : `+${claims.phoneNumber}`;
+      if (!/^\+\d{8,15}$/.test(phone)) throw new Error('Vipps phone number is invalid');
+      const nin = claims.nin ?? idClaims.nin;
+      const displayName = claims.name ?? idClaims.name;
+      const nationalIdHash = hashIdentityValue(
+        nin === null ? `phone:${phone}` : `nin:${nin}`,
+        pepper,
+      );
+      const mobileHash = hashIdentityValue(phone, pepper);
+      const outcome = await dependencies.prisma.$transaction(async (tx) => {
+        const duplicate = await tx.user.findFirst({
+          where: {
+            id: { not: attempt.userId },
+            identityVerificationStatus: IdentityVerificationStatus.VERIFIED,
+            nationalIdHash,
+          },
+          select: { id: true },
+        });
+        if (duplicate !== null) {
+          await tx.identityCheck.create({
+            data: {
+              userId: attempt.userId,
+              provider: 'VIPPS_NO',
+              status: IdentityVerificationStatus.MISMATCH,
+              nationalIdHash,
+              mobileHash,
+            },
+          });
+          return 'duplicate' as const;
+        }
+        const user = await tx.user.findUniqueOrThrow({ where: { id: attempt.userId } });
+        const now = new Date();
+        const data: Prisma.UserUpdateInput = {
+          identityVerificationStatus: IdentityVerificationStatus.VERIFIED,
+          identityVerifiedAt: now,
+          nationalIdHash,
+          identityCheckCount: { increment: 1 },
+          lastIdentityCheckAt: now,
+        };
+        if (user.displayName === null && displayName !== null) data.displayName = displayName;
+        if (user.phoneNumber === null) {
+          const existingPhone = await tx.user.findUnique({ where: { phoneNumber: phone }, select: { id: true } });
+          if (existingPhone === null) {
+            data.phoneNumber = phone;
+            data.phoneVerifiedAt = now;
+          }
+        }
+        await tx.identityCheck.create({
+          data: {
+            userId: attempt.userId,
+            provider: 'VIPPS_NO',
+            status: IdentityVerificationStatus.VERIFIED,
+            nationalIdHash,
+            mobileHash,
+          },
+        });
+        await tx.user.update({ where: { id: attempt.userId }, data });
+        return 'verified' as const;
+      });
+      if (outcome === 'duplicate') {
+        response.redirect(302, vippsRedirect(dependencies.config, 'failed', 'identity_in_use'));
+      } else {
+        response.redirect(302, vippsRedirect(dependencies.config, 'verified'));
+      }
+    } catch {
+      console.warn('Vipps identity provider error');
+      response.redirect(302, vippsRedirect(dependencies.config, 'failed', 'provider_error'));
+    }
+  });
+  return router;
+}
+
 export function createMemberRouter(dependencies: MemberRouterDependencies): express.Router {
   const { prisma, queue } = dependencies;
   const sender = dependencies.emailSender ?? smtpSender(dependencies.config);
@@ -491,7 +610,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
   const memberPolicy = async (user: Awaited<ReturnType<typeof member>>) => {
     const policy = user.country === null
       ? null
-      : identityPolicyFor(user.country, shahkarAccess(dependencies.config));
+      : identityPolicyFor(user.country, identityProviderAccess(dependencies.config));
     const serialized = serializeMember(user);
     const settings = new Map((await prisma.systemSetting.findMany({ where: { key: { in: ['COMMISSION_FLOOR_BPS', 'COMMISSION_FLOOR_BPS_BY_COUNTRY'] } } })).map((row) => [row.key, row.value]));
     const marketer = user.marketerId === null ? null : await prisma.user.findUnique({ where: { id: user.marketerId }, select: { barcodeId: true, displayName: true } });
@@ -931,7 +1050,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       }
       const current = await member(prisma, memberClaims(request).sub);
       if (current.country === null) throw new HttpError(400, 'account country is required');
-      const policy = identityPolicyFor(current.country, shahkarAccess(config));
+      const policy = identityPolicyFor(current.country, identityProviderAccess(config));
       if (policy.mode !== 'AUTOMATED' || policy.provider !== 'SHAHKAR') {
         throw new HttpError(409, 'shahkar is not the active identity path for this account');
       }
@@ -1013,7 +1132,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       const userId = memberClaims(request).sub;
       const current = await member(prisma, userId);
       if (current.country === null) throw new HttpError(400, 'account country is required');
-      const policy = identityPolicyFor(current.country, shahkarAccess(config));
+      const policy = identityPolicyFor(current.country, identityProviderAccess(config));
       if (policy.mode !== 'AUTOMATED' || policy.provider !== 'SHAHKAR') {
         throw new HttpError(409, 'iban verification is not the active identity path for this account');
       }
@@ -1095,7 +1214,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       });
       const setting = await prisma.systemSetting.findUnique({ where: { key: 'REQUIRE_IDENTITY_FOR_WITHDRAWAL' } });
       const requireIdentityForWithdrawalValue = requireIdentityForWithdrawal(setting?.value);
-      const policy = user.country === null ? null : identityPolicyFor(user.country, shahkarAccess(dependencies.config));
+      const policy = user.country === null ? null : identityPolicyFor(user.country, identityProviderAccess(dependencies.config));
       response.json({
         country: user.country,
         mode: policy?.mode ?? null,
@@ -1114,11 +1233,41 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
     }
   });
 
+  router.post('/identity/vipps/start', identityLimiter, async (request, response, next) => {
+    try {
+      if (dependencies.vippsClient === undefined) throw new HttpError(503, 'vipps_not_configured');
+      const current = await member(prisma, memberClaims(request).sub);
+      if (current.country === null) throw new HttpError(400, 'account country is required');
+      const policy = identityPolicyFor(current.country, identityProviderAccess(dependencies.config));
+      if (policy.provider !== 'VIPPS_NO') throw new HttpError(409, 'Vipps identity verification is not the active identity path for this account');
+      if (current.identityVerificationStatus === IdentityVerificationStatus.VERIFIED) {
+        throw new HttpError(409, 'identity_already_verified');
+      }
+      const state = randomBytes(32).toString('base64url');
+      const nonce = randomBytes(32).toString('base64url');
+      const codeVerifier = randomBytes(32).toString('base64url');
+      const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url');
+      await prisma.identityLoginAttempt.create({
+        data: {
+          userId: current.id,
+          provider: 'VIPPS_NO',
+          state,
+          nonce,
+          codeVerifier,
+          expiresAt: new Date(Date.now() + 10 * 60_000),
+        },
+      });
+      response.json({ url: await dependencies.vippsClient.authorizationUrl({ state, nonce, codeChallenge }) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.post('/identity/live-capture-session', identityLimiter, async (request, response, next) => {
     try {
       const current = await member(prisma, memberClaims(request).sub);
       if (current.country === null) throw new HttpError(400, 'account country is required');
-      const policy = identityPolicyFor(current.country, shahkarAccess(dependencies.config));
+      const policy = identityPolicyFor(current.country, identityProviderAccess(dependencies.config));
       if (policy.mode !== 'MANUAL') throw new HttpError(409, 'live identity capture is not the active identity path for this account');
       if (current.identityVerificationStatus === IdentityVerificationStatus.VERIFIED) {
         throw new HttpError(409, 'identity is already verified');
@@ -1180,7 +1329,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
     try {
       const current = await member(prisma, memberClaims(request).sub);
       if (current.country === null) throw new HttpError(400, 'account country is required');
-      const policy = identityPolicyFor(current.country, shahkarAccess(dependencies.config));
+      const policy = identityPolicyFor(current.country, identityProviderAccess(dependencies.config));
       if (policy.mode !== 'MANUAL') throw new HttpError(409, 'manual identity review is not the active identity path for this account');
       if (current.identityVerificationStatus === IdentityVerificationStatus.VERIFIED) {
         throw new HttpError(409, 'identity is already verified');
