@@ -33,6 +33,16 @@ describe('API configuration', () => {
       .toEqual(['https://app-trustcoupon.komasi.as', 'https://example.test']);
   });
 
+  it('derives Twilio configuration only when all credentials are present', () => {
+    expect(loadApiConfig({
+      ...validEnvironment,
+      TWILIO_ACCOUNT_SID: 'AC123',
+      TWILIO_AUTH_TOKEN: 'token',
+      TWILIO_FROM: '+15005550006',
+    }).twilioConfigured).toBe(true);
+    expect(loadApiConfig({ ...validEnvironment, TWILIO_ACCOUNT_SID: 'AC123' }).twilioConfigured).toBe(false);
+  });
+
   it('does not require email verification by default', () => {
     expect(loadApiConfig(validEnvironment).requireEmailVerification).toBe(false);
   });

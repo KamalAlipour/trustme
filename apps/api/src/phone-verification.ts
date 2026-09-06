@@ -1,9 +1,36 @@
 import { randomInt } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { PrismaClient } from '@trustme/db';
+import { iranMobileSchema, normalizeInternationalPhone } from '@trustme/core';
 import type { ApiConfig } from './config.js';
 import type { QueueLike } from './app.js';
 import { HttpError } from './http-error.js';
+
+export type SmsRoute =
+  | { route: 'relay'; recipient: string }
+  | { route: 'twilio'; recipient: string };
+
+function normalizePhoneInput(phone: string): string {
+  return phone
+    .replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)))
+    .replace(/[\s\-()]/g, '');
+}
+
+export function smsRouteFor(
+  phone: string,
+  country: string | null,
+  config: Pick<ApiConfig, 'smsDelivery' | 'twilioConfigured'>,
+): SmsRoute | null {
+  const iranMobile = iranMobileSchema.safeParse(normalizePhoneInput(phone));
+  if (iranMobile.success && config.smsDelivery === 'relay') {
+    return { route: 'relay', recipient: iranMobile.data };
+  }
+  const international = normalizeInternationalPhone(phone, country);
+  if (international !== null && config.twilioConfigured) {
+    return { route: 'twilio', recipient: international };
+  }
+  return null;
+}
 
 export type PhoneCodeResult = {
   id: string;
@@ -20,6 +47,7 @@ export async function issuePhoneCode(
   logSmsCode: ((phone: string, code: string) => void) | undefined,
   userId: string,
   phone: string,
+  route: SmsRoute,
 ): Promise<PhoneCodeResult> {
   const now = new Date();
   const hourAgo = new Date(now.getTime() - 60 * 60_000);
@@ -41,7 +69,6 @@ export async function issuePhoneCode(
       retryAfterSeconds: Math.max(1, Math.ceil((oldest.createdAt.getTime() + 60 * 60_000 - now.getTime()) / 1000)),
     });
   }
-  if (config.smsDelivery === 'none') throw new HttpError(503, 'sms delivery not configured');
   const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
   const verification = await prisma.phoneVerification.create({
     data: {
@@ -55,7 +82,7 @@ export async function issuePhoneCode(
   if (config.smsDelivery === 'log') {
     logSmsCode?.(phone, code);
   } else {
-    await smsQueue.add('send-otp', { phoneVerificationId: verification.id, phone, code }, {
+    await smsQueue.add('send-otp', { phoneVerificationId: verification.id, phone: route.recipient, route: route.route, code }, {
       jobId: verification.id,
       attempts: 3,
       backoff: { type: 'sms-relay' },

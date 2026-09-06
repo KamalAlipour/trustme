@@ -29,6 +29,10 @@ export const apiConfigSchema = z.object({
   smsRelayUrl: z.string().url().default('https://id.hktp.ir'),
   smsRelayKey: z.string().optional(),
   smsRelayOtpPattern: z.string().default('61qgtphdqgtixtg'),
+  twilioAccountSid: z.string().optional(),
+  twilioAuthToken: z.string().optional(),
+  twilioFrom: z.string().optional(),
+  twilioConfigured: z.boolean().default(false),
   nodeEnv: z.string().default('development'),
   polygonRpcUrl: z.string().url(),
   escrowPublicRpcUrl: z.string().url().optional(),
@@ -94,6 +98,9 @@ export function loadApiConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     smsRelayUrl: env.SMS_RELAY_URL,
     smsRelayKey: env.SMS_RELAY_KEY || undefined,
     smsRelayOtpPattern: env.SMS_RELAY_OTP_PATTERN,
+    twilioAccountSid: env.TWILIO_ACCOUNT_SID || undefined,
+    twilioAuthToken: env.TWILIO_AUTH_TOKEN || undefined,
+    twilioFrom: env.TWILIO_FROM || undefined,
     nodeEnv: env.NODE_ENV,
     polygonRpcUrl: env.POLYGON_RPC_URL,
     escrowPublicRpcUrl: env.ESCROW_PUBLIC_RPC_URL || undefined,
@@ -151,5 +158,10 @@ export function loadApiConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
   )) {
     throw new Error('SMTP settings are required when EMAIL_DELIVERY=smtp');
   }
-  return config;
+  return {
+    ...config,
+    twilioConfigured: config.twilioAccountSid !== undefined &&
+      config.twilioAuthToken !== undefined &&
+      config.twilioFrom !== undefined,
+  };
 }

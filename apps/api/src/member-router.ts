@@ -34,7 +34,6 @@ import {
   decimalFromMicroUsdt,
   evmAddressSchema,
   fourDigitCodeSchema,
-  iranMobileSchema,
   ibanSchema,
   jalaliBirthDateSchema,
   nationalCodeSchema,
@@ -75,6 +74,7 @@ import {
   setMarketer,
   setTrainer,
   STRIKE_INTERVAL_MS,
+  normalizeInternationalPhone,
 } from '@trustme/core';
 import { DomainError } from '@trustme/core';
 import type { QueueLike } from './app.js';
@@ -86,7 +86,7 @@ import { hashIdentityValue } from './identity.js';
 import { checkIbanMatch, checkShahkarMatch } from './shahkar.js';
 import { requireIdentityForWithdrawal } from './withdrawal-settings.js';
 import { parseIdentityRequiredCountries, requireIdentityForSpending, requireVerifiedIdentity } from './identity-required-countries.js';
-import { issuePhoneCode, verifyPhoneCode } from './phone-verification.js';
+import { issuePhoneCode, smsRouteFor, verifyPhoneCode, type SmsRoute } from './phone-verification.js';
 import { TransakApiError, type TransakClient } from './transak.js';
 import type { VippsIdentityClient } from './vipps-identity.js';
 
@@ -194,6 +194,14 @@ function identityProviderAccess(config: ApiConfig): { shahkar: boolean; vipps: b
       config.vippsSubscriptionKey !== undefined &&
       config.vippsMsn !== undefined,
   };
+}
+
+function phoneSmsRoute(phone: string, country: string | null, config: ApiConfig): SmsRoute | null {
+  const route = smsRouteFor(phone, country, config);
+  if (route === null && config.smsDelivery === 'log') {
+    return smsRouteFor(phone, country, { ...config, smsDelivery: 'relay' });
+  }
+  return route;
 }
 
 function parseCoupons(value: string): bigint {
@@ -564,6 +572,7 @@ export function createVippsCallbackRouter(dependencies: MemberRouterDependencies
           identityCheckCount: { increment: 1 },
           lastIdentityCheckAt: now,
         };
+        if (user.kycStatus === KycStatus.UNVERIFIED) data.kycStatus = KycStatus.VERIFIED;
         if (user.displayName === null && displayName !== null) data.displayName = displayName;
         if (user.phoneNumber === null) {
           const existingPhone = await tx.user.findUnique({ where: { phoneNumber: phone }, select: { id: true } });
@@ -571,6 +580,11 @@ export function createVippsCallbackRouter(dependencies: MemberRouterDependencies
             data.phoneNumber = phone;
             data.phoneVerifiedAt = now;
           }
+        } else if (
+          user.phoneVerifiedAt === null &&
+          normalizeInternationalPhone(user.phoneNumber, user.country) === phone
+        ) {
+          data.phoneVerifiedAt = now;
         }
         await tx.identityCheck.create({
           data: {
@@ -1059,8 +1073,10 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       const userId = memberClaims(request).sub;
       if (current.phoneNumber === null) throw new HttpError(400, 'identity verification requires a phone number');
       if (current.phoneVerifiedAt === null) throw new HttpError(409, 'verify your phone number before identity verification');
-      const mobile = iranMobileSchema.safeParse(current.phoneNumber);
-      if (!mobile.success) throw new HttpError(400, 'phone number must be a valid Iranian mobile number');
+      const smsRoute = phoneSmsRoute(current.phoneNumber, current.country, config);
+      if (smsRoute === null || smsRoute.route !== 'relay') {
+        throw new HttpError(400, 'phone number must be a valid Iranian mobile number');
+      }
       const nationalIdHash = hashIdentityValue(body.nationalCode, identityHashPepper);
       if (current.identityVerificationStatus === IdentityVerificationStatus.VERIFIED && current.nationalIdHash === nationalIdHash) {
         response.json({ status: current.identityVerificationStatus, verifiedAt: current.identityVerifiedAt });
@@ -1071,7 +1087,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       if (recentIdentityChecks >= 10) throw new HttpError(429, 'identity verification limit reached');
       const check = dependencies.checkShahkarMatch ?? checkShahkarMatch;
       const outcome = await check(
-        { nationalCode: body.nationalCode, mobile: mobile.data },
+        { nationalCode: body.nationalCode, mobile: smsRoute.recipient },
         { token: config.shahkarApiToken, baseUrl: config.shahkarBaseUrl },
       );
       const updated = await prisma.$transaction(async (tx) => {
@@ -1112,7 +1128,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
             status: identityStatus,
             providerCode: outcome.providerCode,
             nationalIdHash,
-            mobileHash: hashIdentityValue(mobile.data, identityHashPepper),
+            mobileHash: hashIdentityValue(smsRoute.recipient, identityHashPepper),
           },
         });
         return tx.user.update({ where: { id: userId }, data });
@@ -1419,12 +1435,13 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       const userId = memberClaims(request).sub;
       await verifyMemberPin(prisma, userId, body.pin);
       const current = await member(prisma, userId);
+      const route = phoneSmsRoute(body.phone, current.country, dependencies.config);
       if (current.phoneNumber === body.phone) {
-        if (current.phoneVerifiedAt !== null || dependencies.config.smsDelivery === 'none' || !iranMobileSchema.safeParse(body.phone).success) {
+        if (current.phoneVerifiedAt !== null || route === null) {
           response.json(await memberPolicy(current));
           return;
         }
-        await issuePhoneCode(prisma, dependencies.config, dependencies.smsQueue, dependencies.logSmsCode, userId, body.phone);
+        await issuePhoneCode(prisma, dependencies.config, dependencies.smsQueue, dependencies.logSmsCode, userId, body.phone, route);
         response.status(202).json(await memberPolicy(current));
         return;
       }
@@ -1432,9 +1449,8 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
         throw new HttpError(409, 'phone cannot be changed after identity verification');
       }
       const updated = await prisma.user.update({ where: { id: userId }, data: { phoneNumber: body.phone, phoneVerifiedAt: null } });
-      const mobile = iranMobileSchema.safeParse(body.phone);
-      if (mobile.success && dependencies.config.smsDelivery !== 'none') {
-        await issuePhoneCode(prisma, dependencies.config, dependencies.smsQueue, dependencies.logSmsCode, userId, body.phone);
+      if (route !== null) {
+        await issuePhoneCode(prisma, dependencies.config, dependencies.smsQueue, dependencies.logSmsCode, userId, body.phone, route);
         response.status(202).json(await memberPolicy(updated));
       } else {
         response.json(await memberPolicy(updated));
@@ -1454,9 +1470,9 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       const current = await member(prisma, userId);
       if (current.phoneNumber === null) throw new HttpError(400, 'phone number is required');
       if (current.phoneVerifiedAt !== null) throw new HttpError(409, 'phone number is already verified');
-      const mobile = iranMobileSchema.safeParse(current.phoneNumber);
-      if (!mobile.success) throw new HttpError(400, 'phone number must be a valid Iranian mobile number');
-      const code = await issuePhoneCode(prisma, dependencies.config, dependencies.smsQueue, dependencies.logSmsCode, userId, current.phoneNumber);
+      const route = phoneSmsRoute(current.phoneNumber, current.country, dependencies.config);
+      if (route === null) throw new HttpError(400, 'sms delivery is not available for this phone number');
+      const code = await issuePhoneCode(prisma, dependencies.config, dependencies.smsQueue, dependencies.logSmsCode, userId, current.phoneNumber, route);
       response.status(202).json({ expiresAt: code.expiresAt, resendAvailableAt: code.resendAvailableAt });
     } catch (error) { next(error); }
   });

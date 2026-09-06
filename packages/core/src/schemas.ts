@@ -55,6 +55,54 @@ export const iranMobileSchema = z.string()
     if (value.startsWith('0098')) return `0${value.slice(4)}`;
     return `0${value.slice(2)}`;
   });
+
+export const CALLING_CODES: Record<string, string> = {
+  NO: '47',
+  SE: '46',
+  DK: '45',
+  FI: '358',
+  DE: '49',
+  NL: '31',
+  BE: '32',
+  GB: '44',
+  US: '1',
+  CA: '1',
+  FR: '33',
+  ES: '34',
+  IT: '39',
+  AT: '43',
+  CH: '41',
+  PL: '48',
+  TR: '90',
+  AE: '971',
+  IN: '91',
+  EE: '372',
+  LV: '371',
+  LT: '370',
+  IE: '353',
+  PT: '351',
+};
+
+export function normalizeInternationalPhone(value: string, country: string | null): string | null {
+  const normalized = value
+    .replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)))
+    .replace(/[\s\-()]/g, '');
+  if (iranMobileSchema.safeParse(normalized).success) return null;
+  let candidate: string | null;
+  if (normalized.startsWith('+')) {
+    candidate = `+${normalized.slice(1)}`;
+  } else if (normalized.startsWith('00')) {
+    candidate = `+${normalized.slice(2)}`;
+  } else if (/^\d+$/.test(normalized) && country !== null) {
+    const callingCode = CALLING_CODES[country.toUpperCase()];
+    if (callingCode === undefined) return null;
+    candidate = `+${callingCode}${normalized.startsWith('0') ? normalized.slice(1) : normalized}`;
+  } else {
+    return null;
+  }
+  return /^\+\d{8,15}$/.test(candidate) ? candidate : null;
+}
+
 export const countrySchema = z.string().trim().transform((value) => value.toUpperCase()).refine((value) => ISO_ALPHA2_CODES.has(value), 'country must be an ISO 3166-1 alpha-2 code');
 export const barcodeIdSchema = z.string().min(1).max(128);
 export const fourDigitCodeSchema = z.string().regex(/^\d{4}$/, 'code must be exactly four digits');
