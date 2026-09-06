@@ -34,6 +34,9 @@ card top-up sessions. Keep the secret only in the API environment. Set
 `https://api.transak.com` and `https://api-gateway.transak.com`.
 `TRANSAK_REFERRER_DOMAIN` defaults to `app-trustcoupon.komasi.as` and must
 match the domain or application identifier registered with Transak.
+`TRANSAK_SELL_REDIRECT_URL` defaults to
+`https://app-trustcoupon.komasi.as/tether` and is the HTTPS route where Transak
+returns sell-order details for the member wallet transfer step.
 `ESCROW_CONTRACT_ADDRESS` and `ESCROW_SETTLER_KEY` are worker settings. The
 settler key is worker-only and belongs in the root-owned, mode 0600
 `/etc/trustme/trustme-worker.env`, which only the worker unit reads; it must
