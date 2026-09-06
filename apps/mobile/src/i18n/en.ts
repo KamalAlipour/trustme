@@ -200,6 +200,12 @@ export const en = (unit: DisplayUnit) => ({
   nationalCode: 'National ID',
   verifyIdentity: 'Verify identity',
   identityVerificationSubmitted: 'Identity verification updated.',
+  verifyWithVipps: 'Verify with Vipps',
+  vippsIdentityExplainer: 'Vipps confirms your name and phone number from your BankID-verified profile. You will be sent to Vipps and back.',
+  vippsIdentityVerified: 'Your identity is verified with Vipps.',
+  vippsIdentityFailed: (reason?: string) => reason === 'identity_in_use'
+    ? 'This Vipps identity is already used by another account.'
+    : 'Vipps verification did not complete. Please try again.',
   bankAccount: 'Bank account',
   iban: 'IBAN',
   ibanVerified: (iban: string) => `Verified IBAN: ${iban}`,

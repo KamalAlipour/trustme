@@ -42,11 +42,12 @@ import { createAdminRouter, EthersAdminChainProvider, type AdminChainProvider } 
 import { HttpError } from './http-error.js';
 import { requireIdentityForWithdrawal } from './withdrawal-settings.js';
 import { createMemberAuthRouter, createMemberSecurityRouter, requireMember } from './member-auth.js';
-import { createMemberRouter } from './member-router.js';
+import { createMemberRouter, createVippsCallbackRouter } from './member-router.js';
 import { createPublicRouter } from './public-router.js';
 import { createPartnerRouter } from './partner-router.js';
 import { provisionUser } from './user-provisioning.js';
 import { createTransakClient, type TransakClient } from './transak.js';
+import { createVippsIdentityClient, type VippsIdentityClient } from './vipps-identity.js';
 
 export { HttpError } from './http-error.js';
 
@@ -132,6 +133,7 @@ export type ApiDependencies = {
   checkIbanMatch?: typeof import('./shahkar.js').checkIbanMatch;
   partnerChainReader?: import('./partner-router.js').ChainReader;
   transakClient?: TransakClient;
+  vippsClient?: VippsIdentityClient;
 };
 
 function serviceTokenMatches(expected: string, provided: string | undefined): boolean {
@@ -201,6 +203,22 @@ export function createApp(dependencies: ApiDependencies): express.Express {
       })
       : undefined
   );
+  const vippsClient = dependencies.vippsClient ?? (
+    config.vippsClientId !== undefined &&
+    config.vippsClientSecret !== undefined &&
+    config.vippsSubscriptionKey !== undefined &&
+    config.vippsMsn !== undefined
+      ? createVippsIdentityClient({
+        clientId: config.vippsClientId,
+        clientSecret: config.vippsClientSecret,
+        subscriptionKey: config.vippsSubscriptionKey,
+        msn: config.vippsMsn,
+        apiBase: config.vippsApiBase,
+        scope: config.vippsScope,
+        redirectUri: config.vippsRedirectUri,
+      })
+      : undefined
+  );
   app.use(helmet());
   app.use(express.json({
     limit: config.bodyLimit,
@@ -231,7 +249,7 @@ export function createApp(dependencies: ApiDependencies): express.Express {
     ...(dependencies.verifyGoogleIdToken === undefined ? {} : { verifyGoogleIdToken: dependencies.verifyGoogleIdToken }),
     ...(dependencies.verifyAppleIdToken === undefined ? {} : { verifyAppleIdToken: dependencies.verifyAppleIdToken }),
   }));
-  app.use('/v1/me', requireMember(config.memberJwtSecret, prisma), createMemberRouter({
+  const memberDependencies = {
     config,
     prisma,
     queue,
@@ -242,7 +260,10 @@ export function createApp(dependencies: ApiDependencies): express.Express {
     ...(dependencies.checkShahkarMatch === undefined ? {} : { checkShahkarMatch: dependencies.checkShahkarMatch }),
     ...(dependencies.checkIbanMatch === undefined ? {} : { checkIbanMatch: dependencies.checkIbanMatch }),
     ...(transakClient === undefined ? {} : { transakClient }),
-  }));
+    ...(vippsClient === undefined ? {} : { vippsClient }),
+  };
+  app.use('/v1/me/identity/vipps', createVippsCallbackRouter(memberDependencies));
+  app.use('/v1/me', requireMember(config.memberJwtSecret, prisma), createMemberRouter(memberDependencies));
   app.use('/v1/member', requireMember(config.memberJwtSecret, prisma), createMemberSecurityRouter({
     config,
     prisma,

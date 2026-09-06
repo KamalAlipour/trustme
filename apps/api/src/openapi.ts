@@ -333,6 +333,18 @@ export const openapiDocument = {
         responses: { '201': { description: 'Live capture session' }, '400': { description: 'Country is required' }, '409': { description: 'Manual path is unavailable, review is pending, or identity is verified' } },
       },
     },
+    '/v1/me/identity/vipps/start': {
+      post: {
+        description: 'Start Vipps Login identity verification for a Norwegian member.',
+        responses: { '200': { description: 'Vipps authorization URL' }, '409': { description: 'Vipps is not the active identity path or identity is already verified' }, '503': { description: 'Vipps is not configured' } },
+      },
+    },
+    '/v1/me/identity/vipps/callback': {
+      get: {
+        description: 'Browser-facing unauthenticated Vipps authorization callback.',
+        responses: { '302': { description: 'Redirect to the configured member return URL' } },
+      },
+    },
     '/v1/me/identity/manual-review': {
       post: {
         description: 'Submit all four frames captured in a live identity session for manual review.',

@@ -201,6 +201,12 @@ export const fa = (unit: DisplayUnit): Translations => ({
   nationalCode: 'کد ملی',
   verifyIdentity: 'تأیید هویت',
   identityVerificationSubmitted: 'وضعیت احراز هویت به‌روزرسانی شد.',
+  verifyWithVipps: 'تأیید هویت با Vipps',
+  vippsIdentityExplainer: 'Vipps نام و شمارهٔ تلفن شما را از پروفایل تأییدشده با BankID تأیید می‌کند؛ به Vipps می‌روید و برمی‌گردید.',
+  vippsIdentityVerified: 'هویت شما با Vipps تأیید شد.',
+  vippsIdentityFailed: (reason?: string) => reason === 'identity_in_use'
+    ? 'این هویت Vipps قبلاً برای حساب دیگری استفاده شده است.'
+    : 'تأیید با Vipps کامل نشد. دوباره تلاش کنید.',
   bankAccount: 'حساب بانکی',
   iban: 'شماره شبا',
   ibanVerified: (iban: string) => `شبای تأییدشده: ${iban}`,

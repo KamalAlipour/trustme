@@ -331,6 +331,14 @@ both values are present; `SHAHKAR_BASE_URL` may override the default Shahkar
 endpoint. The pepper must be at least 32 characters and these values must be
 provided through the deployment secret-management process, not committed here.
 `IBAN_MATCH_BASE_URL` may override the default api.ir IbanMatch endpoint.
+Vipps Login for Norway requires `VIPPS_CLIENT_ID`, `VIPPS_CLIENT_SECRET`,
+`VIPPS_SUBSCRIPTION_KEY`, and `VIPPS_MSN`. `VIPPS_API_BASE` defaults to
+`https://api.vipps.no`; use `https://apitest.vipps.no` for the test environment.
+`VIPPS_SCOPE` defaults to `openid name phoneNumber email`; `nin` may be added
+when the Vipps sales unit is approved for that scope. `VIPPS_REDIRECT_URI`
+defaults to `https://api-trustme.komasi.as/v1/me/identity/vipps/callback` and
+must be registered on the Vipps sales unit in `portal.vippsmobilepay.no`.
+`VIPPS_RETURN_URL` defaults to `https://app-trustcoupon.komasi.as/profile`.
 
 The user must still provide and authorize:
 
