@@ -107,6 +107,7 @@ const cardTopUpAmountSchema = z.string()
   .regex(/^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/, 'amountUsdt must be a positive decimal amount with at most 2 decimal places')
   .refine((value) => microUsdtFromDecimal(value) > 0n, 'amountUsdt must be greater than zero');
 const cardTopUpSessionSchema = z.object({ amountUsdt: cardTopUpAmountSchema.optional() });
+const cardSellSessionSchema = z.object({ amountUsdt: cardTopUpAmountSchema.optional(), redirect: z.boolean().optional() });
 const displayNameSchema = z.string().trim().min(1).max(128);
 const transferSchema = z.object({ toBarcodeId: barcodeIdSchema, amountCoupons: couponsSchema, idempotencyKey: z.string().min(1), pin: fourDigitCodeSchema });
 const escrowSchema = z.object({
@@ -565,6 +566,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       walletConnectProjectId: dependencies.config.walletConnectProjectId ?? null,
       web3AuthClientId: dependencies.config.web3AuthClientId ?? null,
       cardTopUpEnabled: dependencies.config.transakApiKey !== undefined && dependencies.config.transakApiSecret !== undefined,
+      cardSellEnabled: dependencies.config.transakApiKey !== undefined && dependencies.config.transakApiSecret !== undefined,
       enabled: dependencies.config.escrowContractAddress !== undefined,
     });
   });
@@ -579,12 +581,35 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       if (depositAddress === null) throw new HttpError(409, 'deposit_address_not_configured');
       try {
         response.json(await dependencies.transakClient.createWidgetSession({
+          product: 'BUY',
           walletAddress: depositAddress.address,
           userId: user.id,
           ...(body.amountUsdt === undefined ? {} : { amountUsdt: body.amountUsdt }),
         }));
       } catch (error) {
         if (error instanceof TransakApiError || error instanceof Error) throw new HttpError(502, 'card_topup_unavailable');
+        throw error;
+      }
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/card-sell/session', async (request, response, next) => {
+    try {
+      if (dependencies.transakClient === undefined) throw new HttpError(503, 'card_sell_not_configured');
+      const body = cardSellSessionSchema.parse(request.body);
+      const user = await member(prisma, memberClaims(request).sub);
+      requireVerifiedIdentity(user.identityVerificationStatus);
+      try {
+        response.json(await dependencies.transakClient.createWidgetSession({
+          product: 'SELL',
+          userId: user.id,
+          ...(body.amountUsdt === undefined ? {} : { amountUsdt: body.amountUsdt }),
+          ...(body.redirect === true ? { redirectUrl: dependencies.config.transakSellRedirectUrl } : {}),
+        }));
+      } catch (error) {
+        if (error instanceof TransakApiError || error instanceof Error) throw new HttpError(502, 'card_sell_unavailable');
         throw error;
       }
     } catch (error) {

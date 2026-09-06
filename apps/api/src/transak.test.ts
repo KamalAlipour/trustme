@@ -22,7 +22,7 @@ describe('Transak client', () => {
       .mockResolvedValueOnce(jsonResponse({ data: { widgetUrl: 'https://global-stg.transak.com/?sessionId=one' } }));
     const client = createTransakClient({ ...options, fetch: fetcher, now: () => 1_700_000_000_000 });
 
-    const result = await client.createWidgetSession({ walletAddress: '0xabc', userId: 'member-1', amountUsdt: '12.50' });
+    const result = await client.createWidgetSession({ product: 'BUY', walletAddress: '0xabc', userId: 'member-1', amountUsdt: '12.50' });
 
     expect(result).toEqual({ url: 'https://global-stg.transak.com/?sessionId=one', expiresAt: '2023-11-14T22:18:20.000Z' });
     expect(fetcher).toHaveBeenNthCalledWith(1, 'https://api-stg.transak.com/partners/api/v2/refresh-token', expect.objectContaining({
@@ -54,8 +54,8 @@ describe('Transak client', () => {
       .mockImplementation(async () => jsonResponse({ data: { widgetUrl: 'https://global-stg.transak.com/?sessionId=reused' } }));
     const client = createTransakClient({ ...options, fetch: fetcher, now: () => 1_700_000_000_000 });
 
-    await client.createWidgetSession({ walletAddress: '0xabc', userId: 'member-1' });
-    await client.createWidgetSession({ walletAddress: '0xdef', userId: 'member-2' });
+    await client.createWidgetSession({ product: 'BUY', walletAddress: '0xabc', userId: 'member-1' });
+    await client.createWidgetSession({ product: 'BUY', walletAddress: '0xdef', userId: 'member-2' });
 
     expect(fetcher).toHaveBeenCalledTimes(3);
     expect(fetcher.mock.calls.filter(([url]) => url === 'https://api-stg.transak.com/partners/api/v2/refresh-token')).toHaveLength(1);
@@ -70,9 +70,9 @@ describe('Transak client', () => {
       .mockResolvedValueOnce(jsonResponse({ data: { widgetUrl: 'https://global-stg.transak.com/?sessionId=two' } }));
     const client = createTransakClient({ ...options, fetch: fetcher, now: () => now });
 
-    await client.createWidgetSession({ walletAddress: '0xabc', userId: 'member-1' });
+    await client.createWidgetSession({ product: 'BUY', walletAddress: '0xabc', userId: 'member-1' });
     now += 1_000;
-    await client.createWidgetSession({ walletAddress: '0xdef', userId: 'member-2' });
+    await client.createWidgetSession({ product: 'BUY', walletAddress: '0xdef', userId: 'member-2' });
 
     expect(fetcher.mock.calls[2]![0]).toBe('https://api-stg.transak.com/partners/api/v2/refresh-token');
   });
@@ -85,7 +85,7 @@ describe('Transak client', () => {
       .mockResolvedValueOnce(jsonResponse({ data: { widgetUrl: 'https://global-stg.transak.com/?sessionId=retry' } }));
     const client = createTransakClient({ ...options, fetch: fetcher, now: () => 1_700_000_000_000 });
 
-    await client.createWidgetSession({ walletAddress: '0xabc', userId: 'member-1' });
+    await client.createWidgetSession({ product: 'BUY', walletAddress: '0xabc', userId: 'member-1' });
 
     expect(fetcher).toHaveBeenCalledTimes(4);
     expect((fetcher.mock.calls[3]![1] as RequestInit).headers).toEqual(expect.objectContaining({ 'access-token': 'token-2' }));
@@ -95,8 +95,61 @@ describe('Transak client', () => {
     const fetcher = vi.fn().mockResolvedValueOnce(jsonResponse({ error: 'unavailable' }, 503));
     const client = createTransakClient({ ...options, fetch: fetcher, now: () => 1_700_000_000_000 });
 
-    const error = await client.createWidgetSession({ walletAddress: '0xabc', userId: 'member-1' }).catch((cause: unknown) => cause);
+    const error = await client.createWidgetSession({ product: 'BUY', walletAddress: '0xabc', userId: 'member-1' }).catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(TransakApiError);
     expect(error).toMatchObject({ name: 'TransakApiError', endpoint: 'refresh-token', status: 503 });
+  });
+
+  it('creates a SELL session without BUY wallet fields and supports redirect details', async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ data: { accessToken: 'token-sell', expiresAt: 2_000_000_000 } }))
+      .mockResolvedValueOnce(jsonResponse({ data: { widgetUrl: 'https://global-stg.transak.com/?sessionId=sell' } }));
+    const client = createTransakClient({ ...options, fetch: fetcher, now: () => 1_700_000_000_000 });
+
+    await client.createWidgetSession({
+      product: 'SELL',
+      userId: 'member-sell',
+      amountUsdt: '25.50',
+      redirectUrl: 'https://app-trustcoupon.komasi.as/tether',
+    });
+
+    const sessionRequest = fetcher.mock.calls[1]![1] as RequestInit;
+    expect(JSON.parse(sessionRequest.body as string)).toEqual({
+      widgetParams: {
+        apiKey: options.apiKey,
+        referrerDomain: options.referrerDomain,
+        productsAvailed: 'SELL',
+        cryptoCurrencyCode: 'USDT',
+        network: 'polygon',
+        defaultFiatCurrency: 'EUR',
+        partnerCustomerId: 'member-sell',
+        defaultCryptoAmount: 25.5,
+        walletRedirection: true,
+        redirectURL: 'https://app-trustcoupon.komasi.as/tether',
+      },
+    });
+    expect(JSON.parse(sessionRequest.body as string).widgetParams).not.toHaveProperty('walletAddress');
+    expect(JSON.parse(sessionRequest.body as string).widgetParams).not.toHaveProperty('disableWalletAddressForm');
+  });
+
+  it('creates a SELL session without redirect parameters when no redirect URL is given', async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ data: { accessToken: 'token-sell', expiresAt: 2_000_000_000 } }))
+      .mockResolvedValueOnce(jsonResponse({ data: { widgetUrl: 'https://global-stg.transak.com/?sessionId=sell-no-redirect' } }));
+    const client = createTransakClient({ ...options, fetch: fetcher, now: () => 1_700_000_000_000 });
+
+    await client.createWidgetSession({ product: 'SELL', userId: 'member-sell' });
+
+    const widgetParams = JSON.parse((fetcher.mock.calls[1]![1] as RequestInit).body as string).widgetParams;
+    expect(widgetParams).toEqual({
+      apiKey: options.apiKey,
+      referrerDomain: options.referrerDomain,
+      productsAvailed: 'SELL',
+      cryptoCurrencyCode: 'USDT',
+      network: 'polygon',
+      defaultFiatCurrency: 'EUR',
+      partnerCustomerId: 'member-sell',
+    });
+    expect(widgetParams).not.toHaveProperty('walletAddress');
   });
 });

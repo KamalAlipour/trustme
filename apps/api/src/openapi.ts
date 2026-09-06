@@ -360,7 +360,7 @@ export const openapiDocument = {
               'application/json': {
                 schema: {
                   type: 'object',
-                  required: ['contractAddress', 'chainId', 'usdtAddress', 'rpcUrl', 'decimals', 'walletConnectProjectId', 'web3AuthClientId', 'cardTopUpEnabled', 'enabled'],
+                  required: ['contractAddress', 'chainId', 'usdtAddress', 'rpcUrl', 'decimals', 'walletConnectProjectId', 'web3AuthClientId', 'cardTopUpEnabled', 'cardSellEnabled', 'enabled'],
                   properties: {
                     contractAddress: { type: 'string', nullable: true },
                     chainId: { type: 'integer' },
@@ -370,6 +370,7 @@ export const openapiDocument = {
                     walletConnectProjectId: { type: 'string', nullable: true },
                     web3AuthClientId: { type: 'string', nullable: true },
                     cardTopUpEnabled: { type: 'boolean' },
+                    cardSellEnabled: { type: 'boolean' },
                     enabled: { type: 'boolean' },
                   },
                 },
@@ -403,6 +404,35 @@ export const openapiDocument = {
           '409': { description: 'Deposit address is unavailable' },
           '502': { description: 'Transak card top-up is unavailable' },
           '503': { description: 'Transak card top-up is not configured' },
+        },
+      },
+    },
+    '/v1/me/card-sell/session': {
+      post: {
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  amountUsdt: { type: 'string', pattern: '^(?:0|[1-9][0-9]*)(?:\\.[0-9]{1,2})?$' },
+                  redirect: { type: 'boolean' },
+                },
+                example: { amountUsdt: '25.00', redirect: true },
+              },
+            },
+          },
+        },
+        responses: {
+          '200': {
+            description: 'Single-use Transak sell widget session',
+            content: { 'application/json': { schema: { type: 'object', required: ['url', 'expiresAt'], properties: { url: { type: 'string', format: 'uri' }, expiresAt: { type: 'string', format: 'date-time' } } } } },
+          },
+          '400': { description: 'Invalid amount or redirect flag' },
+          '403': { description: 'Identity verification required' },
+          '502': { description: 'Transak card sell is unavailable' },
+          '503': { description: 'Transak card sell is not configured' },
         },
       },
     },

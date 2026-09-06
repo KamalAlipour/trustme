@@ -16,9 +16,11 @@ export class TransakApiError extends Error {
 
 export type TransakClient = {
   createWidgetSession(input: {
-    walletAddress: string;
+    product: 'BUY' | 'SELL';
+    walletAddress?: string;
     userId: string;
     amountUsdt?: string;
+    redirectUrl?: string;
   }): Promise<{ url: string; expiresAt: string }>;
 };
 
@@ -82,10 +84,15 @@ export function createTransakClient(options: TransakClientOptions): TransakClien
   };
 
   const createWidgetSession = async (input: {
-    walletAddress: string;
+    product: 'BUY' | 'SELL';
+    walletAddress?: string;
     userId: string;
     amountUsdt?: string;
+    redirectUrl?: string;
   }): Promise<{ url: string; expiresAt: string }> => {
+    if (input.product === 'BUY' && input.walletAddress === undefined) {
+      throw new Error('Transak BUY sessions require a wallet address');
+    }
     let currentToken = await accessToken();
     const request = async (access: AccessToken) => fetcher(`${gateway}/api/v2/auth/session`, {
       method: 'POST',
@@ -98,14 +105,26 @@ export function createTransakClient(options: TransakClientOptions): TransakClien
         widgetParams: {
           apiKey: options.apiKey,
           referrerDomain: options.referrerDomain,
-          productsAvailed: 'BUY',
-          cryptoCurrencyCode: 'USDT',
-          network: 'polygon',
-          walletAddress: input.walletAddress,
-          disableWalletAddressForm: true,
-          defaultFiatCurrency: 'EUR',
-          partnerCustomerId: input.userId,
-          ...(input.amountUsdt === undefined ? {} : { defaultCryptoAmount: Number(input.amountUsdt) }),
+          ...(input.product === 'BUY'
+            ? {
+              productsAvailed: 'BUY',
+              cryptoCurrencyCode: 'USDT',
+              network: 'polygon',
+              walletAddress: input.walletAddress,
+              disableWalletAddressForm: true,
+              defaultFiatCurrency: 'EUR',
+              partnerCustomerId: input.userId,
+              ...(input.amountUsdt === undefined ? {} : { defaultCryptoAmount: Number(input.amountUsdt) }),
+            }
+            : {
+              productsAvailed: 'SELL',
+              cryptoCurrencyCode: 'USDT',
+              network: 'polygon',
+              defaultFiatCurrency: 'EUR',
+              partnerCustomerId: input.userId,
+              ...(input.amountUsdt === undefined ? {} : { defaultCryptoAmount: Number(input.amountUsdt) }),
+              ...(input.redirectUrl === undefined ? {} : { walletRedirection: true, redirectURL: input.redirectUrl }),
+            }),
         },
       }),
     });

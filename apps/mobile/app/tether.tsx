@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, Pressable, Text, TextInput, View } from 'react-native';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
-import { BrowserProvider, Contract, JsonRpcProvider, MaxUint256, Wallet } from 'ethers';
+import { BrowserProvider, Contract, isAddress, JsonRpcProvider, MaxUint256, Wallet, type AbstractSigner } from 'ethers';
 import EthereumProvider from '@walletconnect/ethereum-provider';
 import { ApiError, LockedError, request } from '../src/api/client';
 import type { EscrowConfig, EscrowSettlement, EscrowWallet, WithdrawalQuote } from '../src/api/types';
@@ -22,6 +22,8 @@ import { HeaderIcons } from '../src/components/HeaderIcons';
 const ERC20_ABI = [
   'function allowance(address owner,address spender) view returns (uint256)',
   'function approve(address spender,uint256 amount) returns (bool)',
+  'function transfer(address to,uint256 amount) returns (bool)',
+  'function balanceOf(address owner) view returns (uint256)',
 ];
 const ESCROW_ABI = ['function deposit(uint256 amount)'];
 
@@ -55,6 +57,11 @@ function RecoveryWords({ words }: { words: string[] }) {
 
 export default function Tether() {
   const { t, language } = useTranslation();
+  const { walletAddress: redirectWalletAddress, cryptoAmount: redirectCryptoAmount, orderId: redirectOrderId } = useLocalSearchParams<{
+    walletAddress?: string;
+    cryptoAmount?: string;
+    orderId?: string;
+  }>();
   const { getStepUpPin } = useSession();
   const identity = useIdentity();
   const config = useEscrowConfig();
@@ -77,6 +84,11 @@ export default function Tether() {
   const [walletConnectSession, setWalletConnectSession] = useState<WalletConnectSession | null>(null);
   const [topUpAmount, setTopUpAmount] = useState('');
   const [cardAmount, setCardAmount] = useState('');
+  const [sellAmount, setSellAmount] = useState('');
+  const [sellToAddress, setSellToAddress] = useState('');
+  const [sellToAmount, setSellToAmount] = useState('');
+  const [sellOrderId, setSellOrderId] = useState('');
+  const [sellTxHash, setSellTxHash] = useState('');
   const [unloadAmount, setUnloadAmount] = useState('');
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [destination, setDestination] = useState('');
@@ -95,7 +107,12 @@ export default function Tether() {
   const [withdrawalQuoteError, setWithdrawalQuoteError] = useState('');
   const [withdrawalQuoteLoading, setWithdrawalQuoteLoading] = useState(false);
 
-
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    if (typeof redirectWalletAddress === 'string' && isAddress(redirectWalletAddress)) setSellToAddress(redirectWalletAddress);
+    if (typeof redirectCryptoAmount === 'string') setSellToAmount(redirectCryptoAmount);
+    if (typeof redirectOrderId === 'string') setSellOrderId(redirectOrderId);
+  }, [redirectCryptoAmount, redirectOrderId, redirectWalletAddress]);
   useEffect(() => {
     if (balance.data?.primaryWallet !== undefined) setWallet(balance.data.primaryWallet);
   }, [balance.data?.primaryWallet]);
@@ -333,20 +350,7 @@ export default function Tether() {
       const amount = parseUsdtAmount(topUpAmount);
       const escrowConfig = config.data as EscrowConfig;
       if (escrowConfig.contractAddress === null || wallet === null) throw new Error(t.escrow.noWallet);
-      let signer;
-      if (wallet.kind === 'IN_APP') {
-        if (escrowConfig.rpcUrl === null) throw new Error(t.escrow.publicRpcUnavailable);
-        const stored = mnemonic ?? await readEscrowMnemonic();
-        if (stored === null) throw new Error(t.escrow.walletNotFound);
-        const localWallet = Wallet.fromPhrase(stored);
-        signer = localWallet.connect(new JsonRpcProvider(escrowConfig.rpcUrl, escrowConfig.chainId));
-      } else if (wallet.kind === 'EXTERNAL') {
-        const session = walletConnectSession;
-        if (session === null) throw new Error(t.escrow.connectWallet);
-        signer = await session.browser.getSigner();
-      } else {
-        throw new Error(t.escrow.connectWallet);
-      }
+      const signer = await getSigner(escrowConfig);
       const token = new Contract(escrowConfig.usdtAddress, ERC20_ABI, signer);
       const allowance = BigInt((await token.getFunction('allowance')(wallet.address, escrowConfig.contractAddress)).toString());
       if (shouldApproveAllowance(allowance, amount)) await (await token.getFunction('approve')(escrowConfig.contractAddress, MaxUint256)).wait();
@@ -354,6 +358,46 @@ export default function Tether() {
       setTopUpAmount('');
       showSuccess(t.escrow.topUpSubmitted);
       await invalidate();
+    });
+  };
+  const getSigner = async (escrowConfig: EscrowConfig): Promise<AbstractSigner> => {
+    if (wallet === null) throw new Error(t.escrow.noWallet);
+    if (wallet.kind === 'IN_APP') {
+      if (escrowConfig.rpcUrl === null) throw new Error(t.escrow.publicRpcUnavailable);
+      const stored = mnemonic ?? await readEscrowMnemonic();
+      if (stored === null) throw new Error(t.escrow.walletNotFound);
+      const localWallet = Wallet.fromPhrase(stored);
+      return localWallet.connect(new JsonRpcProvider(escrowConfig.rpcUrl, escrowConfig.chainId));
+    }
+    if (wallet.kind === 'EXTERNAL') {
+      const session = walletConnectSession;
+      if (session === null) throw new Error(t.escrow.connectWallet);
+      return session.browser.getSigner();
+    }
+    throw new Error(t.escrow.connectWallet);
+  };
+  const sendToTransak = async () => {
+    await run('sell-transfer', async () => {
+      if (wallet === null) throw new Error(t.escrow.noWallet);
+      if (!isAddress(sellToAddress)) {
+        showError(t.escrow.invalidAddress);
+        return;
+      }
+      const amount = parseUsdtAmount(sellToAmount);
+      const escrowConfig = config.data as EscrowConfig;
+      const signer = await getSigner(escrowConfig);
+      const token = new Contract(escrowConfig.usdtAddress, ERC20_ABI, signer);
+      const balance = BigInt((await token.getFunction('balanceOf')(wallet.address)).toString());
+      if (balance < amount) {
+        showError(t.escrow.insufficientWalletBalance);
+        return;
+      }
+      const receipt = await (await token.getFunction('transfer')(sellToAddress, amount)).wait();
+      if (receipt?.hash === undefined) throw new Error(t.escrow.transactionFailed);
+      setSellTxHash(receipt.hash);
+      showSuccess(t.escrow.cardSellTransferSubmitted);
+      setSellToAddress('');
+      setSellToAmount('');
     });
   };
   const requestUnload = async () => {
@@ -420,6 +464,28 @@ export default function Tether() {
       setBusy('');
     }
   };
+  const openCardSell = async () => {
+    if (!config.data?.cardSellEnabled || wallet === null) return;
+    setBusy('card-sell');
+    try {
+      const session = await request<{ url: string }>('/v1/me/card-sell/session', {
+        method: 'POST',
+        body: {
+          ...(sellAmount ? { amountUsdt: sellAmount } : {}),
+          redirect: Platform.OS === 'web',
+        },
+      });
+      if (Platform.OS === 'web') {
+        window.open(session.url, '_blank');
+      } else {
+        await WebBrowser.openBrowserAsync(session.url);
+      }
+    } catch (error) {
+      showError(mapApiError(error, t));
+    } finally {
+      setBusy('');
+    }
+  };
 
   return (
     <Page>
@@ -465,6 +531,22 @@ export default function Tether() {
         <TextInput value={cardAmount} onChangeText={setCardAmount} placeholder={t.escrow.cardTopUpAmount} style={styles.input} keyboardType="decimal-pad" />
         <Text style={styles.muted}>{t.escrow.cardTopUpExplainer}</Text>
         <Pressable disabled={busy !== ''} onPress={() => void openCardTopUp()} style={[styles.button, busy !== '' ? styles.buttonDisabled : null]}><Text style={styles.buttonText}>{t.escrow.cardTopUpButton}</Text></Pressable>
+      </View> : null}
+
+      {!identityRequired && config.data?.cardSellEnabled && wallet !== null ? <View style={styles.card}>
+        <Text style={styles.heading}>{t.escrow.cardSellTitle}</Text>
+        <TextInput value={sellAmount} onChangeText={setSellAmount} placeholder={t.escrow.cardSellAmount} style={styles.input} keyboardType="decimal-pad" />
+        <Text style={styles.muted}>{t.escrow.cardSellExplainer}</Text>
+        <Pressable disabled={busy !== '' || wallet === null || publicRpcUnavailable} onPress={() => void openCardSell()} style={[styles.button, busy !== '' || wallet === null || publicRpcUnavailable ? styles.buttonDisabled : null]}><Text style={styles.buttonText}>{t.escrow.cardSellButton}</Text></Pressable>
+        <View style={styles.card}>
+          <Text style={styles.heading}>{t.escrow.cardSellTransferTitle}</Text>
+          <Text style={styles.muted}>{t.escrow.cardSellTransferExplainer}</Text>
+          <TextInput value={sellToAddress} onChangeText={setSellToAddress} placeholder={t.escrow.cardSellTransferAddress} style={styles.input} autoCapitalize="none" />
+          <TextInput value={sellToAmount} onChangeText={setSellToAmount} placeholder={t.escrow.cardSellTransferAmount} style={styles.input} keyboardType="decimal-pad" />
+          {sellOrderId ? <Text style={styles.muted}>{t.escrow.cardSellOrder}: {sellOrderId}</Text> : null}
+          <Pressable disabled={busy !== '' || wallet === null || publicRpcUnavailable} onPress={() => void sendToTransak()} style={[styles.button, busy !== '' || wallet === null || publicRpcUnavailable ? styles.buttonDisabled : null]}><Text style={styles.buttonText}>{t.escrow.cardSellTransferButton}</Text></Pressable>
+          {sellTxHash ? <Text selectable style={styles.muted}>{sellTxHash}</Text> : null}
+        </View>
       </View> : null}
 
       {!identityRequired && (availableMicroUsdt > 0n || (unloads.data?.items ?? []).length > 0) ? <View style={styles.card}>
