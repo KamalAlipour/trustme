@@ -211,7 +211,7 @@ beforeAll(async () => {
   await prisma.$connect();
 });
 beforeEach(async () => {
-  await prisma.$executeRawUnsafe('TRUNCATE TABLE "ApiKey", "EscrowChainEvent", "EscrowUnload", "EscrowSettlement", "PayCode", "EscrowBalance", "MemberWallet", "BalanceDisclosureRequest", "MediaAsset", "IdentityReview", "IdentityCaptureSession", "RefundRequest", "AidRequest", "CharityAgent", "Charity", "AdminAuditLog", "AdminUser", "Withdrawal", "EscrowHold", "EmailVerification", "MemberDevice", "Contact", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User", "ChainCursor", "SystemSetting" CASCADE');
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "ApiKey", "EscrowChainEvent", "EscrowUnload", "EscrowSettlement", "PayCode", "EscrowBalance", "MemberWallet", "BalanceDisclosureRequest", "MediaAsset", "IdentityReview", "IdentityCaptureSession", "RefundRequest", "AidRequest", "CharityAgent", "Charity", "AdminAllowedEmail", "AdminAuditLog", "AdminUser", "Withdrawal", "EscrowHold", "EmailVerification", "MemberDevice", "Contact", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User", "ChainCursor", "SystemSetting" CASCADE');
   await prisma.systemSetting.createMany({ data: [
     { key: 'WITHDRAWAL_BASE_FEE_BPS', value: '100' },
     { key: 'WITHDRAWAL_MIN_FEE_USDT', value: '0.20' },
@@ -2427,5 +2427,64 @@ describe('admin API', () => {
     expect(ledger.status).toBe(200);
     expect(ledger.body.items[0].externalRef).toBe(`withdrawal:${withdrawal.id}:burn`);
     expect(ledger.body.items[0].entries[0].amount).toEqual(expect.any(String));
+  });
+
+  it('gates Google admin login with the allow-list and synchronizes roles', async () => {
+    let claims = { subject: 'g1', email: 'boss@example.com', emailVerified: true };
+    const { app } = appFixture(undefined, undefined, {}, true, {
+      verifyGoogleIdToken: async () => claims,
+    });
+    const notAllowed = await request(app).post('/admin/login/google').send({ idToken: 'google-token' });
+    expect(notAllowed.status).toBe(403);
+    expect(notAllowed.body).toEqual({ error: 'email not allowed' });
+
+    const passwordAdmin = await createAdmin(AdminRole.ADMIN, 'correct-password', 'password-admin');
+    const passwordToken = await adminToken(app, passwordAdmin.username);
+    const added = await request(app)
+      .post('/admin/allowed-emails')
+      .set('Authorization', `Bearer ${passwordToken}`)
+      .send({ email: 'Boss@Example.com', role: 'APPROVER' });
+    expect(added.status).toBe(201);
+    expect(added.body).toMatchObject({ email: 'boss@example.com', role: 'APPROVER', createdBy: passwordAdmin.username });
+    const listed = await request(app).get('/admin/allowed-emails').set('Authorization', `Bearer ${passwordToken}`);
+    expect(listed.status).toBe(200);
+    expect(listed.body).toEqual([expect.objectContaining({ email: 'boss@example.com', role: 'APPROVER', createdBy: passwordAdmin.username })]);
+
+    const googleLogin = await request(app).post('/admin/login/google').send({ idToken: 'google-token' });
+    expect(googleLogin.status).toBe(200);
+    expect(googleLogin.body.token).toEqual(expect.any(String));
+    const approverRoute = await request(app).get('/admin/identity-reviews').set('Authorization', `Bearer ${googleLogin.body.token}`);
+    expect(approverRoute.status).toBe(200);
+    const adminOnlyRoute = await request(app).get('/admin/allowed-emails').set('Authorization', `Bearer ${googleLogin.body.token}`);
+    expect(adminOnlyRoute.status).toBe(403);
+
+    const countBeforeSecondLogin = await prisma.adminUser.count();
+    const secondLogin = await request(app).post('/admin/login/google').send({ idToken: 'google-token' });
+    expect(secondLogin.status).toBe(200);
+    expect(await prisma.adminUser.count()).toBe(countBeforeSecondLogin);
+
+    const promoted = await request(app)
+      .post('/admin/allowed-emails')
+      .set('Authorization', `Bearer ${passwordToken}`)
+      .send({ email: 'boss@example.com', role: 'ADMIN' });
+    expect(promoted.status).toBe(201);
+    const promotedLogin = await request(app).post('/admin/login/google').send({ idToken: 'google-token' });
+    expect(promotedLogin.status).toBe(200);
+    expect((await request(app).get('/admin/allowed-emails').set('Authorization', `Bearer ${promotedLogin.body.token}`)).status).toBe(200);
+
+    const allowedId = promoted.body.id as string;
+    const removed = await request(app).delete(`/admin/allowed-emails/${allowedId}`).set('Authorization', `Bearer ${passwordToken}`);
+    expect(removed.status).toBe(204);
+    expect((await request(app).post('/admin/login/google').send({ idToken: 'google-token' })).status).toBe(403);
+
+    claims = { ...claims, emailVerified: false };
+    expect((await request(app).post('/admin/login/google').send({ idToken: 'google-token' })).status).toBe(401);
+
+    const viewer = await createAdmin(AdminRole.VIEWER, 'correct-password', 'viewer-allowed-email');
+    const viewerToken = await adminToken(app, viewer.username);
+    expect((await request(app).post('/admin/allowed-emails').set('Authorization', `Bearer ${viewerToken}`).send({ email: 'viewer@example.com', role: 'VIEWER' })).status).toBe(403);
+
+    await prisma.adminUser.create({ data: { username: 'null-password-admin', passwordHash: null, role: AdminRole.ADMIN } });
+    expect((await request(app).post('/admin/login').send({ username: 'null-password-admin', password: 'correct-password' })).status).toBe(401);
   });
 });

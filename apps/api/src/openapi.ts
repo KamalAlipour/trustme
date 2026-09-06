@@ -663,6 +663,23 @@ export const openapiDocument = {
         responses: { '200': { description: 'Admin JWT' }, '401': { description: 'Invalid credentials' } },
       },
     },
+    '/admin/login/google': {
+      post: {
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['idToken'],
+                properties: { idToken: { type: 'string' } },
+              },
+            },
+          },
+        },
+        responses: { '200': { description: 'Admin JWT' }, '401': { description: 'Invalid Google identity token' }, '403': { description: 'Email is not allowed' } },
+      },
+    },
     '/admin/overview': { get: { responses: { '200': { description: 'Admin overview' } } } },
     '/admin/api-keys': {
       get: { responses: { '200': { description: 'Admin API key list' }, '403': { description: 'Admin role required' } } },
@@ -672,6 +689,13 @@ export const openapiDocument = {
     '/admin/settings': {
       get: { responses: { '200': { description: 'Admin settings' } } },
       patch: { responses: { '200': { description: 'Updated admin settings' } } },
+    },
+    '/admin/allowed-emails': {
+      get: { responses: { '200': { description: 'Admin Google sign-in allow-list' }, '403': { description: 'Admin role required' } } },
+      post: { responses: { '201': { description: 'Allowed email created or updated' }, '400': { description: 'Invalid allowed email' }, '403': { description: 'Admin role required' } } },
+    },
+    '/admin/allowed-emails/{id}': {
+      delete: { responses: { '204': { description: 'Allowed email removed' }, '403': { description: 'Admin role required' }, '404': { description: 'Allowed email not found' } } },
     },
     '/admin/withdrawals': { get: { responses: { '200': { description: 'Admin withdrawal queue' } } } },
     '/admin/withdrawals/{id}/approve': { post: { responses: { '200': { description: 'Withdrawal approved' } } } },

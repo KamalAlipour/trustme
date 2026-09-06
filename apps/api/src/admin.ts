@@ -42,6 +42,7 @@ import { HttpError } from './http-error.js';
 import { requireIdentityForWithdrawal } from './withdrawal-settings.js';
 import { parseIdentityRequiredCountries } from './identity-required-countries.js';
 import { deleteMediaFile, mediaPath } from './media.js';
+import { verifyGoogleIdToken, type MemberIdTokenVerifier } from './social-auth.js';
 
 export type AdminChainProvider = {
   getBlockNumber(): Promise<number>;
@@ -75,6 +76,7 @@ export type AdminRouterDependencies = {
   prisma: PrismaClient;
   queue: QueueLike;
   chainProvider: AdminChainProvider | undefined;
+  verifyGoogleIdToken?: MemberIdTokenVerifier;
 };
 
 const loginSchema = z.object({ username: z.string().min(1), password: z.string().min(1) });
@@ -278,11 +280,43 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
     try {
       const body = loginSchema.parse(request.body);
       const admin = await prisma.adminUser.findUnique({ where: { username: body.username } });
-      const valid = await verifyAdminPassword(body.password, admin?.passwordHash);
+      const valid = await verifyAdminPassword(body.password, admin?.passwordHash ?? undefined);
       if (!admin || !valid) {
         response.status(401).json({ error: 'invalid credentials' });
         return;
       }
+      response.json({ token: createAdminJwt(admin.id, admin.username, admin.role, config.adminJwtSecret, config.adminJwtTtlSeconds), expiresIn: config.adminJwtTtlSeconds });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/login/google', loginLimiter, async (request, response, next) => {
+    try {
+      const body = z.object({ idToken: z.string().min(1) }).parse(request.body);
+      const claims = await (dependencies.verifyGoogleIdToken ?? verifyGoogleIdToken)(body.idToken, config.googleOAuthClientIds ?? []);
+      if (!claims.emailVerified || claims.email === null) throw new HttpError(401, 'invalid Google identity token');
+      const allowed = await prisma.adminAllowedEmail.findUnique({ where: { email: claims.email } });
+      if (allowed === null) {
+        response.status(403).json({ error: 'email not allowed' });
+        return;
+      }
+      const existing = await prisma.adminUser.findUnique({ where: { googleSubject: claims.subject } })
+        ?? await prisma.adminUser.findUnique({ where: { email: claims.email } });
+      const admin = existing === null
+        ? await prisma.adminUser.create({
+          data: {
+            username: claims.email,
+            email: claims.email,
+            googleSubject: claims.subject,
+            passwordHash: null,
+            role: allowed.role,
+          },
+        })
+        : await prisma.adminUser.update({
+          where: { id: existing.id },
+          data: { email: claims.email, googleSubject: claims.subject, role: allowed.role },
+        });
       response.json({ token: createAdminJwt(admin.id, admin.username, admin.role, config.adminJwtSecret, config.adminJwtTtlSeconds), expiresIn: config.adminJwtTtlSeconds });
     } catch (error) {
       next(error);
@@ -361,6 +395,87 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
         return revoked;
       });
       response.json(serializeApiKey(row, claims.username));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/allowed-emails', requireRole(AdminRole.ADMIN), async (_request, response, next) => {
+    try {
+      const rows = await prisma.adminAllowedEmail.findMany({
+        include: { createdBy: { select: { username: true } } },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      });
+      response.json(rows.map((row) => ({
+        id: row.id,
+        email: row.email,
+        role: row.role,
+        createdAt: row.createdAt,
+        createdBy: row.createdBy?.username ?? null,
+      })));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/allowed-emails', requireRole(AdminRole.ADMIN), async (request, response, next) => {
+    try {
+      const body = z.object({
+        email: z.string().trim().toLowerCase().email().max(254),
+        role: z.nativeEnum(AdminRole),
+      }).strict().parse(request.body);
+      const claims = adminClaims(request);
+      const row = await prisma.$transaction(async (tx) => {
+        const previous = await tx.adminAllowedEmail.findUnique({ where: { email: body.email } });
+        const saved = await tx.adminAllowedEmail.upsert({
+          where: { email: body.email },
+          update: { role: body.role },
+          create: { email: body.email, role: body.role, createdById: claims.sub },
+          include: { createdBy: { select: { username: true } } },
+        });
+        await tx.adminAuditLog.create({
+          data: {
+            adminUserId: claims.sub,
+            action: 'admin_allowed_email.upsert',
+            entityType: 'AdminAllowedEmail',
+            entityId: saved.id,
+            oldValue: previous === null ? null : jsonValue({ email: previous.email, role: previous.role }),
+            newValue: jsonValue({ email: saved.email, role: saved.role }),
+          },
+        });
+        return saved;
+      });
+      response.status(201).json({
+        id: row.id,
+        email: row.email,
+        role: row.role,
+        createdAt: row.createdAt,
+        createdBy: row.createdBy?.username ?? null,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.delete('/allowed-emails/:id', requireRole(AdminRole.ADMIN), async (request, response, next) => {
+    try {
+      const id = z.string().uuid().parse(request.params.id);
+      const claims = adminClaims(request);
+      await prisma.$transaction(async (tx) => {
+        const row = await tx.adminAllowedEmail.findUnique({ where: { id } });
+        if (row === null) throw new HttpError(404, 'allowed email not found');
+        await tx.adminAllowedEmail.delete({ where: { id } });
+        await tx.adminAuditLog.create({
+          data: {
+            adminUserId: claims.sub,
+            action: 'admin_allowed_email.delete',
+            entityType: 'AdminAllowedEmail',
+            entityId: id,
+            oldValue: jsonValue({ email: row.email, role: row.role }),
+          },
+        });
+      });
+      response.status(204).send();
     } catch (error) {
       next(error);
     }

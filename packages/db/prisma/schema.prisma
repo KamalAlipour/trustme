@@ -973,14 +973,26 @@ model ChainCursor {
 }
 
 model AdminUser {
-  id           String          @id @default(uuid()) @db.Uuid
-  username     String          @unique
-  passwordHash String
-  role         AdminRole
-  createdAt    DateTime        @default(now())
-  auditLogs    AdminAuditLog[]
-  identityReviews IdentityReview[] @relation("IdentityReviewDecider")
-  apiKeys      ApiKey[]
+  id                  String               @id @default(uuid()) @db.Uuid
+  username            String               @unique
+  passwordHash        String?
+  email               String?              @unique
+  googleSubject       String?              @unique
+  role                AdminRole
+  createdAt           DateTime             @default(now())
+  auditLogs           AdminAuditLog[]
+  identityReviews     IdentityReview[]     @relation("IdentityReviewDecider")
+  apiKeys             ApiKey[]
+  allowedEmailEntries AdminAllowedEmail[]  @relation("AdminAllowedEmailCreator")
+}
+
+model AdminAllowedEmail {
+  id          String    @id @default(uuid()) @db.Uuid
+  email       String    @unique
+  role        AdminRole
+  createdById String?   @db.Uuid
+  createdBy   AdminUser? @relation("AdminAllowedEmailCreator", fields: [createdById], references: [id])
+  createdAt   DateTime  @default(now())
 }
 
 model AdminAuditLog {

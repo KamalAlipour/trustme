@@ -45,6 +45,15 @@ the QR modal and on native through a deep link into the installed wallet. The
 allowed-domains list in WalletConnect Cloud must include
 `https://app-trustcoupon.komasi.as`.
 
+For admin Google sign-in, set `ADMIN_GOOGLE_CLIENT_ID` to the Google web OAuth
+client ID and include the same client ID in the API's
+`GOOGLE_OAUTH_CLIENT_IDS`. Add `https://admin-trustme.komasi.as` as an
+authorized JavaScript origin for that client, and set `ADMIN_PUBLIC_URL` to the
+admin panel's public URL. A password-admin can bootstrap the Google allow-list
+from the admin panel, or insert an initial entry directly:
+`INSERT INTO "AdminAllowedEmail" (id, email, role) VALUES
+(gen_random_uuid(), '<email>', 'ADMIN')`.
+
 If `ESCROW_CONTRACT_ADDRESS` is absent, the API reports escrow as disabled and
 escrow mutation endpoints return `escrow_not_configured`; worker escrow jobs
 warn and no-op while all existing jobs continue to run. Independently review
