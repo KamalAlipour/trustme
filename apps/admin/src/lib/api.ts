@@ -64,3 +64,17 @@ export async function loginRequest(username: string, password: string): Promise<
   }
   return (await response.json()) as { token: string };
 }
+
+export async function googleLoginRequest(idToken: string): Promise<{ token: string; expiresIn?: number }> {
+  const response = await fetch(`${config.trustmeApiUrl.replace(/\/$/, '')}/admin/login/google`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ idToken }),
+    cache: 'no-store',
+  });
+  if (!response.ok) {
+    const body = await readErrorBody(response);
+    throw new ApiResponseError(response.status, body.error ?? labels.requestFailed, body.fields ?? []);
+  }
+  return (await response.json()) as { token: string; expiresIn?: number };
+}

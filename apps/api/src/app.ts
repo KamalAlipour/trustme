@@ -258,7 +258,13 @@ export function createApp(dependencies: ApiDependencies): express.Express {
     }
     next();
   });
-  app.use('/admin', createAdminRouter({ config, prisma, queue, chainProvider: dependencies.chainProvider }));
+  app.use('/admin', createAdminRouter({
+    config,
+    prisma,
+    queue,
+    chainProvider: dependencies.chainProvider,
+    ...(dependencies.verifyGoogleIdToken === undefined ? {} : { verifyGoogleIdToken: dependencies.verifyGoogleIdToken }),
+  }));
 
   app.get('/healthz', (_request, response) => response.json({ status: 'ok' }));
   app.get('/readyz', async (_request, response) => {

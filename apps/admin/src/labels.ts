@@ -1,6 +1,7 @@
 export const labels = {
   appName: 'TrustMe Admin',
   login: 'Log in',
+  signInWithGoogle: 'Sign in with Google',
   logout: 'Log out',
   username: 'Username',
   password: 'Password',
@@ -125,6 +126,16 @@ export const labels = {
   validationFailed: 'Please correct the highlighted fields.',
   apiKeyCreateFailed: 'Unable to create the API key.',
   apiKeyRevokeFailed: 'Unable to revoke the API key.',
+  admins: 'Admins',
+  allowedEmails: 'Google sign-in allow-list',
+  addEmail: 'Add email',
+  email: 'Email',
+  role: 'Role',
+  addedBy: 'Added by',
+  googleNotAllowed: 'This Google account is not on the admin allow-list.',
+  emailAdded: 'Email added to the Google sign-in allow-list.',
+  emailRemoved: 'Email removed from the Google sign-in allow-list.',
+  remove: 'Remove',
 } as const;
 
 export const statusLabels: Record<string, string> = {
