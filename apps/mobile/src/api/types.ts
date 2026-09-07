@@ -154,6 +154,7 @@ export type EscrowConfig = {
   cardTopUpEnabled: boolean;
   cardSellEnabled: boolean;
   enabled: boolean;
+  custodialReservesEnabled: boolean;
 };
 export type EscrowWallet = {
   id: string;

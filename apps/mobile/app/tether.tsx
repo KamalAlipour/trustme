@@ -557,12 +557,12 @@ export default function Tether() {
         {(unloads.data?.items ?? []).slice(0, 3).map((item) => <Text key={item.id} style={item.status === 'CONFIRMED' ? styles.notice : item.status === 'FAILED' ? styles.danger : styles.muted}>{item.status === 'CONFIRMED' ? t.escrow.unloadConfirmed : item.status === 'FAILED' ? t.escrow.unloadFailed : t.escrow.unloadPending}: {item.amount} USDT</Text>)}
       </View> : null}
 
-      <View style={styles.card}>
+      {moneyBalance.data?.depositAddress !== null ? <View style={styles.card}>
         <Text style={styles.heading}>{t.depositAddress}</Text>
         <Text selectable style={styles.text}>{moneyBalance.data?.depositAddress ?? t.notAssigned}</Text>
-      </View>
+      </View> : null}
 
-      {availability.data && BigInt(availability.data.availableToWithdrawCoupons) > 0n ? <View style={styles.card}>
+      {availability.data && BigInt(availability.data.availableToWithdrawCoupons) > 0n && !availability.data.blockers.includes('custodial_disabled') ? <View style={styles.card}>
         <Text style={styles.heading}>{t.withdrawal}</Text>
         <Text style={styles.muted}>{t.withdrawCreditExplainer}</Text>
         <Text style={styles.text}>{t.totalCollateral}: {formatCoupons(availability.data.totalCollateralCoupons, language)}</Text>

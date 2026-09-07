@@ -89,6 +89,7 @@ import { parseIdentityRequiredCountries, requireIdentityForSpending, requireVeri
 import { issuePhoneCode, smsRouteFor, verifyPhoneCode, type SmsRoute } from './phone-verification.js';
 import { TransakApiError, type TransakClient } from './transak.js';
 import type { VippsIdentityClient } from './vipps-identity.js';
+import { custodialReservesEnabled, requireCustodialReserves } from './custodial-reserves.js';
 
 export type MemberRouterDependencies = {
   config: ApiConfig;
@@ -689,8 +690,10 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
     }
   });
 
-  router.get('/escrow/config', (_request, response) => {
-    response.json({
+  router.get('/escrow/config', async (_request, response, next) => {
+    try {
+      const reservesEnabled = await custodialReservesEnabled(prisma);
+      response.json({
       contractAddress: dependencies.config.escrowContractAddress ?? null,
       chainId: dependencies.config.escrowChainId,
       usdtAddress: dependencies.config.usdtContractAddress,
@@ -698,14 +701,19 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       decimals: 6,
       walletConnectProjectId: dependencies.config.walletConnectProjectId ?? null,
       web3AuthClientId: dependencies.config.web3AuthClientId ?? null,
-      cardTopUpEnabled: dependencies.config.transakApiKey !== undefined && dependencies.config.transakApiSecret !== undefined,
+      cardTopUpEnabled: reservesEnabled && dependencies.config.transakApiKey !== undefined && dependencies.config.transakApiSecret !== undefined,
       cardSellEnabled: dependencies.config.transakApiKey !== undefined && dependencies.config.transakApiSecret !== undefined,
       enabled: dependencies.config.escrowContractAddress !== undefined,
-    });
+      custodialReservesEnabled: reservesEnabled,
+      });
+    } catch (error) {
+      next(error);
+    }
   });
 
   router.post('/card-topup/session', async (request, response, next) => {
     try {
+      await requireCustodialReserves(prisma);
       if (dependencies.transakClient === undefined) throw new HttpError(503, 'card_topup_not_configured');
       const body = cardTopUpSessionSchema.parse(request.body);
       const user = await member(prisma, memberClaims(request).sub);
@@ -1579,7 +1587,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       const user = await member(prisma, memberClaims(request).sub);
       const account = await couponAccount(prisma, user.id);
       const address = await prisma.depositAddress.findFirst({ where: { userId: user.id } });
-      response.json({ barcodeId: user.barcodeId, coupons: account.balance.toString(), dustMicroUsdt: decimalFromMicroUsdt(user.dustMicroUsdt), depositAddress: address?.address ?? null });
+      response.json({ barcodeId: user.barcodeId, coupons: account.balance.toString(), dustMicroUsdt: decimalFromMicroUsdt(user.dustMicroUsdt), depositAddress: (await custodialReservesEnabled(prisma)) ? address?.address ?? null : null });
     } catch (error) {
       next(error);
     }
@@ -1587,6 +1595,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
 
   router.get('/withdrawal-availability', async (request, response, next) => {
     try {
+      const reservesEnabled = await custodialReservesEnabled(prisma);
       const settings = await withdrawalSettings(prisma);
       const availability = await readWithdrawalAvailability(prisma, memberClaims(request).sub, { requireIdentityVerification: settings.requireIdentityVerification });
       response.json({
@@ -1594,8 +1603,8 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
         lockedGuaranteeCoupons: availability.lockedGuaranteeCoupons.toString(),
         outstandingDebtCoupons: availability.outstandingDebtCoupons.toString(),
         totalCollateralCoupons: availability.totalCollateralCoupons.toString(),
-        availableToWithdrawCoupons: availability.availableToWithdrawCoupons.toString(),
-        blockers: availability.blockers,
+        availableToWithdrawCoupons: reservesEnabled ? availability.availableToWithdrawCoupons.toString() : '0',
+        blockers: reservesEnabled ? availability.blockers : [...availability.blockers, 'custodial_disabled'],
       });
     } catch (error) {
       next(error);
@@ -1795,6 +1804,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
 
   router.get('/withdrawals/quote', async (request, response, next) => {
     try {
+      await requireCustodialReserves(prisma);
       const query = withdrawalQuoteSchema.parse(request.query);
       const settings = await withdrawalSettings(prisma);
       const quote = withdrawalQuote(parseCoupons(query.couponsGross), {
@@ -1816,6 +1826,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
 
   router.post('/withdrawals', async (request, response, next) => {
     try {
+      await requireCustodialReserves(prisma);
       const body = withdrawalSchema.parse(request.body);
       const user = await member(prisma, memberClaims(request).sub);
       await verifyMemberPin(prisma, user.id, body.pin);
