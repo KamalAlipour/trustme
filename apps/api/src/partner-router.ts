@@ -17,6 +17,7 @@ import { publicReservesPayload } from './public-router.js';
 import { requireApiKey, type ApiKeyRequest } from './partner-auth.js';
 import type { UserProvisioningConfig } from './user-provisioning.js';
 import { createUserWithAccounts, isBarcodeUniqueViolation } from './user-provisioning.js';
+import { custodialReservesEnabled, requireCustodialReserves } from './custodial-reserves.js';
 
 export type ChainReader = {
   getTransactionReceipt(txHash: string): Promise<{
@@ -60,8 +61,8 @@ async function escrowAccount(prisma: PrismaClient, userId: string) {
 async function buyerFor(prisma: PrismaClient, partnerUserId: string, id: string) {
   return prisma.partnerBuyer.findFirst({ where: { id, partnerUserId }, include: { user: { include: { depositAddresses: true } } } });
 }
-function buyerPayload(buyer: { id: string; user: { barcodeId: string; depositAddresses: { address: string }[] } }, balance: bigint) {
-  return { buyerId: buyer.id, barcodeId: buyer.user.barcodeId, depositAddress: buyer.user.depositAddresses[0]?.address ?? null, balanceCoupons: balance.toString() };
+function buyerPayload(buyer: { id: string; user: { barcodeId: string; depositAddresses: { address: string }[] } }, balance: bigint, includeDepositAddress: boolean) {
+  return { buyerId: buyer.id, barcodeId: buyer.user.barcodeId, depositAddress: includeDepositAddress ? buyer.user.depositAddresses[0]?.address ?? null : null, balanceCoupons: balance.toString() };
 }
 export function createPartnerRouter(prisma: PrismaClient, deps: PartnerRouterDeps): express.Router {
   const router = express.Router();
@@ -77,10 +78,11 @@ export function createPartnerRouter(prisma: PrismaClient, deps: PartnerRouterDep
 
   router.post('/buyers', auth(ApiKeyScope.PARTNER_BUYERS), async (request, response, next) => {
     try {
+      await requireCustodialReserves(prisma);
       const body = buyerBodySchema.parse(request.body);
       const partnerUserId = partnerId(request);
       const existing = await prisma.partnerBuyer.findUnique({ where: { partnerUserId_externalRef: { partnerUserId, externalRef: body.externalRef } }, include: { user: { include: { depositAddresses: true } } } });
-      if (existing) { response.json(buyerPayload(existing, (await couponAccount(prisma, existing.userId)).balance)); return; }
+      if (existing) { response.json(buyerPayload(existing, (await couponAccount(prisma, existing.userId)).balance, true)); return; }
       let createdUser: { id: string } | undefined;
       for (let attempt = 0; attempt < 5; attempt += 1) {
         try {
@@ -97,19 +99,20 @@ export function createPartnerRouter(prisma: PrismaClient, deps: PartnerRouterDep
       }
       if (!createdUser) throw new Error('buyer provisioning failed');
       const buyer = await prisma.partnerBuyer.findUniqueOrThrow({ where: { userId: createdUser.id }, include: { user: { include: { depositAddresses: true } } } });
-      response.status(201).json(buyerPayload(buyer, 0n));
+      response.status(201).json(buyerPayload(buyer, 0n, true));
     } catch (error) { next(error); }
   });
   router.get('/buyers/:id', auth(ApiKeyScope.PARTNER_BUYERS), async (request, response, next) => {
     try {
       const buyer = await buyerFor(prisma, partnerId(request), String(request.params.id));
       if (!buyer) { response.status(404).json({ error: 'buyer_not_found' }); return; }
-      response.json(buyerPayload(buyer, (await couponAccount(prisma, buyer.userId)).balance));
+      response.json(buyerPayload(buyer, (await couponAccount(prisma, buyer.userId)).balance, await custodialReservesEnabled(prisma)));
     } catch (error) { next(error); }
   });
 
   router.post('/webhooks/usdt-deposit', auth(ApiKeyScope.PARTNER_DEPOSITS), async (request, response, next) => {
     try {
+      await requireCustodialReserves(prisma);
       const body = depositBodySchema.parse(request.body);
       const partnerUserId = partnerId(request);
       const buyer = await buyerFor(prisma, partnerUserId, body.buyerId);

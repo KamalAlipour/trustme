@@ -140,10 +140,27 @@ beforeEach(async () => {
   receipt = null;
   head = 111;
   await systems();
+  await prisma.systemSetting.create({ data: { key: 'CUSTODIAL_RESERVES_ENABLED', value: 'true' } });
 });
 afterAll(async () => prisma.$disconnect());
 
 describe('partner gateway', () => {
+  it('rejects centralized custody writes when reserves are disabled', async () => {
+    const app = appFixture();
+    await prisma.systemSetting.delete({ where: { key: 'CUSTODIAL_RESERVES_ENABLED' } });
+    const partner = await provisionUser(prisma, { depositXpub: config.depositXpub }, { barcodeId: 'partner-custody-disabled', isDemo: false });
+    const credentials = await createPartnerKey(app, partner.barcodeId);
+    const buyer = await signedRequest(app, 'POST', '/api/v1/buyers', { externalRef: 'disabled' }, credentials);
+    expect(buyer.status).toBe(409);
+    expect(buyer.body).toEqual({ error: 'custodial reserves are disabled' });
+    const webhook = await signedRequest(app, 'POST', '/api/v1/webhooks/usdt-deposit', {
+      buyerId: '00000000-0000-0000-0000-000000000000',
+      txHash: `0x${'11'.repeat(32)}`,
+    }, credentials);
+    expect(webhook.status).toBe(409);
+    expect(webhook.body).toEqual({ error: 'custodial reserves are disabled' });
+  });
+
   it('issues partner secrets, enforces HMAC, scopes, and the unlinked guard', async () => {
     const app = appFixture();
     const partner = await provisionUser(prisma, { depositXpub: config.depositXpub }, { barcodeId: 'partner-admin-member', isDemo: false });

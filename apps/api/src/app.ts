@@ -41,6 +41,7 @@ import { openapiDocument } from './openapi.js';
 import { createAdminRouter, EthersAdminChainProvider, type AdminChainProvider } from './admin.js';
 import { HttpError } from './http-error.js';
 import { requireIdentityForWithdrawal } from './withdrawal-settings.js';
+import { custodialReservesEnabled } from './custodial-reserves.js';
 import { createMemberAuthRouter, createMemberSecurityRouter, requireMember } from './member-auth.js';
 import { createMemberRouter, createVippsCallbackRouter } from './member-router.js';
 import { createPublicRouter } from './public-router.js';
@@ -338,7 +339,7 @@ export function createApp(dependencies: ApiDependencies): express.Express {
     try {
       const { user, account } = await userWithAccounts(prisma, barcodeIdSchema.parse(request.params.barcodeId));
       const address = await prisma.depositAddress.findFirst({ where: { userId: user.id } });
-      response.json({ barcodeId: user.barcodeId, coupons: account.balance.toString(), dustMicroUsdt: decimalFromMicroUsdt(user.dustMicroUsdt), depositAddress: address?.address ?? null });
+      response.json({ barcodeId: user.barcodeId, coupons: account.balance.toString(), dustMicroUsdt: decimalFromMicroUsdt(user.dustMicroUsdt), depositAddress: (await custodialReservesEnabled(prisma)) ? address?.address ?? null : null });
     } catch (error) {
       next(error);
     }

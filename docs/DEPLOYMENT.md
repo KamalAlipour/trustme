@@ -1,5 +1,7 @@
 # Prepaid USDT escrow deployment
 
+The admin-managed `CUSTODIAL_RESERVES_ENABLED` system setting defaults to `false` and is stored in `SystemSetting`. When disabled, it gates platform-held USDT flows including deposit-address exposure, card top-up, withdrawals, and partner deposits; distributed user-wallet and escrow-contract flows remain available.
+
 Compile the contract and generate the checked-in ABI:
 
 ```bash

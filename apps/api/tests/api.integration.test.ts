@@ -233,6 +233,7 @@ beforeEach(async () => {
     { key: 'MIN_WITHDRAWAL_USDT', value: '1' },
     { key: 'AUTO_APPROVAL_LIMIT_USDT', value: '1000' },
     { key: 'REQUIRE_IDENTITY_FOR_WITHDRAWAL', value: 'false' },
+    { key: 'CUSTODIAL_RESERVES_ENABLED', value: 'true' },
   ] });
 });
 afterAll(async () => {
@@ -496,6 +497,30 @@ describe('member API', () => {
       amountUsdt: '8.75',
       redirectUrl: config.transakSellRedirectUrl,
     });
+  });
+
+  it('disables centralized custody flows by default', async () => {
+    const { app } = appFixture(undefined, undefined, { transakApiKey: 'test-transak-key', transakApiSecret: 'test-transak-secret' });
+    await prisma.systemSetting.delete({ where: { key: 'CUSTODIAL_RESERVES_ENABLED' } });
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000093', barcodeId: 'custody-disabled' });
+    const accessToken = await memberToken(app, '+1555000093');
+    const escrowConfig = await request(app).get('/v1/me/escrow/config').set('Authorization', `Bearer ${accessToken}`);
+    expect(escrowConfig.body).toMatchObject({ custodialReservesEnabled: false, cardTopUpEnabled: false, cardSellEnabled: true });
+    const topUp = await request(app).post('/v1/me/card-topup/session').set('Authorization', `Bearer ${accessToken}`).send({});
+    expect(topUp.status).toBe(409);
+    expect(topUp.body).toEqual({ error: 'custodial reserves are disabled' });
+    const balance = await request(app).get('/v1/me/balance').set('Authorization', `Bearer ${accessToken}`);
+    expect(balance.status).toBe(200);
+    expect(balance.body.depositAddress).toBeNull();
+    const withdrawal = await request(app).post('/v1/me/withdrawals').set('Authorization', `Bearer ${accessToken}`).send({
+      destinationAddress: `0x${'33'.repeat(20)}`,
+      couponsGross: '1',
+      pin: '2468',
+    });
+    expect(withdrawal.status).toBe(409);
+    expect(withdrawal.body).toEqual({ error: 'custodial reserves are disabled' });
+    const availability = await request(app).get('/v1/me/withdrawal-availability').set('Authorization', `Bearer ${accessToken}`);
+    expect(availability.body).toMatchObject({ availableToWithdrawCoupons: '0', blockers: ['custodial_disabled'] });
   });
 
   it('requires verified identity for wallet registration and escrow unloads regardless of country', async () => {
@@ -2487,6 +2512,7 @@ describe('admin API', () => {
   it('validates and audits settings changes and searches ledger entries', async () => {
     const { app } = appFixture();
     await createAdmin(AdminRole.ADMIN);
+    await prisma.systemSetting.delete({ where: { key: 'CUSTODIAL_RESERVES_ENABLED' } });
     const defaultDisplayUnit = await request(app).get('/v1/public/display-unit');
     expect(defaultDisplayUnit.status).toBe(200);
     expect(defaultDisplayUnit.body).toEqual({
@@ -2497,6 +2523,7 @@ describe('admin API', () => {
     const jwt = await adminToken(app, 'admin@example.com');
     const settings = await request(app).get('/admin/settings').set('Authorization', `Bearer ${jwt}`);
     expect(settings.status).toBe(200);
+    expect(settings.body.custodialReservesEnabled).toBe(false);
     expect(settings.body.minimumWithdrawalMicroUsdt).toBe('1000000');
     expect(settings.body.minimumFeeMicroUsdt).toBe('200000');
     const updated = await request(app).patch('/admin/settings').set('Authorization', `Bearer ${jwt}`).send({
@@ -2504,9 +2531,11 @@ describe('admin API', () => {
       minimumFeeMicroUsdt: '300000',
       minimumWithdrawalMicroUsdt: '2000000',
       identityRequiredCountries: ['ir', 'NO', 'ir'],
+      custodialReservesEnabled: true,
     });
     expect(updated.status).toBe(200);
-    expect(updated.body).toMatchObject({ withdrawalBaseFeeBps: '250', minimumFeeMicroUsdt: '300000', minimumWithdrawalMicroUsdt: '2000000', identityRequiredCountries: ['IR', 'NO'] });
+    expect(updated.body).toMatchObject({ withdrawalBaseFeeBps: '250', minimumFeeMicroUsdt: '300000', minimumWithdrawalMicroUsdt: '2000000', identityRequiredCountries: ['IR', 'NO'], custodialReservesEnabled: true });
+    expect(await prisma.systemSetting.findUniqueOrThrow({ where: { key: 'CUSTODIAL_RESERVES_ENABLED' } })).toMatchObject({ value: 'true' });
     const displayUnitUpdate = await request(app).patch('/admin/settings').set('Authorization', `Bearer ${jwt}`).send({
       displayUnit: { en: { singular: 'Credit cent', plural: 'Credit cents' }, fa: 'سنت اعتبار' },
     });
