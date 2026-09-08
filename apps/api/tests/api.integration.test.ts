@@ -3,7 +3,7 @@ import request from 'supertest';
 import { getAddress, HDNodeWallet } from 'ethers';
 import { Redis } from 'ioredis';
 import bcrypt from 'bcryptjs';
-import { AccountType, AdminRole, Asset, BalanceDisclosureStatus, IdentityCaptureStep, PayCodeStatus, PrismaClient, TransactionType, WithdrawalStatus } from '@trustme/db';
+import { AccountType, AdminRole, Asset, BalanceDisclosureStatus, EscrowEventKind, EscrowSettlementStatus, EscrowUnloadStatus, IdentityCaptureStep, PayCodeStatus, PrismaClient, TransactionType, WithdrawalStatus } from '@trustme/db';
 import { createLoanRequest, postDeposit } from '@trustme/core';
 import { createApp, type ApiDependencies } from '../src/app.js';
 import { HttpError } from '../src/http-error.js';
@@ -1992,8 +1992,42 @@ describe('member API', () => {
     const approval = await request(app).post(`/v1/me/charity-requests/${aid.body.id}/approve`).set('Authorization', `Bearer ${agent.body.tokens.accessToken}`).send({ approvedCoupons: '500', mode: 'GUARANTEE', pin: '2468' });
     expect(approval.status).toBe(200);
     expect(approval.body).toMatchObject({ status: 'GUARANTEED', guaranteeId: expect.any(String) });
+    await prisma.escrowChainEvent.create({ data: {
+      kind: EscrowEventKind.DEPOSIT,
+      txHash: `0x${'71'.repeat(32)}`,
+      logIndex: 0,
+      blockNumber: 1n,
+      walletAddress: `0x${'72'.repeat(20)}`,
+      amountMicroUsdt: 2_000_000n,
+      userId: beneficiary.body.member.id,
+      reconciledAt: new Date(),
+    } });
+    const totalsPayCode = await prisma.payCode.create({ data: { buyerId: beneficiary.body.member.id, codeHash: await bcrypt.hash('9876', 10), maxAmountMicroUsdt: 1_000_000n, expiresAt: new Date(Date.now() + 60_000) } });
+    await prisma.escrowSettlement.create({ data: {
+      buyerId: beneficiary.body.member.id,
+      payerId: beneficiary.body.member.id,
+      merchantId: agentUser.id,
+      payCodeId: totalsPayCode.id,
+      amountMicroUsdt: 500_000n,
+      ref: 'escrow-totals-settlement',
+      status: EscrowSettlementStatus.CONFIRMED,
+      confirmedAt: new Date(),
+    } });
+    await prisma.escrowUnload.create({ data: {
+      userId: beneficiary.body.member.id,
+      walletAddress: `0x${'73'.repeat(20)}`,
+      amountMicroUsdt: 250_000n,
+      ref: 'escrow-totals-unload',
+      status: EscrowUnloadStatus.CONFIRMED,
+      confirmedAt: new Date(),
+    } });
     const escrow = await request(app).get('/v1/me/escrow').set('Authorization', `Bearer ${beneficiary.body.tokens.accessToken}`);
     expect(escrow.status).toBe(200);
+    expect(escrow.body).toMatchObject({
+      totalDepositedMicroUsdt: '2000000',
+      spentMicroUsdt: '500000',
+      unloadedMicroUsdt: '250000',
+    });
     expect(escrow.body.guaranteedCoupons).toBe('500');
     expect(escrow.body.guarantees).toHaveLength(1);
     expect(escrow.body.guarantees[0]).toMatchObject({ id: approval.body.guaranteeId, charityName: 'Guarantee HTTP Help', remainingCoupons: '500' });

@@ -815,14 +815,31 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       const balance = await prisma.escrowBalance.findUnique({ where: { userId: memberClaims(request).sub } });
       const userId = memberClaims(request).sub;
       const value = balance ?? { lockedMicroUsdt: 0n, reservedMicroUsdt: 0n };
-      const wallet = await prisma.memberWallet.findFirst({ where: { userId, isPrimary: true } });
-      const guarantees = await prisma.purchaseGuarantee.findMany({ where: { beneficiaryId: userId, status: PurchaseGuaranteeStatus.ACTIVE, remainingMicroUsdt: { gt: 0n } }, include: { charity: { select: { name: true } } }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
+      const [wallet, depositTotal, spentTotal, unloadedTotal, guarantees] = await Promise.all([
+        prisma.memberWallet.findFirst({ where: { userId, isPrimary: true } }),
+        prisma.escrowChainEvent.aggregate({
+          where: { userId, kind: 'DEPOSIT', reconciledAt: { not: null } },
+          _sum: { amountMicroUsdt: true },
+        }),
+        prisma.escrowSettlement.aggregate({
+          where: { payerId: userId, guaranteeId: null, status: EscrowSettlementStatus.CONFIRMED },
+          _sum: { amountMicroUsdt: true },
+        }),
+        prisma.escrowUnload.aggregate({
+          where: { userId, status: EscrowUnloadStatus.CONFIRMED },
+          _sum: { amountMicroUsdt: true },
+        }),
+        prisma.purchaseGuarantee.findMany({ where: { beneficiaryId: userId, status: PurchaseGuaranteeStatus.ACTIVE, remainingMicroUsdt: { gt: 0n } }, include: { charity: { select: { name: true } } }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] }),
+      ]);
       const guaranteedMicroUsdt = guarantees.reduce((total, guarantee) => total + guarantee.remainingMicroUsdt, 0n);
       response.json({
         lockedMicroUsdt: value.lockedMicroUsdt.toString(),
         reservedMicroUsdt: value.reservedMicroUsdt.toString(),
         availableMicroUsdt: availableEscrowMicroUsdt(value).toString(),
         spendableMicroUsdt: availableEscrowMicroUsdt(value).toString(),
+        totalDepositedMicroUsdt: (depositTotal._sum.amountMicroUsdt ?? 0n).toString(),
+        spentMicroUsdt: (spentTotal._sum.amountMicroUsdt ?? 0n).toString(),
+        unloadedMicroUsdt: (unloadedTotal._sum.amountMicroUsdt ?? 0n).toString(),
         guaranteedMicroUsdt: guaranteedMicroUsdt.toString(),
         guaranteedCoupons: couponAmountFromMicroUsdt(guaranteedMicroUsdt),
         guarantees: guarantees.map((guarantee) => ({ id: guarantee.id, charityName: guarantee.charity.name, remainingCoupons: couponAmountFromMicroUsdt(guarantee.remainingMicroUsdt) })),

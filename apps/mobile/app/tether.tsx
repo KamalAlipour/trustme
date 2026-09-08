@@ -12,8 +12,8 @@ import { useAvailability, useBalance, useEscrowBalance, useEscrowConfig, useEscr
 import { useSession } from '../src/auth/session';
 import { Page, LoadingScreen } from '../src/components/Screen';
 import { useTranslation } from '../src/i18n';
-import { clearEscrowMnemonic, createInAppWallet, readEscrowMnemonic, saveEscrowMnemonic } from '../src/lib/escrow-wallet';
-import { isValidRecoveryPhrase, normalizeRecoveryPhrase, parseRecoveryPhrase, parseUsdtAmount, randomVerificationWordIndices, shouldApproveAllowance, verifyMnemonicWords, withWalletConnectDeadline } from '../src/lib/escrow';
+import { clearEscrowMnemonic, readEscrowMnemonic } from '../src/lib/escrow-wallet';
+import { parseUsdtAmount, shouldApproveAllowance, withWalletConnectDeadline } from '../src/lib/escrow';
 import { formatCoupons, formatDate, formatMicroUsdt } from '../src/lib/format';
 import { mapApiError } from '../src/lib/errors';
 import { colors, styles } from '../src/styles';
@@ -73,13 +73,6 @@ export default function Tether() {
   const availability = useAvailability();
   const invalidate = useInvalidateMoney();
   const [wallet, setWallet] = useState<EscrowWallet | null>(null);
-  const [draftWords, setDraftWords] = useState<string[] | null>(null);
-  const [draftAddress, setDraftAddress] = useState('');
-  const [recoveryPhrase, setRecoveryPhrase] = useState('');
-  const [wordIndices, setWordIndices] = useState<[number, number] | null>(null);
-  const [wordAnswers, setWordAnswers] = useState<[string, string]>(['', '']);
-  const [writtenDown, setWrittenDown] = useState(false);
-  const [mnemonic, setMnemonic] = useState<string | null>(null);
   const [revealedWords, setRevealedWords] = useState<string[] | null>(null);
   const [walletConnectSession, setWalletConnectSession] = useState<WalletConnectSession | null>(null);
   const [topUpAmount, setTopUpAmount] = useState('');
@@ -169,10 +162,6 @@ export default function Tether() {
 
   const shortAddress = useMemo(() => wallet === null ? '' : `${wallet.address.slice(0, 6)}…${wallet.address.slice(-4)}`, [wallet]);
   const availableMicroUsdt = BigInt(balance.data?.availableMicroUsdt ?? '0');
-  const recoveryWordCount = useMemo(() => {
-    const normalized = normalizeRecoveryPhrase(recoveryPhrase);
-    return normalized === '' ? 0 : normalized.split(' ').length;
-  }, [recoveryPhrase]);
   if (config.isLoading) return <LoadingScreen />;
   if (!config.data?.enabled) {
     return <Page><View style={styles.row}><Pressable onPress={() => router.back()}><Text style={styles.secondaryButtonText}>{t.escrow.back}</Text></Pressable><Text style={styles.title}>{t.escrow.title}</Text><HeaderIcons /></View><Text style={styles.muted}>{t.comingSoon}</Text></Page>;
@@ -204,67 +193,6 @@ export default function Tether() {
     const registered = await request<EscrowWallet>('/v1/me/wallets', { method: 'POST', body: { address, kind } });
     setWallet(registered);
     await invalidate();
-  };
-  const createWallet = async () => {
-    setFeedback(null);
-    const created = createInAppWallet();
-    const words = created.mnemonic?.phrase?.split(' ') ?? [];
-    if (words.length !== 12) throw new Error('wallet mnemonic unavailable');
-    setMnemonic(created.mnemonic?.phrase ?? null);
-    setDraftWords(words);
-    setDraftAddress(created.address);
-    setWordIndices(await randomVerificationWordIndices(words.length));
-    setWordAnswers(['', '']);
-    setWrittenDown(false);
-  };
-  const clearDraft = () => {
-    setDraftWords(null);
-    setMnemonic(null);
-    setDraftAddress('');
-    setWordIndices(null);
-    setWordAnswers(['', '']);
-    setWrittenDown(false);
-  };
-  const discardDraft = () => {
-    clearDraft();
-    setFeedback(null);
-  };
-  const finishWallet = async () => {
-    if (draftWords === null || mnemonic === null || wordIndices === null) return;
-    if (!writtenDown) return;
-    if (!verifyMnemonicWords(draftWords, wordIndices, wordAnswers)) {
-      clearDraft();
-      showError(t.escrow.recoveryMismatchRestart);
-      return;
-    }
-    await run('wallet', async () => {
-      await saveEscrowMnemonic(mnemonic);
-      const persisted = await readEscrowMnemonic();
-      if (persisted !== mnemonic) throw new Error(t.escrow.walletPersistenceFailed);
-      await registerWallet(draftAddress, 'IN_APP');
-      setDraftWords(null);
-      setMnemonic(null);
-      setWordIndices(null);
-      setWordAnswers(['', '']);
-      setWrittenDown(false);
-      showSuccess(t.escrow.walletCreated);
-    });
-  };
-  const importWallet = async () => {
-    await run('import-wallet', async () => {
-      if (!isValidRecoveryPhrase(recoveryPhrase)) {
-        showError(t.escrow.importInvalidPhrase);
-        return;
-      }
-      const phrase = parseRecoveryPhrase(recoveryPhrase);
-      const imported = Wallet.fromPhrase(phrase);
-      await saveEscrowMnemonic(phrase);
-      const persisted = await readEscrowMnemonic();
-      if (persisted !== phrase) throw new Error(t.escrow.walletPersistenceFailed);
-      await registerWallet(imported.address, 'IN_APP');
-      setRecoveryPhrase('');
-      showSuccess(t.escrow.recoveryImported);
-    });
   };
   const openWalletApp = async (uri: string): Promise<void> => {
     try {
@@ -319,13 +247,6 @@ export default function Tether() {
       if (walletConnectSession !== null) await walletConnectSession.provider.disconnect().catch(() => {});
       if (wallet.kind === 'IN_APP') await clearEscrowMnemonic();
       setWallet(null);
-      setDraftWords(null);
-      setDraftAddress('');
-      setRecoveryPhrase('');
-      setWordIndices(null);
-      setWordAnswers(['', '']);
-      setWrittenDown(false);
-      setMnemonic(null);
       setRevealedWords(null);
       setWalletConnectSession(null);
       setTopUpAmount('');
@@ -364,7 +285,7 @@ export default function Tether() {
     if (wallet === null) throw new Error(t.escrow.noWallet);
     if (wallet.kind === 'IN_APP') {
       if (escrowConfig.rpcUrl === null) throw new Error(t.escrow.publicRpcUnavailable);
-      const stored = mnemonic ?? await readEscrowMnemonic();
+      const stored = await readEscrowMnemonic();
       if (stored === null) throw new Error(t.escrow.walletNotFound);
       const localWallet = Wallet.fromPhrase(stored);
       return localWallet.connect(new JsonRpcProvider(escrowConfig.rpcUrl, escrowConfig.chainId));
@@ -497,33 +418,33 @@ export default function Tether() {
         </Pressable>
       </View> : null}
       <View style={styles.card}>
-        <Text style={styles.heading}>{t.escrow.locked}</Text>
-        <Text style={styles.title}>{formatMicroUsdt(balance.data?.lockedMicroUsdt ?? '0', language)} USDT</Text>
-        <Text style={styles.muted}>{t.escrow.available}: {formatMicroUsdt(balance.data?.availableMicroUsdt ?? '0', language)} USDT</Text>
+        <Text style={styles.heading}>{t.escrow.availableBalance}</Text>
+        <Text style={styles.title}>{formatMicroUsdt(balance.data?.availableMicroUsdt ?? '0', language)} USDT</Text>
+        <Text style={styles.muted}>{t.escrow.totalDeposited}: {formatMicroUsdt(balance.data?.totalDepositedMicroUsdt ?? '0', language)} USDT · {t.escrow.spent}: {formatMicroUsdt(balance.data?.spentMicroUsdt ?? '0', language)} USDT{BigInt(balance.data?.unloadedMicroUsdt ?? '0') > 0n ? ` · ${t.escrow.returnedToWallet}: ${formatMicroUsdt(balance.data?.unloadedMicroUsdt ?? '0', language)} USDT` : ''}</Text>
         {(balance.data?.guarantees ?? []).map((guarantee) => <Text key={guarantee.id} style={styles.notice}>{t.escrow.guaranteedBy(guarantee.charityName, formatCoupons(guarantee.remainingCoupons, language))}</Text>)}
         <Text style={styles.notice}>{t.escrow.confirmationNotice}</Text>
+        {!identityRequired ? <>
+          <TextInput value={topUpAmount} onChangeText={setTopUpAmount} placeholder={t.escrow.topUpAmount} style={styles.input} keyboardType="decimal-pad" />
+          <Text style={styles.muted}>{t.escrow.twoSignatureNotice}</Text>
+          {publicRpcUnavailable ? <Text style={styles.danger}>{t.escrow.publicRpcUnavailable}</Text> : null}
+          <Pressable disabled={busy !== '' || wallet === null || publicRpcUnavailable} onPress={() => void sendTopUp()} style={[styles.button, busy !== '' || wallet === null || publicRpcUnavailable ? styles.buttonDisabled : null]}><Text style={styles.buttonText}>{t.escrow.topUpButton}</Text></Pressable>
+        </> : null}
       </View>
 
       {!identityRequired ? <View style={styles.card}>
         <Text style={styles.heading}>{t.escrow.wallet}</Text>
-        {wallet === null ? <Text style={styles.muted}>{t.escrow.noWallet}</Text> : <><Text style={styles.muted}>{t.escrow.walletAddress}: {shortAddress}</Text><Pressable onPress={() => void copyAddress()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.escrow.copyAddress}</Text></Pressable>{wallet.kind === 'IN_APP' ? <Pressable onPress={() => void revealWallet()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.escrow.walletReveal}</Text></Pressable> : null}<Pressable onPress={() => setRemoveWalletConfirm(true)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.escrow.disconnectWallet}</Text></Pressable>{removeWalletConfirm ? <View style={styles.card}><Text style={styles.muted}>{wallet.kind === 'IN_APP' ? t.escrow.disconnectInAppWarning : t.escrow.disconnectExternalWarning}</Text><Pressable onPress={() => void removeWallet()} style={styles.button}><Text style={styles.buttonText}>{t.escrow.disconnectConfirm}</Text></Pressable><Pressable onPress={() => setRemoveWalletConfirm(false)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.cancel}</Text></Pressable></View> : null}</>}
+        {wallet === null ? <>
+          {config.data.walletConnectProjectId !== null ? <Pressable disabled={busy !== ''} onPress={() => void connectWallet()} style={[styles.button, busy !== '' ? styles.buttonDisabled : null]}><Text style={styles.buttonText}>{t.escrow.connectWallet}</Text></Pressable> : <Text style={styles.muted}>{t.escrow.nativeWalletNote}</Text>}
+          <Text style={styles.muted}>{t.escrow.noWalletGuide}</Text>
+          <Pressable onPress={() => void openWalletApp('https://trustwallet.com')} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.escrow.trustWallet}</Text></Pressable>
+          <Pressable onPress={() => void openWalletApp('https://metamask.io')} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.escrow.metaMask}</Text></Pressable>
+        </> : <><Text style={styles.muted}>{t.escrow.walletAddress}: {shortAddress}</Text><Pressable onPress={() => void copyAddress()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.escrow.copyAddress}</Text></Pressable>{wallet.kind === 'IN_APP' ? <Pressable onPress={() => void revealWallet()} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.escrow.walletReveal}</Text></Pressable> : null}<Pressable onPress={() => setRemoveWalletConfirm(true)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.escrow.disconnectWallet}</Text></Pressable>{removeWalletConfirm ? <View style={styles.card}><Text style={styles.muted}>{wallet.kind === 'IN_APP' ? t.escrow.disconnectInAppWarning : t.escrow.disconnectExternalWarning}</Text><Pressable onPress={() => void removeWallet()} style={styles.button}><Text style={styles.buttonText}>{t.escrow.disconnectConfirm}</Text></Pressable><Pressable onPress={() => setRemoveWalletConfirm(false)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.cancel}</Text></Pressable></View> : null}</>}
         {Platform.OS === 'web' ? <Text style={styles.muted}>{t.escrow.webWalletWarning}</Text> : null}
-        {draftWords !== null && wordIndices !== null ? <View style={styles.card}>{!writtenDown ? <><Text style={styles.text}>{t.escrow.recoveryWords}</Text><RecoveryWords words={draftWords} /><Pressable onPress={() => setWrittenDown(true)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.escrow.writtenDown}</Text></Pressable></> : <><Text style={styles.muted}>{t.escrow.verifyWords(wordIndices[0] + 1, wordIndices[1] + 1)}</Text><TextInput value={wordAnswers[0]} onChangeText={(value) => setWordAnswers([value, wordAnswers[1]])} placeholder={t.escrow.verifyWord(wordIndices[0] + 1)} style={styles.input} autoCapitalize="none" /><TextInput value={wordAnswers[1]} onChangeText={(value) => setWordAnswers([wordAnswers[0], value])} placeholder={t.escrow.verifyWord(wordIndices[1] + 1)} style={styles.input} autoCapitalize="none" /><Pressable onPress={() => void finishWallet()} style={styles.button}><Text style={styles.buttonText}>{t.escrow.verifyRecovery}</Text></Pressable><Pressable onPress={() => { setWrittenDown(false); setWordAnswers(['', '']); setFeedback(null); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.escrow.showWordsAgain}</Text></Pressable></>}<Pressable onPress={discardDraft} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.escrow.discardDraft}</Text></Pressable></View> : <>
-          {wallet === null ? <><Pressable disabled={busy !== ''} onPress={() => void run('wallet', createWallet)} style={[styles.button, busy !== '' ? styles.buttonDisabled : null]}><Text style={styles.buttonText}>{t.escrow.createWallet}</Text></Pressable>{config.data.walletConnectProjectId !== null ? <Pressable disabled={busy !== ''} onPress={() => void connectWallet()} style={[styles.secondaryButton, busy !== '' ? styles.buttonDisabled : null]}><Text style={styles.secondaryButtonText}>{t.escrow.connectWallet}</Text></Pressable> : Platform.OS !== 'web' && config.data.walletConnectProjectId === null ? <Text style={styles.muted}>{t.escrow.nativeWalletNote}</Text> : null}</> : wallet.kind === 'EXTERNAL' && walletConnectSession === null && config.data.walletConnectProjectId !== null ? <Pressable disabled={busy !== ''} onPress={() => void connectWallet()} style={[styles.secondaryButton, busy !== '' ? styles.buttonDisabled : null]}><Text style={styles.secondaryButtonText}>{t.escrow.connectWallet}</Text></Pressable> : null}
+        {wallet !== null && wallet.kind === 'EXTERNAL' && walletConnectSession === null && config.data.walletConnectProjectId !== null ? <Pressable disabled={busy !== ''} onPress={() => void connectWallet()} style={[styles.secondaryButton, busy !== '' ? styles.buttonDisabled : null]}><Text style={styles.secondaryButtonText}>{t.escrow.connectWallet}</Text></Pressable> : null}
           {busy === 'connect-wallet' ? <><Text style={styles.muted}>{t.escrow.connectPending}</Text><Pressable onPress={cancelConnect} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.escrow.cancelConnect}</Text></Pressable></> : null}
-          <View style={styles.card}><Text style={styles.heading}>{t.escrow.importRecovery}</Text><TextInput value={recoveryPhrase} onChangeText={setRecoveryPhrase} placeholder={t.escrow.importRecoveryPlaceholder} style={styles.input} autoCapitalize="none" multiline />{recoveryWordCount > 0 && recoveryWordCount !== 12 ? <Text style={styles.muted}>{t.escrow.importWordCount(recoveryWordCount)}</Text> : null}<Pressable disabled={busy !== '' || recoveryWordCount !== 12} onPress={() => void importWallet()} style={[styles.secondaryButton, busy !== '' || recoveryWordCount !== 12 ? styles.buttonDisabled : null]}><Text style={styles.secondaryButtonText}>{t.escrow.importWallet}</Text></Pressable></View>
-        </>}
         {revealedWords !== null ? <View style={styles.card}><Text style={styles.text}>{t.escrow.recoveryWords}</Text><RecoveryWords words={revealedWords} /><Pressable onPress={() => setRevealedWords(null)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.close}</Text></Pressable></View> : null}
         {busy === 'remove-wallet' ? <Text style={styles.muted}>{t.loading}</Text> : null}
         {feedback ? <Text style={feedback.kind === 'success' ? styles.notice : styles.danger}>{feedback.text}</Text> : null}
-      </View> : null}
-
-      {!identityRequired ? <View style={styles.card}>
-        <Text style={styles.heading}>{t.escrow.topUp}</Text>
-        <TextInput value={topUpAmount} onChangeText={setTopUpAmount} placeholder={t.escrow.topUpAmount} style={styles.input} keyboardType="decimal-pad" />
-        <Text style={styles.muted}>{t.escrow.twoSignatureNotice}</Text>
-        {publicRpcUnavailable ? <Text style={styles.danger}>{t.escrow.publicRpcUnavailable}</Text> : null}
-        <Pressable disabled={busy !== '' || wallet === null || publicRpcUnavailable} onPress={() => void sendTopUp()} style={[styles.button, busy !== '' || wallet === null || publicRpcUnavailable ? styles.buttonDisabled : null]}><Text style={styles.buttonText}>{t.escrow.topUpButton}</Text></Pressable>
       </View> : null}
 
       {!identityRequired && config.data?.cardTopUpEnabled && moneyBalance.data?.depositAddress ? <View style={styles.card}>

@@ -168,6 +168,9 @@ export type EscrowBalance = {
   reservedMicroUsdt: string;
   availableMicroUsdt: string;
   spendableMicroUsdt: string;
+  totalDepositedMicroUsdt: string;
+  spentMicroUsdt: string;
+  unloadedMicroUsdt: string;
   guaranteedMicroUsdt: string;
   guaranteedCoupons: string;
   guarantees: Array<{ id: string; charityName: string; remainingCoupons: string }>;
