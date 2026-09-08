@@ -161,7 +161,7 @@ async function memberTokenForUser(userId: string) {
 
 async function completeMemberSetup(phone: string) {
   const user = await prisma.user.findUniqueOrThrow({ where: { phoneNumber: phone } });
-  await prisma.user.update({ where: { id: user.id }, data: { biometricEnrolledAt: new Date(), securitySetupCompletedAt: new Date() } });
+  await prisma.user.update({ where: { id: user.id }, data: { pinHash: user.pinHash ?? await bcrypt.hash('2468', 12), biometricEnrolledAt: new Date(), securitySetupCompletedAt: new Date() } });
 }
 
 async function createCaptureFixture(userId: string, name: string, expiresAt = new Date(Date.now() + 5 * 60_000)) {
