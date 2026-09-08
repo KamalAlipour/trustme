@@ -246,6 +246,12 @@ enum EscrowUnloadStatus {
   FAILED
 }
 
+enum EscrowPermitDepositStatus {
+  PENDING
+  CONFIRMED
+  FAILED
+}
+
 model User {
   id                   String              @id @default(uuid()) @db.Uuid
   phoneNumber          String?             @unique
@@ -326,6 +332,7 @@ model User {
   commissionPayoutsReceived CommissionPayout[] @relation("PayoutRecipient")
   commissionPayoutsAttributed CommissionPayout[] @relation("PayoutSource")
   unloads              EscrowUnload[]
+  permitDeposits       EscrowPermitDeposit[]
   escrowChainEvents    EscrowChainEvent[]
   partnerApiKeys       ApiKey[]             @relation("PartnerTreasury")
   partnerBuyers        PartnerBuyer[]       @relation("PartnerBuyerPartner")
@@ -706,6 +713,27 @@ model EscrowUnload {
   createdAt       DateTime           @default(now())
   confirmedAt     DateTime?
   user            User               @relation(fields: [userId], references: [id])
+}
+
+model EscrowPermitDeposit {
+  id              String                    @id @default(uuid()) @db.Uuid
+  userId          String                    @db.Uuid
+  walletAddress   String
+  amountMicroUsdt BigInt
+  deadline        BigInt
+  v               Int
+  r               String
+  s               String
+  status          EscrowPermitDepositStatus @default(PENDING)
+  chainTxHash     String?
+  lastError       String?
+  attempts        Int                       @default(0)
+  createdAt       DateTime                  @default(now())
+  confirmedAt     DateTime?
+  user            User                      @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([status, chainTxHash])
 }
 
 model SystemSetting {

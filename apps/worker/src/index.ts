@@ -3,13 +3,13 @@ import { readFile } from 'node:fs/promises';
 import { HDNodeWallet, JsonRpcProvider } from 'ethers';
 import { UnrecoverableError, Worker as BullWorker } from 'bullmq';
 import { pino } from 'pino';
-import { DepositSweepStatus, PrismaClient, WithdrawalStatus } from '@trustme/db';
+import { DepositSweepStatus, EscrowPermitDepositStatus, PrismaClient, WithdrawalStatus } from '@trustme/db';
 import { createEthersProvider, createWalletSigner } from './provider.js';
 import { loadWorkerConfig, type WorkerConfig } from './config.js';
 import { ingestOnce } from './ingest.js';
 import { ingestEscrowOnce } from './escrow-ingest.js';
 import { confirmWithdrawal, dispatchWithdrawal } from './dispatch.js';
-import { confirmEscrowSettlement, confirmEscrowUnload, dispatchEscrowSettlement, dispatchEscrowUnload } from './escrow-dispatch.js';
+import { confirmEscrowPermitDeposit, confirmEscrowSettlement, confirmEscrowUnload, dispatchEscrowPermitDeposit, dispatchEscrowSettlement, dispatchEscrowUnload } from './escrow-dispatch.js';
 import { cleanupUnattachedMedia } from './media-cleanup.js';
 import { expireBalanceDisclosures } from './disclosure-cleanup.js';
 import { churnDemoCoupons } from './demo-churn.js';
@@ -188,6 +188,15 @@ export async function startWorker(config: WorkerConfig = loadWorkerConfig()): Pr
         if (result.txHash !== undefined) await queues.confirmation.add('escrow-unload-confirm', job.data, { delay: 15_000, jobId: `escrow-unload-confirm:${job.data.unloadId}` });
         return result;
       }
+      if (job.name === 'escrow-permit-deposit') {
+        if (escrowSigner === null || config.escrowContractAddress === undefined) {
+          logger.warn('escrow permit deposit disabled: ESCROW_SETTLER_KEY or ESCROW_CONTRACT_ADDRESS is not configured');
+          return { status: 'disabled' };
+        }
+        const result = await dispatchEscrowPermitDeposit(prisma, provider, escrowSigner, config, String(job.data.permitDepositId));
+        if (result.txHash !== undefined) await queues.confirmation.add('escrow-permit-deposit-confirm', job.data, { delay: 15_000, jobId: `escrow-permit-deposit-confirm:${job.data.permitDepositId}` });
+        return result;
+      }
       if (job.name === 'sweep-gas') {
         if (depositAccountNode === null) return { status: 'disabled' };
         const result = await fundSweepGas(prisma, provider, depositAccountNode, signer, sweepConfig, String(job.data.sweepId));
@@ -219,6 +228,11 @@ export async function startWorker(config: WorkerConfig = loadWorkerConfig()): Pr
       if (job.name === 'escrow-unload-confirm') {
         const result = await confirmEscrowUnload(prisma, provider, String(job.data.unloadId));
         if (result.status === 'waiting') await queues.confirmation.add('escrow-unload-confirm', job.data, { delay: 15_000, jobId: `escrow-unload-confirm:${job.data.unloadId}:${Date.now()}` });
+        return result;
+      }
+      if (job.name === 'escrow-permit-deposit-confirm') {
+        const result = await confirmEscrowPermitDeposit(prisma, provider, String(job.data.permitDepositId));
+        if (result.status === 'waiting') await queues.confirmation.add('escrow-permit-deposit-confirm', job.data, { delay: 15_000, jobId: `escrow-permit-deposit-confirm:${job.data.permitDepositId}:${Date.now()}` });
         return result;
       }
       const result = await confirmWithdrawal(prisma, provider, config, String(job.data.withdrawalId), logger);
@@ -285,6 +299,10 @@ export async function startWorker(config: WorkerConfig = loadWorkerConfig()): Pr
   await Promise.all(pendingSettlements.map((row) => queues.confirmation.add('escrow-settle-confirm', { settlementId: row.id }, { jobId: `escrow-settlement-confirm:${row.id}` })));
   const pendingUnloads = await prisma.escrowUnload.findMany({ where: { status: 'PENDING', chainTxHash: { not: null } }, select: { id: true } });
   await Promise.all(pendingUnloads.map((row) => queues.confirmation.add('escrow-unload-confirm', { unloadId: row.id }, { jobId: `escrow-unload-confirm:${row.id}` })));
+  const pendingPermitDeposits = await prisma.escrowPermitDeposit.findMany({ where: { status: EscrowPermitDepositStatus.PENDING, chainTxHash: { not: null } }, select: { id: true } });
+  await Promise.all(pendingPermitDeposits.map((row) => queues.confirmation.add('escrow-permit-deposit-confirm', { permitDepositId: row.id }, { jobId: `escrow-permit-deposit-confirm:${row.id}` })));
+  const queuedPermitDeposits = await prisma.escrowPermitDeposit.findMany({ where: { status: EscrowPermitDepositStatus.PENDING, chainTxHash: null }, select: { id: true } });
+  await Promise.all(queuedPermitDeposits.map((row) => queues.dispatch.add('escrow-permit-deposit', { permitDepositId: row.id }, { jobId: `escrow-permit-deposit:${row.id}` })));
   const inFlightSweeps = await prisma.depositSweep.findMany({
     where: { status: { in: [DepositSweepStatus.PENDING, DepositSweepStatus.GAS_FUNDING, DepositSweepStatus.BROADCAST] } },
     select: { depositAddressId: true },

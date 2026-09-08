@@ -21,6 +21,10 @@ npx tsx scripts/deploy-escrow.ts
 
 `ESCROW_CONTRACT_ADDRESS`, `ESCROW_CHAIN_ID`, `USDT_CONTRACT_ADDRESS`,
 `WALLETCONNECT_PROJECT_ID`, and `WEB3AUTH_CLIENT_ID` are API settings.
+Gasless permit deposits use `ESCROW_USDT_PERMIT_NAME` and
+`ESCROW_USDT_PERMIT_VERSION` for the token's EIP-712 domain (defaults:
+`USDT0` and `1`). `ESCROW_NATIVE_CURRENCY_SYMBOL` and `ESCROW_CHAIN_NAME`
+override wallet network metadata (defaults: `POL` and `Polygon Mainnet`).
 `ESCROW_SETTLER_ADDRESS` is a required deployment-time input. It must be the
 address corresponding to the worker's `ESCROW_SETTLER_KEY`; the deployment
 script configures the contract's settler automatically after deployment, so no
@@ -49,6 +53,11 @@ deployer key is used only by the deployment script.
 the QR modal and on native through a deep link into the installed wallet. The
 allowed-domains list in WalletConnect Cloud must include
 `https://app-trustcoupon.komasi.as`.
+
+The escrow contract must be redeployed after adding `depositWithPermit`, then
+`ESCROW_CONTRACT_ADDRESS` must be updated in the API/worker environment and
+both services restarted. The existing `scripts/deploy-escrow.ts` behavior is
+otherwise unchanged.
 
 For admin Google sign-in, set `ADMIN_GOOGLE_CLIENT_ID` to the Google web OAuth
 client ID and include the same client ID in the API's

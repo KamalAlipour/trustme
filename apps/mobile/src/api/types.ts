@@ -146,6 +146,12 @@ export type WithdrawalQuote = {
 export type EscrowConfig = {
   contractAddress: string | null;
   chainId: number;
+  permitDeposit: {
+    enabled: boolean;
+    domain: { name: string; version: string; salt: string };
+  };
+  nativeCurrencySymbol: string;
+  chainName: string;
   usdtAddress: string;
   rpcUrl: string | null;
   decimals: number;
@@ -155,6 +161,16 @@ export type EscrowConfig = {
   cardSellEnabled: boolean;
   enabled: boolean;
   custodialReservesEnabled: boolean;
+};
+export type EscrowPermitDeposit = {
+  id: string;
+  status: 'PENDING' | 'CONFIRMED' | 'FAILED';
+  amount: string;
+  walletAddress: string;
+  chainTxHash: string | null;
+  lastError: string | null;
+  createdAt: string;
+  confirmedAt: string | null;
 };
 export type EscrowWallet = {
   id: string;

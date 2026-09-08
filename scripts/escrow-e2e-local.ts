@@ -8,6 +8,7 @@ import {
   ContractFactory,
   HDNodeWallet,
   JsonRpcProvider,
+  Signature,
   type InterfaceAbi,
 } from 'ethers';
 import solc from 'solc';
@@ -268,10 +269,31 @@ async function main(): Promise<void> {
     const tokenContract = new Contract(tokenAddress, mock.abi, buyer);
     const mintReceipt = await (await tokenContract.getFunction('mint')(buyer.address, microDeposit)).wait();
     assert(mintReceipt !== null, 'mint transaction was not mined');
-    const approvalReceipt = await (await tokenContract.getFunction('approve')(escrowAddress, microDeposit)).wait();
-    assert(approvalReceipt !== null, 'approval transaction was not mined');
-    const depositReceipt = await (await escrow.getFunction('deposit')(microDeposit)).wait();
-    assert(depositReceipt !== null, 'deposit transaction was not mined');
+    const nonce = await tokenContract.getFunction('nonces')(buyer.address);
+    const deadline = BigInt(Math.floor(Date.now() / 1000) + 1_800);
+    const permitSignature = await buyer.signTypedData(
+      { name: 'Mock USDT', version: '1', chainId: 31_337, verifyingContract: tokenAddress },
+      { Permit: [
+        { name: 'owner', type: 'address' },
+        { name: 'spender', type: 'address' },
+        { name: 'value', type: 'uint256' },
+        { name: 'nonce', type: 'uint256' },
+        { name: 'deadline', type: 'uint256' },
+      ] },
+      { owner: buyer.address, spender: escrowAddress, value: microDeposit, nonce, deadline },
+    );
+    const permitParts = Signature.from(permitSignature);
+    const escrowSettler = new Contract(escrowAddress, trustCouponEscrowAbi, settler);
+    const depositReceipt = await (await escrowSettler.getFunction('depositWithPermit')(
+      buyer.address,
+      microDeposit,
+      deadline,
+      permitParts.v,
+      permitParts.r,
+      permitParts.s,
+    )).wait();
+    assert(depositReceipt !== null, 'permit deposit transaction was not mined');
+    pass('permit deposit executed', `amount=${microDeposit} nonce=${nonce}`);
     const escrowIngestConfig: EscrowIngestConfig = {
       escrowContractAddress: escrowAddress,
       chainStartBlock: 0,
