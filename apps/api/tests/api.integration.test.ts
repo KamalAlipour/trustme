@@ -570,6 +570,7 @@ describe('member API', () => {
   it('validates and queues gasless permit deposits', async () => {
     const { app, calls } = appFixture(undefined, undefined, { escrowContractAddress: getAddress(`0x${'47'.repeat(20)}`) });
     await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000321', barcodeId: 'permit-happy' });
+    await completeMemberSetup('+1555000321');
     const user = await prisma.user.findUniqueOrThrow({ where: { barcodeId: 'permit-happy' } });
     await prisma.user.update({ where: { id: user.id }, data: { identityVerificationStatus: 'VERIFIED', identityVerifiedAt: new Date() } });
     await prisma.memberWallet.create({ data: { userId: user.id, address: getAddress(`0x${'47'.repeat(20)}`), kind: 'IN_APP', chainId: 137 } });
@@ -608,6 +609,7 @@ describe('member API', () => {
     expect(unverified.status).toBe(403);
 
     await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000322', barcodeId: 'permit-no-wallet' });
+    await completeMemberSetup('+1555000322');
     const noWalletUser = await prisma.user.findUniqueOrThrow({ where: { barcodeId: 'permit-no-wallet' } });
     await prisma.user.update({ where: { id: noWalletUser.id }, data: { identityVerificationStatus: 'VERIFIED', identityVerifiedAt: new Date() } });
     const noWalletToken = await memberTokenForUser(noWalletUser.id);
