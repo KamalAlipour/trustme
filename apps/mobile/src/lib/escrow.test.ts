@@ -19,6 +19,7 @@ describe('escrow helpers', () => {
   it('estimates a buffered POL gas requirement with a minimum and cent rounding', () => {
     expect(formatPolAmount(estimateRequiredPol(100_000n, 30_000_000_000n))).toBe('0.05');
     expect(formatPolAmount(estimateRequiredPol(1_000_000n, 100_000_000_000n))).toBe('0.15');
+    expect(formatPolAmount(estimateRequiredPol(1_000_001n, 100_000_000_000n))).toBe('0.16');
     expect(formatPolAmount(estimateRequiredPol(1n, 1n))).toBe('0.05');
   });
   it('selects two different mnemonic words and verifies them', () => {
