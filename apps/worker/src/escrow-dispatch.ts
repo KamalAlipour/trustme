@@ -1,6 +1,6 @@
 import { getAddress, Interface, keccak256, type TransactionRequest } from 'ethers';
-import { EscrowSettlementStatus, EscrowUnloadStatus, PrismaClient } from '@trustme/db';
-import { confirmSettlement, confirmUnload, failSettlement, failUnload, trustCouponEscrowAbi } from '@trustme/core';
+import { EscrowPermitDepositStatus, EscrowSettlementStatus, EscrowUnloadStatus, PrismaClient } from '@trustme/db';
+import { confirmPermitDeposit, confirmSettlement, confirmUnload, failPermitDeposit, failSettlement, failUnload, trustCouponEscrowAbi } from '@trustme/core';
 import { assertChainHealthy, type ChainHealthConfig } from './chain-health.js';
 import { calculateGasLimit, feeFieldsWithType, isKnownBroadcastError } from './dispatch.js';
 import type { ChainProvider, TransactionSigner } from './provider.js';
@@ -91,6 +91,73 @@ export async function dispatchEscrowUnload(
   }
 }
 
+function revertReason(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const reason = message.match(/(?:reason string|reason|execution reverted)[:=]\s*['"]?([^'"\n]+)['"]?/i)?.[1];
+  return reason === undefined ? message : reason;
+}
+
+function isEstimateRevert(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /revert|call_exception|execution reverted/i.test(message);
+}
+
+export async function dispatchEscrowPermitDeposit(
+  prisma: PrismaClient,
+  provider: ChainProvider,
+  signer: TransactionSigner,
+  config: EscrowDispatchConfig,
+  permitDepositId: string,
+): Promise<{ status: string; txHash?: string }> {
+  if (config.escrowContractAddress === undefined || config.escrowSettlerKey === undefined) return { status: 'disabled' };
+  const permitDeposit = await prisma.escrowPermitDeposit.findUnique({ where: { id: permitDepositId } });
+  if (permitDeposit === null || permitDeposit.status !== EscrowPermitDepositStatus.PENDING) return { status: 'skipped' };
+  if (permitDeposit.chainTxHash !== null) return { status: 'broadcast', txHash: permitDeposit.chainTxHash };
+  if (permitDeposit.attempts >= (config.escrowMaxAttempts ?? 5)) {
+    await failPermitDeposit(prisma, { permitDepositId, error: 'escrow permit deposit attempt limit reached' });
+    return { status: 'failed' };
+  }
+  try {
+    await assertChainHealthy(prisma, provider, config);
+    const fees = await provider.estimateFees();
+    const base: TransactionRequest = {
+      to: config.escrowContractAddress,
+      data: contractInterface.encodeFunctionData('depositWithPermit', [
+        getAddress(permitDeposit.walletAddress),
+        permitDeposit.amountMicroUsdt,
+        permitDeposit.deadline,
+        permitDeposit.v,
+        permitDeposit.r,
+        permitDeposit.s,
+      ]),
+      chainId: config.chainId,
+      nonce: await provider.getTransactionCount(signer.address, 'pending'),
+      ...feeFieldsWithType(fees),
+    };
+    let gasLimit;
+    try {
+      gasLimit = calculateGasLimit(await provider.estimateGas({ ...base, from: signer.address }), config);
+    } catch (error) {
+      if (isEstimateRevert(error)) {
+        await failPermitDeposit(prisma, { permitDepositId, error: revertReason(error) });
+        return { status: 'failed' };
+      }
+      throw error;
+    }
+    const signed = await signer.signTransaction({ ...base, gasLimit });
+    const txHash = keccak256(signed);
+    await prisma.escrowPermitDeposit.update({ where: { id: permitDepositId }, data: { chainTxHash: txHash, attempts: { increment: 1 } } });
+    try { await provider.sendTransaction(signed); } catch (error) { if (!isKnownBroadcastError(error, txHash)) throw error; }
+    return { status: 'broadcast', txHash };
+  } catch (error) {
+    await prisma.escrowPermitDeposit.update({
+      where: { id: permitDepositId },
+      data: { attempts: { increment: 1 }, lastError: error instanceof Error ? error.message : String(error) },
+    });
+    throw error;
+  }
+}
+
 export async function confirmEscrowSettlement(prisma: PrismaClient, provider: ChainProvider, settlementId: string) {
   const row = await prisma.escrowSettlement.findUnique({ where: { id: settlementId } });
   if (row === null || row.chainTxHash === null) return { status: 'skipped' };
@@ -114,5 +181,18 @@ export async function confirmEscrowUnload(prisma: PrismaClient, provider: ChainP
     return { status: 'failed', txHash: row.chainTxHash };
   }
   await confirmUnload(prisma, { ref: row.ref, txHash: row.chainTxHash });
+  return { status: 'completed', txHash: row.chainTxHash };
+}
+
+export async function confirmEscrowPermitDeposit(prisma: PrismaClient, provider: ChainProvider, permitDepositId: string) {
+  const row = await prisma.escrowPermitDeposit.findUnique({ where: { id: permitDepositId } });
+  if (row === null || row.chainTxHash === null) return { status: 'skipped' };
+  const receipt = await provider.getTransactionReceipt(row.chainTxHash);
+  if (receipt === null) return { status: 'waiting', txHash: row.chainTxHash };
+  if (receipt.status !== 1) {
+    await failPermitDeposit(prisma, { permitDepositId, error: 'escrow permit deposit reverted on-chain' });
+    return { status: 'failed', txHash: row.chainTxHash };
+  }
+  await confirmPermitDeposit(prisma, { permitDepositId, txHash: row.chainTxHash });
   return { status: 'completed', txHash: row.chainTxHash };
 }

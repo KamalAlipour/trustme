@@ -7,6 +7,7 @@ import {
   EscrowEventKind,
   EscrowSettlementStatus,
   EscrowUnloadStatus,
+  EscrowPermitDepositStatus,
   PayCodeStatus,
   PurchaseGuaranteeStatus,
   Prisma,
@@ -392,6 +393,53 @@ export async function failUnload(prisma: PrismaClient, input: { unloadId: string
     const release = unload.amountMicroUsdt <= balance.reservedMicroUsdt ? unload.amountMicroUsdt : balance.reservedMicroUsdt;
     await tx.escrowBalance.update({ where: { userId: unload.userId }, data: { reservedMicroUsdt: { decrement: release } } });
     return tx.escrowUnload.update({ where: { id: unload.id }, data: { status: EscrowUnloadStatus.FAILED, lastError: input.error } });
+  });
+}
+
+export async function requestPermitDeposit(
+  prisma: PrismaClient,
+  input: {
+    userId: string;
+    walletAddress: string;
+    amountMicroUsdt: bigint;
+    deadline: bigint;
+    v: number;
+    r: string;
+    s: string;
+  },
+) {
+  if (input.amountMicroUsdt <= 0n) throw new DomainError('permit deposit amount must be positive');
+  return prisma.escrowPermitDeposit.create({
+    data: {
+      userId: input.userId,
+      walletAddress: input.walletAddress,
+      amountMicroUsdt: input.amountMicroUsdt,
+      deadline: input.deadline,
+      v: input.v,
+      r: input.r,
+      s: input.s,
+    },
+  });
+}
+
+export async function confirmPermitDeposit(prisma: PrismaClient, input: { permitDepositId: string; txHash: string }) {
+  const row = await prisma.escrowPermitDeposit.findUnique({ where: { id: input.permitDepositId } });
+  if (row === null) throw new DomainError('permit deposit not found', 404);
+  if (row.status === EscrowPermitDepositStatus.CONFIRMED) return row;
+  if (row.status === EscrowPermitDepositStatus.FAILED) throw new DomainError('permit deposit has failed');
+  return prisma.escrowPermitDeposit.update({
+    where: { id: row.id },
+    data: { status: EscrowPermitDepositStatus.CONFIRMED, chainTxHash: input.txHash, confirmedAt: new Date() },
+  });
+}
+
+export async function failPermitDeposit(prisma: PrismaClient, input: { permitDepositId: string; error: string }) {
+  const row = await prisma.escrowPermitDeposit.findUnique({ where: { id: input.permitDepositId } });
+  if (row === null) throw new DomainError('permit deposit not found', 404);
+  if (row.status !== EscrowPermitDepositStatus.PENDING) return row;
+  return prisma.escrowPermitDeposit.update({
+    where: { id: row.id },
+    data: { status: EscrowPermitDepositStatus.FAILED, lastError: input.error },
   });
 }
 

@@ -4,6 +4,8 @@ pragma solidity ^0.8.24;
 interface IERC20 {
     function transfer(address to, uint256 amount) external returns (bool);
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
+    function permit(address owner, address spender, uint256 value, uint256 deadline, uint8 v, bytes32 r, bytes32 s) external;
+    function allowance(address owner, address spender) external view returns (uint256);
 }
 
 contract TrustCouponEscrow {
@@ -72,6 +74,24 @@ contract TrustCouponEscrow {
         if (!token.transferFrom(msg.sender, address(this), amount)) revert TokenTransferFailed();
         locked[msg.sender] += amount;
         emit Deposited(msg.sender, amount, locked[msg.sender]);
+    }
+
+    function depositWithPermit(
+        address user,
+        uint256 amount,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external onlySettler {
+        if (user == address(0)) revert InvalidAddress();
+        if (amount == 0) revert InvalidAmount();
+        if (token.allowance(user, address(this)) < amount) {
+            token.permit(user, address(this), amount, deadline, v, r, s);
+        }
+        if (!token.transferFrom(user, address(this), amount)) revert TokenTransferFailed();
+        locked[user] += amount;
+        emit Deposited(user, amount, locked[user]);
     }
 
     function settle(address user, uint256 amount, bytes32 ref) external onlySettler {

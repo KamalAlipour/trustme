@@ -61,6 +61,7 @@ import {
   createPayCode,
   microUsdtFromCouponAmount,
   requestUnload,
+  requestPermitDeposit,
   revokePurchaseGuarantee,
   settleWithPayCode,
   settleDirectedPayCode,
@@ -156,6 +157,13 @@ const escrowSettlementSchema = z.union([
   z.object({ payCodeId: z.string().uuid(), code: fourDigitCodeSchema, idempotencyKey: z.string().min(1), pin: fourDigitCodeSchema }),
 ]);
 const escrowUnloadSchema = z.object({ amount: z.string().min(1), pin: fourDigitCodeSchema });
+const escrowPermitDepositSchema = z.object({
+  amount: z.string().min(1),
+  deadline: z.union([z.string().regex(/^\d+$/), z.number().int().nonnegative()]),
+  v: z.union([z.literal(27), z.literal(28)]),
+  r: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
+  s: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
+});
 const escrowHistoryQuerySchema = z.object({ cursor: z.string().optional() });
 const charityQuerySchema = z.object({ status: z.enum(['PENDING', 'DOCUMENTS_REQUESTED', 'APPROVED', 'GUARANTEED', 'REJECTED']).optional() });
 const aidApprovalSchema = z.object({ approvedCoupons: couponsSchema.optional(), note: z.string().trim().optional(), mode: z.enum(['TRANSFER', 'GUARANTEE']).optional(), pin: fourDigitCodeSchema });
@@ -697,6 +705,16 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       response.json({
       contractAddress: dependencies.config.escrowContractAddress ?? null,
       chainId: dependencies.config.escrowChainId,
+      permitDeposit: {
+        enabled: dependencies.config.escrowContractAddress !== undefined,
+        domain: {
+          name: dependencies.config.escrowUsdtPermitName,
+          version: dependencies.config.escrowUsdtPermitVersion,
+          salt: `0x${BigInt(dependencies.config.escrowChainId).toString(16).padStart(64, '0')}`,
+        },
+      },
+      nativeCurrencySymbol: dependencies.config.escrowNativeCurrencySymbol,
+      chainName: dependencies.config.escrowChainName,
       usdtAddress: dependencies.config.usdtContractAddress,
       rpcUrl: dependencies.config.escrowPublicRpcUrl ?? null,
       decimals: 6,
@@ -977,6 +995,64 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 51,
       });
       response.json({ items: rows.slice(0, 50).map((row) => ({ id: row.id, status: row.status, amount: decimalFromMicroUsdt(row.amountMicroUsdt), walletAddress: row.walletAddress, createdAt: row.createdAt, confirmedAt: row.confirmedAt })), nextCursor: rows.length > 50 ? nextCursor(rows[49]!.createdAt, rows[49]!.id) : null });
+    } catch (error) { next(error); }
+  });
+
+  router.post('/escrow/permit-deposits', async (request, response, next) => {
+    try {
+      escrowConfigured();
+      const body = escrowPermitDepositSchema.parse(request.body);
+      const userId = memberClaims(request).sub;
+      const user = await member(prisma, userId);
+      requireVerifiedIdentity(user.identityVerificationStatus);
+      const wallet = await prisma.memberWallet.findFirst({ where: { userId, isPrimary: true } });
+      if (wallet === null) throw new HttpError(409, 'primary wallet is required');
+      const deadline = BigInt(body.deadline);
+      const now = BigInt(Math.floor(Date.now() / 1000));
+      if (deadline <= now + 60n || deadline >= now + 3600n) throw new HttpError(400, 'permit deadline must be between 60 seconds and one hour from now');
+      const permitDeposit = await requestPermitDeposit(prisma, {
+        userId,
+        walletAddress: wallet.address,
+        amountMicroUsdt: microUsdtFromDecimal(body.amount),
+        deadline,
+        v: body.v,
+        r: body.r,
+        s: body.s,
+      });
+      await queue.add('escrow-permit-deposit', { permitDepositId: permitDeposit.id }, { jobId: `escrow-permit-deposit:${permitDeposit.id}` });
+      response.status(201).json({
+        id: permitDeposit.id,
+        status: permitDeposit.status,
+        amount: decimalFromMicroUsdt(permitDeposit.amountMicroUsdt),
+        walletAddress: permitDeposit.walletAddress,
+        createdAt: permitDeposit.createdAt,
+      });
+    } catch (error) { next(error); }
+  });
+
+  router.get('/escrow/permit-deposits', async (request, response, next) => {
+    try {
+      escrowConfigured();
+      const query = escrowHistoryQuerySchema.parse(request.query);
+      const cursor = query.cursor === undefined ? undefined : cursorDate(query.cursor);
+      const rows = await prisma.escrowPermitDeposit.findMany({
+        where: { userId: memberClaims(request).sub, ...(cursor === undefined ? {} : { OR: [{ createdAt: { lt: cursor.createdAt } }, { createdAt: cursor.createdAt, id: { lt: cursor.id } }] }) },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: 51,
+      });
+      response.json({
+        items: rows.slice(0, 50).map((row) => ({
+          id: row.id,
+          status: row.status,
+          amount: decimalFromMicroUsdt(row.amountMicroUsdt),
+          walletAddress: row.walletAddress,
+          chainTxHash: row.chainTxHash,
+          lastError: row.lastError,
+          createdAt: row.createdAt,
+          confirmedAt: row.confirmedAt,
+        })),
+        nextCursor: rows.length > 50 ? nextCursor(rows[49]!.createdAt, rows[49]!.id) : null,
+      });
     } catch (error) { next(error); }
   });
 

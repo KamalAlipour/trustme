@@ -4,11 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HDNodeWallet, id, Interface, Transaction, zeroPadValue, getAddress } from 'ethers';
 import { AccountType, Asset, DepositSweepStatus, PrismaClient, WithdrawalStatus } from '@trustme/db';
-import { createPayCode, postDeposit, readDemoCirculation, requestUnload, requestWithdrawal, settleWithPayCode, trustCouponEscrowAbi } from '@trustme/core';
+import { createPayCode, postDeposit, readDemoCirculation, requestPermitDeposit, requestUnload, requestWithdrawal, settleWithPayCode, trustCouponEscrowAbi } from '@trustme/core';
 import { decodeEscrowLog } from '../src/escrow-ingest.js';
 import { churnDemoCoupons } from '../src/demo-churn.js';
 import { confirmWithdrawal, dispatchWithdrawal } from '../src/dispatch.js';
-import { dispatchEscrowSettlement, dispatchEscrowUnload } from '../src/escrow-dispatch.js';
+import { dispatchEscrowPermitDeposit, dispatchEscrowSettlement, dispatchEscrowUnload } from '../src/escrow-dispatch.js';
 import { ingestOnce } from '../src/ingest.js';
 import { loadDepositAccountNode } from '../src/index.js';
 import { FakeChainProvider, FakeTransactionSigner } from '../src/provider.js';
@@ -105,11 +105,17 @@ class TransientEscrowProvider extends FakeChainProvider {
   }
 }
 
+class RevertingEscrowProvider extends FakeChainProvider {
+  public override async estimateGas(): Promise<bigint> {
+    throw new Error('execution reverted: invalid permit');
+  }
+}
+
 beforeAll(async () => {
   await prisma.$connect();
 });
 beforeEach(async () => {
-  await prisma.$executeRawUnsafe('TRUNCATE TABLE "EscrowChainEvent", "EscrowUnload", "EscrowSettlement", "PayCode", "EscrowBalance", "MemberWallet", "MediaAsset", "RefundRequest", "AidRequest", "CharityAgent", "Charity", "AdminAuditLog", "AdminUser", "Withdrawal", "DepositSweep", "EscrowHold", "EmailVerification", "MemberDevice", "Contact", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User", "ChainCursor" CASCADE');
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "EscrowPermitDeposit", "EscrowChainEvent", "EscrowUnload", "EscrowSettlement", "PayCode", "EscrowBalance", "MemberWallet", "MediaAsset", "RefundRequest", "AidRequest", "CharityAgent", "Charity", "AdminAuditLog", "AdminUser", "Withdrawal", "DepositSweep", "EscrowHold", "EmailVerification", "MemberDevice", "Contact", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User", "ChainCursor" CASCADE');
 });
 afterAll(async () => {
   await prisma.$disconnect();
@@ -248,6 +254,40 @@ describe('escrow dispatch', () => {
     provider.failEstimateFees = true;
     await expect(dispatchEscrowUnload(prisma, provider, signer, escrowConfig, unload.id)).rejects.toThrow('temporary escrow RPC failure');
     expect(await prisma.escrowUnload.findUniqueOrThrow({ where: { id: unload.id } })).toMatchObject({ status: 'PENDING', attempts: 1, lastError: 'temporary escrow RPC failure' });
+  });
+
+  it('encodes permit deposits and fails immediately when gas estimation reverts', async () => {
+    const user = await prisma.user.create({ data: { phoneNumber: '+1555000779', barcodeId: 'escrow-permit-worker' } });
+    await prisma.memberWallet.create({ data: { userId: user.id, address: getAddress(`0x${'04'.repeat(20)}`), kind: 'EXTERNAL', chainId: 137 } });
+    const permit = await requestPermitDeposit(prisma, {
+      userId: user.id,
+      walletAddress: getAddress(`0x${'04'.repeat(20)}`),
+      amountMicroUsdt: 1_250_000n,
+      deadline: BigInt(Math.floor(Date.now() / 1000) + 300),
+      v: 27,
+      r: `0x${'11'.repeat(32)}`,
+      s: `0x${'22'.repeat(32)}`,
+    });
+    const signer = new FakeTransactionSigner(getAddress(`0x${'05'.repeat(20)}`), '0x05');
+    const provider = new FakeChainProvider({ head: 1 });
+    const escrowConfig = { ...dispatchConfig, escrowContractAddress: getAddress(`0x${'06'.repeat(20)}`), escrowSettlerKey: 'test-key', escrowMaxAttempts: 5 };
+    await expect(dispatchEscrowPermitDeposit(prisma, provider, signer, escrowConfig, permit.id)).resolves.toMatchObject({ status: 'broadcast' });
+    const parsed = new Interface(trustCouponEscrowAbi).parseTransaction({ data: Transaction.from(provider.sentTransactions[0]!).data });
+    expect(parsed?.name).toBe('depositWithPermit');
+    expect(parsed?.args[0]).toBe(getAddress(`0x${'04'.repeat(20)}`));
+
+    const revertProvider = new RevertingEscrowProvider({ head: 1 });
+    const failedPermit = await requestPermitDeposit(prisma, {
+      userId: user.id,
+      walletAddress: getAddress(`0x${'04'.repeat(20)}`),
+      amountMicroUsdt: 1_000_000n,
+      deadline: BigInt(Math.floor(Date.now() / 1000) + 300),
+      v: 28,
+      r: `0x${'33'.repeat(32)}`,
+      s: `0x${'44'.repeat(32)}`,
+    });
+    await expect(dispatchEscrowPermitDeposit(prisma, revertProvider, signer, escrowConfig, failedPermit.id)).resolves.toMatchObject({ status: 'failed' });
+    expect(await prisma.escrowPermitDeposit.findUniqueOrThrow({ where: { id: failedPermit.id } })).toMatchObject({ status: 'FAILED', lastError: 'invalid permit' });
   });
 });
 

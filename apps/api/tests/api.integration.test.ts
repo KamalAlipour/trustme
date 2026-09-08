@@ -45,6 +45,10 @@ const config = {
   polygonRpcUrl: 'http://127.0.0.1:8545',
   usdtContractAddress: getAddress(`0x${'99'.repeat(20)}`),
   escrowChainId: 137,
+  escrowUsdtPermitName: 'USDT0',
+  escrowUsdtPermitVersion: '1',
+  escrowNativeCurrencySymbol: 'POL',
+  escrowChainName: 'Polygon Mainnet',
   escrowContractAddress: undefined,
   walletConnectProjectId: undefined,
   web3AuthClientId: undefined,
@@ -226,7 +230,7 @@ beforeAll(async () => {
   await prisma.$connect();
 });
 beforeEach(async () => {
-  await prisma.$executeRawUnsafe('TRUNCATE TABLE "ApiKey", "EscrowChainEvent", "EscrowUnload", "EscrowSettlement", "PayCode", "EscrowBalance", "MemberWallet", "BalanceDisclosureRequest", "MediaAsset", "IdentityReview", "IdentityCaptureSession", "IdentityLoginAttempt", "IdentityCheck", "RefundRequest", "AidRequest", "CharityAgent", "Charity", "AdminAllowedEmail", "AdminAuditLog", "AdminUser", "Withdrawal", "EscrowHold", "EmailVerification", "MemberDevice", "Contact", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User", "ChainCursor", "SystemSetting" CASCADE');
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "ApiKey", "EscrowPermitDeposit", "EscrowChainEvent", "EscrowUnload", "EscrowSettlement", "PayCode", "EscrowBalance", "MemberWallet", "BalanceDisclosureRequest", "MediaAsset", "IdentityReview", "IdentityCaptureSession", "IdentityLoginAttempt", "IdentityCheck", "RefundRequest", "AidRequest", "CharityAgent", "Charity", "AdminAllowedEmail", "AdminAuditLog", "AdminUser", "Withdrawal", "EscrowHold", "EmailVerification", "MemberDevice", "Contact", "LoanInstallment", "Guarantee", "Loan", "LedgerEntry", "Transaction", "LedgerAccount", "DepositAddress", "User", "ChainCursor", "SystemSetting" CASCADE');
   await prisma.systemSetting.createMany({ data: [
     { key: 'WITHDRAWAL_BASE_FEE_BPS', value: '100' },
     { key: 'WITHDRAWAL_MIN_FEE_USDT', value: '0.20' },
@@ -561,6 +565,60 @@ describe('member API', () => {
     expect(verifiedWallet.status).toBe(201);
     const verifiedUnload = await request(app).post('/v1/me/escrow/unloads').set('Authorization', `Bearer ${verifiedToken}`).send({ amount: '1', pin: '2468' });
     expect(verifiedUnload.status).toBe(201);
+  });
+
+  it('validates and queues gasless permit deposits', async () => {
+    const { app, calls } = appFixture(undefined, undefined, { escrowContractAddress: getAddress(`0x${'47'.repeat(20)}`) });
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000321', barcodeId: 'permit-happy' });
+    const user = await prisma.user.findUniqueOrThrow({ where: { barcodeId: 'permit-happy' } });
+    await prisma.user.update({ where: { id: user.id }, data: { identityVerificationStatus: 'VERIFIED', identityVerifiedAt: new Date() } });
+    await prisma.memberWallet.create({ data: { userId: user.id, address: getAddress(`0x${'47'.repeat(20)}`), kind: 'IN_APP', chainId: 137 } });
+    const accessToken = await memberTokenForUser(user.id);
+    const deadline = Math.floor(Date.now() / 1000) + 300;
+    const result = await request(app).post('/v1/me/escrow/permit-deposits').set('Authorization', `Bearer ${accessToken}`).send({
+      amount: '1.25',
+      deadline: String(deadline),
+      v: 27,
+      r: `0x${'11'.repeat(32)}`,
+      s: `0x${'22'.repeat(32)}`,
+    });
+    expect(result.status).toBe(201);
+    const row = await prisma.escrowPermitDeposit.findUniqueOrThrow({ where: { id: result.body.id } });
+    expect(row.walletAddress).toBe(getAddress(`0x${'47'.repeat(20)}`));
+    expect(row.status).toBe('PENDING');
+    expect(calls.some(([name, data]) => name === 'escrow-permit-deposit' && (data as { permitDepositId: string }).permitDepositId === row.id)).toBe(true);
+
+    const badDeadline = await request(app).post('/v1/me/escrow/permit-deposits').set('Authorization', `Bearer ${accessToken}`).send({
+      amount: '1',
+      deadline: String(Math.floor(Date.now() / 1000) + 30),
+      v: 28,
+      r: `0x${'11'.repeat(32)}`,
+      s: `0x${'22'.repeat(32)}`,
+    });
+    expect(badDeadline.status).toBe(400);
+
+    await prisma.user.update({ where: { id: user.id }, data: { identityVerificationStatus: 'UNVERIFIED' } });
+    const unverified = await request(app).post('/v1/me/escrow/permit-deposits').set('Authorization', `Bearer ${accessToken}`).send({
+      amount: '1',
+      deadline: String(Math.floor(Date.now() / 1000) + 300),
+      v: 27,
+      r: `0x${'11'.repeat(32)}`,
+      s: `0x${'22'.repeat(32)}`,
+    });
+    expect(unverified.status).toBe(403);
+
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000322', barcodeId: 'permit-no-wallet' });
+    const noWalletUser = await prisma.user.findUniqueOrThrow({ where: { barcodeId: 'permit-no-wallet' } });
+    await prisma.user.update({ where: { id: noWalletUser.id }, data: { identityVerificationStatus: 'VERIFIED', identityVerifiedAt: new Date() } });
+    const noWalletToken = await memberTokenForUser(noWalletUser.id);
+    const noWallet = await request(app).post('/v1/me/escrow/permit-deposits').set('Authorization', `Bearer ${noWalletToken}`).send({
+      amount: '1',
+      deadline: String(Math.floor(Date.now() / 1000) + 300),
+      v: 27,
+      r: `0x${'11'.repeat(32)}`,
+      s: `0x${'22'.repeat(32)}`,
+    });
+    expect(noWallet.status).toBe(409);
   });
 
   it('returns 503 when identity verification is not configured', async () => {

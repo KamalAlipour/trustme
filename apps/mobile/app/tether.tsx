@@ -4,7 +4,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
-import { BrowserProvider, Contract, isAddress, JsonRpcProvider, MaxUint256, Wallet, type AbstractSigner } from 'ethers';
+import { BrowserProvider, Contract, isAddress, JsonRpcProvider, MaxUint256, Signature, toBeHex, Wallet, type AbstractSigner } from 'ethers';
 import EthereumProvider from '@walletconnect/ethereum-provider';
 import { ApiError, LockedError, request } from '../src/api/client';
 import type { EscrowConfig, EscrowSettlement, EscrowWallet, WithdrawalQuote } from '../src/api/types';
@@ -24,10 +24,38 @@ const ERC20_ABI = [
   'function approve(address spender,uint256 amount) returns (bool)',
   'function transfer(address to,uint256 amount) returns (bool)',
   'function balanceOf(address owner) view returns (uint256)',
+  'function nonces(address owner) view returns (uint256)',
 ];
 const ESCROW_ABI = ['function deposit(uint256 amount)'];
 
 type WalletConnectSession = { provider: Awaited<ReturnType<typeof EthereumProvider.init>>; browser: BrowserProvider };
+
+async function ensureWalletOnChain(provider: { request(args: { method: string; params?: unknown[] }): Promise<unknown> }, chainId: number, config: EscrowConfig, wrongNetwork: string): Promise<void> {
+  const expected = toBeHex(chainId);
+  const current = String(await provider.request({ method: 'eth_chainId' })).toLowerCase();
+  if (current !== expected.toLowerCase()) {
+    try {
+      await provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: expected }] });
+    } catch (cause) {
+      const code = typeof cause === 'object' && cause !== null && 'code' in cause ? Number(cause.code) : undefined;
+      const message = cause instanceof Error ? cause.message : String(cause);
+      if (code !== 4902 && !message.toLowerCase().includes('unrecognized chain')) throw cause;
+      await provider.request({
+        method: 'wallet_addEthereumChain',
+        params: [{
+          chainId: expected,
+          chainName: config.chainName,
+          nativeCurrency: { name: 'POL', symbol: 'POL', decimals: 18 },
+          rpcUrls: [config.rpcUrl ?? 'https://polygon-rpc.com'],
+          blockExplorerUrls: ['https://polygonscan.com'],
+        }],
+      });
+      await provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: expected }] });
+    }
+  }
+  const finalChain = String(await provider.request({ method: 'eth_chainId' })).toLowerCase();
+  if (finalChain !== expected.toLowerCase()) throw new Error(wrongNetwork);
+}
 
 function RecoveryWords({ words }: { words: string[] }) {
   return (
@@ -229,6 +257,7 @@ export default function Tether() {
         connectCancel.current = null;
         if (displayUriHandler !== null) provider.removeListener('display_uri', displayUriHandler);
       }
+      await ensureWalletOnChain(provider, config.data.chainId, config.data, t.escrow.wrongNetwork);
       const browser = new BrowserProvider(provider);
       const signer = await browser.getSigner();
       await registerWallet(await signer.getAddress(), 'EXTERNAL');
@@ -271,14 +300,60 @@ export default function Tether() {
       const amount = parseUsdtAmount(topUpAmount);
       const escrowConfig = config.data as EscrowConfig;
       if (escrowConfig.contractAddress === null || wallet === null) throw new Error(t.escrow.noWallet);
+      if (wallet.kind === 'EXTERNAL' && walletConnectSession !== null) {
+        await ensureWalletOnChain(walletConnectSession.provider, escrowConfig.chainId, escrowConfig, t.escrow.wrongNetwork);
+      }
       const signer = await getSigner(escrowConfig);
       const token = new Contract(escrowConfig.usdtAddress, ERC20_ABI, signer);
-      const allowance = BigInt((await token.getFunction('allowance')(wallet.address, escrowConfig.contractAddress)).toString());
-      if (shouldApproveAllowance(allowance, amount)) await (await token.getFunction('approve')(escrowConfig.contractAddress, MaxUint256)).wait();
-      await (await new Contract(escrowConfig.contractAddress, ESCROW_ABI, signer).getFunction('deposit')(amount)).wait();
-      setTopUpAmount('');
-      showSuccess(t.escrow.topUpSubmitted);
-      await invalidate();
+      let permitSubmitted = false;
+      if (escrowConfig.permitDeposit.enabled) {
+        try {
+          const nonce = await token.getFunction('nonces')(wallet.address);
+          const deadline = BigInt(Math.floor(Date.now() / 1000) + 30 * 60);
+          const signature = await signer.signTypedData(
+            {
+              name: escrowConfig.permitDeposit.domain.name,
+              version: escrowConfig.permitDeposit.domain.version,
+              verifyingContract: escrowConfig.usdtAddress,
+              salt: escrowConfig.permitDeposit.domain.salt,
+            },
+            {
+              Permit: [
+                { name: 'owner', type: 'address' },
+                { name: 'spender', type: 'address' },
+                { name: 'value', type: 'uint256' },
+                { name: 'nonce', type: 'uint256' },
+                { name: 'deadline', type: 'uint256' },
+              ],
+            },
+            { owner: wallet.address, spender: escrowConfig.contractAddress, value: amount, nonce, deadline },
+          );
+          const split = Signature.from(signature);
+          await request('/v1/me/escrow/permit-deposits', {
+            method: 'POST',
+            body: { amount: topUpAmount, deadline: deadline.toString(), v: split.v, r: split.r, s: split.s },
+          });
+          permitSubmitted = true;
+          setTopUpAmount('');
+          showSuccess(t.escrow.topUpPermitSubmitted);
+          await invalidate();
+        } catch (cause) {
+          const code = typeof cause === 'object' && cause !== null && 'code' in cause ? String(cause.code) : '';
+          const message = cause instanceof Error ? cause.message : String(cause);
+          if (code === '4001' || message.toLowerCase().includes('rejected')) {
+            showError(t.escrow.transactionRejected);
+            return;
+          }
+        }
+      }
+      if (!permitSubmitted) {
+        const allowance = BigInt((await token.getFunction('allowance')(wallet.address, escrowConfig.contractAddress)).toString());
+        if (shouldApproveAllowance(allowance, amount)) await (await token.getFunction('approve')(escrowConfig.contractAddress, MaxUint256)).wait();
+        await (await new Contract(escrowConfig.contractAddress, ESCROW_ABI, signer).getFunction('deposit')(amount)).wait();
+        setTopUpAmount('');
+        showSuccess(t.escrow.topUpSubmitted);
+        await invalidate();
+      }
     });
   };
   const getSigner = async (escrowConfig: EscrowConfig): Promise<AbstractSigner> => {
@@ -407,6 +482,14 @@ export default function Tether() {
       setBusy('');
     }
   };
+  const NetworkBadge = () => <View style={{ marginBottom: 12 }}>
+    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+      <View style={{ backgroundColor: '#26A17B', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6 }}><Text style={{ color: '#fff', fontWeight: '700' }}>USDT · Tether</Text></View>
+      <View style={{ backgroundColor: '#8247E5', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6 }}><Text style={{ color: '#fff', fontWeight: '700' }}>Polygon network (POL)</Text></View>
+    </View>
+    <Text style={styles.heading}>{t.escrow.networkWarningTitle}</Text>
+    <Text style={styles.muted}>{t.escrow.networkWarningBody}</Text>
+  </View>;
 
   return (
     <Page>
@@ -417,6 +500,7 @@ export default function Tether() {
           <Text style={styles.buttonText}>{t.openIdentityVerification}</Text>
         </Pressable>
       </View> : null}
+      <NetworkBadge />
       <View style={styles.card}>
         <Text style={styles.heading}>{t.escrow.availableBalance}</Text>
         <Text style={styles.title}>{formatMicroUsdt(balance.data?.availableMicroUsdt ?? '0', language)} USDT</Text>
@@ -425,7 +509,7 @@ export default function Tether() {
         <Text style={styles.notice}>{t.escrow.confirmationNotice}</Text>
         {!identityRequired ? <>
           <TextInput value={topUpAmount} onChangeText={setTopUpAmount} placeholder={t.escrow.topUpAmount} style={styles.input} keyboardType="decimal-pad" />
-          <Text style={styles.muted}>{t.escrow.twoSignatureNotice}</Text>
+          <Text style={styles.muted}>{t.escrow.gaslessNotice}</Text>
           {publicRpcUnavailable ? <Text style={styles.danger}>{t.escrow.publicRpcUnavailable}</Text> : null}
           <Pressable disabled={busy !== '' || wallet === null || publicRpcUnavailable} onPress={() => void sendTopUp()} style={[styles.button, busy !== '' || wallet === null || publicRpcUnavailable ? styles.buttonDisabled : null]}><Text style={styles.buttonText}>{t.escrow.topUpButton}</Text></Pressable>
         </> : null}
@@ -478,10 +562,10 @@ export default function Tether() {
         {(unloads.data?.items ?? []).slice(0, 3).map((item) => <Text key={item.id} style={item.status === 'CONFIRMED' ? styles.notice : item.status === 'FAILED' ? styles.danger : styles.muted}>{item.status === 'CONFIRMED' ? t.escrow.unloadConfirmed : item.status === 'FAILED' ? t.escrow.unloadFailed : t.escrow.unloadPending}: {item.amount} USDT</Text>)}
       </View> : null}
 
-      {moneyBalance.data?.depositAddress !== null ? <View style={styles.card}>
+      {moneyBalance.data?.depositAddress !== null ? <><NetworkBadge /><View style={styles.card}>
         <Text style={styles.heading}>{t.depositAddress}</Text>
         <Text selectable style={styles.text}>{moneyBalance.data?.depositAddress ?? t.notAssigned}</Text>
-      </View> : null}
+      </View></> : null}
 
       {availability.data && BigInt(availability.data.availableToWithdrawCoupons) > 0n && !availability.data.blockers.includes('custodial_disabled') ? <View style={styles.card}>
         <Text style={styles.heading}>{t.withdrawal}</Text>
