@@ -8,7 +8,7 @@ import { BrowserProvider, Contract, isAddress, JsonRpcProvider, MaxUint256, Sign
 import EthereumProvider from '@walletconnect/ethereum-provider';
 import { ApiError, LockedError, request } from '../src/api/client';
 import type { EscrowConfig, EscrowSettlement, EscrowWallet, WithdrawalQuote } from '../src/api/types';
-import { useAvailability, useBalance, useEscrowBalance, useEscrowConfig, useEscrowSettlements, useEscrowUnloads, useIdentity, useInvalidateMoney } from '../src/hooks';
+import { useAvailability, useBalance, useEscrowBalance, useEscrowConfig, useEscrowPermitDeposits, useEscrowSettlements, useEscrowUnloads, useIdentity, useInvalidateMoney } from '../src/hooks';
 import { useSession } from '../src/auth/session';
 import { Page, LoadingScreen } from '../src/components/Screen';
 import { useTranslation } from '../src/i18n';
@@ -97,6 +97,7 @@ export default function Tether() {
   const balance = useEscrowBalance(enabled);
   const settlements = useEscrowSettlements(enabled);
   const unloads = useEscrowUnloads(enabled);
+  const permitDeposits = useEscrowPermitDeposits(enabled);
   const moneyBalance = useBalance();
   const availability = useAvailability();
   const invalidate = useInvalidateMoney();
@@ -554,12 +555,13 @@ export default function Tether() {
         </View>
       </View> : null}
 
-      {!identityRequired && (availableMicroUsdt > 0n || (unloads.data?.items ?? []).length > 0) ? <View style={styles.card}>
+      {!identityRequired && (availableMicroUsdt > 0n || (unloads.data?.items ?? []).length > 0 || (permitDeposits.data?.items ?? []).length > 0) ? <View style={styles.card}>
         <Text style={styles.heading}>{t.escrow.unload}</Text>
         {availableMicroUsdt > 0n ? <><TextInput value={unloadAmount} onChangeText={setUnloadAmount} placeholder={t.escrow.unloadAmount} style={styles.input} keyboardType="decimal-pad" />
         <Pressable onPress={useFullAvailable} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.escrow.useFullAvailable}</Text></Pressable>
         <Pressable disabled={busy !== ''} onPress={() => void requestUnload()} style={[styles.button, busy !== '' ? styles.buttonDisabled : null]}><Text style={styles.buttonText}>{t.escrow.unloadButton}</Text></Pressable></> : null}
         {(unloads.data?.items ?? []).slice(0, 3).map((item) => <Text key={item.id} style={item.status === 'CONFIRMED' ? styles.notice : item.status === 'FAILED' ? styles.danger : styles.muted}>{item.status === 'CONFIRMED' ? t.escrow.unloadConfirmed : item.status === 'FAILED' ? t.escrow.unloadFailed : t.escrow.unloadPending}: {item.amount} USDT</Text>)}
+        {(permitDeposits.data?.items ?? []).slice(0, 3).map((item) => <Text key={item.id} style={item.status === 'CONFIRMED' ? styles.notice : item.status === 'FAILED' ? styles.danger : styles.muted}>{item.status === 'CONFIRMED' ? t.escrow.permitDepositConfirmed : item.status === 'FAILED' ? t.escrow.permitDepositFailed : t.escrow.permitDepositPending}: {item.amount} USDT{item.status === 'FAILED' && item.lastError ? ` — ${item.lastError}` : ''}</Text>)}
       </View> : null}
 
       {moneyBalance.data?.depositAddress !== null ? <><NetworkBadge /><View style={styles.card}>
