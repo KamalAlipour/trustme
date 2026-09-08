@@ -234,6 +234,7 @@ beforeEach(async () => {
     { key: 'AUTO_APPROVAL_LIMIT_USDT', value: '1000' },
     { key: 'REQUIRE_IDENTITY_FOR_WITHDRAWAL', value: 'false' },
     { key: 'CUSTODIAL_RESERVES_ENABLED', value: 'true' },
+    { key: 'TRANSAK_ENABLED', value: 'true' },
   ] });
 });
 afterAll(async () => {
@@ -505,10 +506,12 @@ describe('member API', () => {
     await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000093', barcodeId: 'custody-disabled' });
     const accessToken = await memberToken(app, '+1555000093');
     const escrowConfig = await request(app).get('/v1/me/escrow/config').set('Authorization', `Bearer ${accessToken}`);
-    expect(escrowConfig.body).toMatchObject({ custodialReservesEnabled: false, cardTopUpEnabled: false, cardSellEnabled: true });
+    expect(escrowConfig.body).toMatchObject({ custodialReservesEnabled: false, transakEnabled: true, cardTopUpEnabled: false, cardSellEnabled: true });
     const topUp = await request(app).post('/v1/me/card-topup/session').set('Authorization', `Bearer ${accessToken}`).send({});
     expect(topUp.status).toBe(409);
     expect(topUp.body).toEqual({ error: 'custodial reserves are disabled' });
+    const sell = await request(app).post('/v1/me/card-sell/session').set('Authorization', `Bearer ${accessToken}`).send({});
+    expect(sell.status).toBe(403);
     const balance = await request(app).get('/v1/me/balance').set('Authorization', `Bearer ${accessToken}`);
     expect(balance.status).toBe(200);
     expect(balance.body.depositAddress).toBeNull();
@@ -521,6 +524,21 @@ describe('member API', () => {
     expect(withdrawal.body).toEqual({ error: 'custodial reserves are disabled' });
     const availability = await request(app).get('/v1/me/withdrawal-availability').set('Authorization', `Bearer ${accessToken}`);
     expect(availability.body).toMatchObject({ availableToWithdrawCoupons: '0', blockers: ['custodial_disabled'] });
+  });
+
+  it('disables Transak card sessions when the admin setting is absent', async () => {
+    const { app } = appFixture(undefined, undefined, { transakApiKey: 'test-transak-key', transakApiSecret: 'test-transak-secret' });
+    await prisma.systemSetting.deleteMany({ where: { key: { in: ['CUSTODIAL_RESERVES_ENABLED', 'TRANSAK_ENABLED'] } } });
+    await request(app).post('/v1/users').set('Authorization', `Bearer ${token}`).send({ phone: '+1555000094', barcodeId: 'transak-disabled' });
+    const accessToken = await memberToken(app, '+1555000094');
+    const escrowConfig = await request(app).get('/v1/me/escrow/config').set('Authorization', `Bearer ${accessToken}`);
+    expect(escrowConfig.body).toMatchObject({ custodialReservesEnabled: false, transakEnabled: false, cardTopUpEnabled: false, cardSellEnabled: false });
+    const topUp = await request(app).post('/v1/me/card-topup/session').set('Authorization', `Bearer ${accessToken}`).send({});
+    expect(topUp.status).toBe(409);
+    expect(topUp.body).toEqual({ error: 'Transak is disabled' });
+    const sell = await request(app).post('/v1/me/card-sell/session').set('Authorization', `Bearer ${accessToken}`).send({});
+    expect(sell.status).toBe(409);
+    expect(sell.body).toEqual({ error: 'Transak is disabled' });
   });
 
   it('requires verified identity for wallet registration and escrow unloads regardless of country', async () => {
@@ -2546,7 +2564,7 @@ describe('admin API', () => {
   it('validates and audits settings changes and searches ledger entries', async () => {
     const { app } = appFixture();
     await createAdmin(AdminRole.ADMIN);
-    await prisma.systemSetting.delete({ where: { key: 'CUSTODIAL_RESERVES_ENABLED' } });
+    await prisma.systemSetting.deleteMany({ where: { key: { in: ['CUSTODIAL_RESERVES_ENABLED', 'TRANSAK_ENABLED'] } } });
     const defaultDisplayUnit = await request(app).get('/v1/public/display-unit');
     expect(defaultDisplayUnit.status).toBe(200);
     expect(defaultDisplayUnit.body).toEqual({
@@ -2558,6 +2576,7 @@ describe('admin API', () => {
     const settings = await request(app).get('/admin/settings').set('Authorization', `Bearer ${jwt}`);
     expect(settings.status).toBe(200);
     expect(settings.body.custodialReservesEnabled).toBe(false);
+    expect(settings.body.transakEnabled).toBe(false);
     expect(settings.body.minimumWithdrawalMicroUsdt).toBe('1000000');
     expect(settings.body.minimumFeeMicroUsdt).toBe('200000');
     const updated = await request(app).patch('/admin/settings').set('Authorization', `Bearer ${jwt}`).send({
@@ -2566,10 +2585,12 @@ describe('admin API', () => {
       minimumWithdrawalMicroUsdt: '2000000',
       identityRequiredCountries: ['ir', 'NO', 'ir'],
       custodialReservesEnabled: true,
+      transakEnabled: true,
     });
     expect(updated.status).toBe(200);
-    expect(updated.body).toMatchObject({ withdrawalBaseFeeBps: '250', minimumFeeMicroUsdt: '300000', minimumWithdrawalMicroUsdt: '2000000', identityRequiredCountries: ['IR', 'NO'], custodialReservesEnabled: true });
+    expect(updated.body).toMatchObject({ withdrawalBaseFeeBps: '250', minimumFeeMicroUsdt: '300000', minimumWithdrawalMicroUsdt: '2000000', identityRequiredCountries: ['IR', 'NO'], custodialReservesEnabled: true, transakEnabled: true });
     expect(await prisma.systemSetting.findUniqueOrThrow({ where: { key: 'CUSTODIAL_RESERVES_ENABLED' } })).toMatchObject({ value: 'true' });
+    expect(await prisma.systemSetting.findUniqueOrThrow({ where: { key: 'TRANSAK_ENABLED' } })).toMatchObject({ value: 'true' });
     const displayUnitUpdate = await request(app).patch('/admin/settings').set('Authorization', `Bearer ${jwt}`).send({
       displayUnit: { en: { singular: 'Credit cent', plural: 'Credit cents' }, fa: 'سنت اعتبار' },
     });

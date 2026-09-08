@@ -26,6 +26,7 @@ export async function updateSettingsAction(formData: FormData): Promise<void> {
       autoApprovalLimitMicroUsdt,
       requireIdentityForWithdrawal: formData.get('requireIdentityForWithdrawal') === 'on',
       custodialReservesEnabled: formData.get('custodialReservesEnabled') === 'on',
+      transakEnabled: formData.get('transakEnabled') === 'on',
       identityRequiredCountries: formData.getAll('identityRequiredCountries').filter((value): value is string => typeof value === 'string'),
       commissionFloorBps: Number(formData.get('commissionFloorBps') ?? 300),
       commissionFloorByCountry: String(formData.get('commissionFloorByCountry') ?? 'IR=300').split(',').filter(Boolean).map((entry) => {
