@@ -13,11 +13,12 @@ import { useSession } from '../src/auth/session';
 import { Page, LoadingScreen } from '../src/components/Screen';
 import { useTranslation } from '../src/i18n';
 import { clearEscrowMnemonic, readEscrowMnemonic } from '../src/lib/escrow-wallet';
-import { parseUsdtAmount, shouldApproveAllowance, withWalletConnectDeadline } from '../src/lib/escrow';
+import { estimateRequiredPol, formatPolAmount, parseUsdtAmount, shouldApproveAllowance, withWalletConnectDeadline } from '../src/lib/escrow';
 import { formatCoupons, formatDate, formatMicroUsdt } from '../src/lib/format';
 import { mapApiError } from '../src/lib/errors';
 import { colors, styles } from '../src/styles';
 import { HeaderIcons } from '../src/components/HeaderIcons';
+import { PolygonLogo, TetherLogo } from '../src/components/network-logos';
 
 const ERC20_ABI = [
   'function allowance(address owner,address spender) view returns (uint256)',
@@ -128,6 +129,7 @@ export default function Tether() {
   const [withdrawalQuote, setWithdrawalQuote] = useState<WithdrawalQuote | null>(null);
   const [withdrawalQuoteError, setWithdrawalQuoteError] = useState('');
   const [withdrawalQuoteLoading, setWithdrawalQuoteLoading] = useState(false);
+  const [polGasNotice, setPolGasNotice] = useState<{ amount: string; address: string } | null>(null);
 
   useEffect(() => {
     if (Platform.OS !== 'web') return;
@@ -298,9 +300,11 @@ export default function Tether() {
   };
   const sendTopUp = async () => {
     await run('topup', async () => {
+      setPolGasNotice(null);
       const amount = parseUsdtAmount(topUpAmount);
       const escrowConfig = config.data as EscrowConfig;
-      if (escrowConfig.contractAddress === null || wallet === null) throw new Error(t.escrow.noWallet);
+      const escrowAddress = escrowConfig.contractAddress;
+      if (escrowAddress === null || wallet === null) throw new Error(t.escrow.noWallet);
       if (wallet.kind === 'EXTERNAL' && walletConnectSession !== null) {
         await ensureWalletOnChain(walletConnectSession.provider, escrowConfig.chainId, escrowConfig, t.escrow.wrongNetwork);
       }
@@ -348,9 +352,15 @@ export default function Tether() {
         }
       }
       if (!permitSubmitted) {
-        const allowance = BigInt((await token.getFunction('allowance')(wallet.address, escrowConfig.contractAddress)).toString());
-        if (shouldApproveAllowance(allowance, amount)) await (await token.getFunction('approve')(escrowConfig.contractAddress, MaxUint256)).wait();
-        await (await new Contract(escrowConfig.contractAddress, ESCROW_ABI, signer).getFunction('deposit')(amount)).wait();
+        const allowance = BigInt((await token.getFunction('allowance')(wallet.address, escrowAddress)).toString());
+        const needsApproval = shouldApproveAllowance(allowance, amount);
+        if (!await ensureNativeGas(signer, async () => {
+          const approveGas = needsApproval ? await token.getFunction('approve').estimateGas(escrowAddress, MaxUint256) : 0n;
+          const depositGas = await new Contract(escrowAddress, ESCROW_ABI, signer).getFunction('deposit').estimateGas(amount);
+          return approveGas + depositGas;
+        })) return;
+        if (needsApproval) await (await token.getFunction('approve')(escrowAddress, MaxUint256)).wait();
+        await (await new Contract(escrowAddress, ESCROW_ABI, signer).getFunction('deposit')(amount)).wait();
         setTopUpAmount('');
         showSuccess(t.escrow.topUpSubmitted);
         await invalidate();
@@ -373,8 +383,20 @@ export default function Tether() {
     }
     throw new Error(t.escrow.connectWallet);
   };
+  const ensureNativeGas = async (signer: AbstractSigner, estimateGas: () => Promise<bigint>): Promise<boolean> => {
+    if (wallet === null || signer.provider === null) return true;
+    const nativeBalance = await signer.provider.getBalance(wallet.address);
+    const feeData = await signer.provider.getFeeData();
+    const maxFeePerGas = feeData.maxFeePerGas ?? feeData.gasPrice;
+    if (maxFeePerGas === null) return true;
+    const requiredWei = estimateRequiredPol(await estimateGas(), maxFeePerGas);
+    if (nativeBalance >= requiredWei) return true;
+    setPolGasNotice({ amount: formatPolAmount(requiredWei), address: wallet.address });
+    return false;
+  };
   const sendToTransak = async () => {
     await run('sell-transfer', async () => {
+      setPolGasNotice(null);
       if (wallet === null) throw new Error(t.escrow.noWallet);
       if (!isAddress(sellToAddress)) {
         showError(t.escrow.invalidAddress);
@@ -389,6 +411,7 @@ export default function Tether() {
         showError(t.escrow.insufficientWalletBalance);
         return;
       }
+      if (!await ensureNativeGas(signer, async () => token.getFunction('transfer').estimateGas(sellToAddress, amount))) return;
       const receipt = await (await token.getFunction('transfer')(sellToAddress, amount)).wait();
       if (receipt?.hash === undefined) throw new Error(t.escrow.transactionFailed);
       setSellTxHash(receipt.hash);
@@ -485,9 +508,16 @@ export default function Tether() {
   };
   const NetworkBadge = () => <View style={{ marginBottom: 12 }}>
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-      <View style={{ backgroundColor: '#26A17B', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6 }}><Text style={{ color: '#fff', fontWeight: '700' }}>USDT · Tether</Text></View>
-      <View style={{ backgroundColor: '#8247E5', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6 }}><Text style={{ color: '#fff', fontWeight: '700' }}>Polygon network (POL)</Text></View>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#E8F7F1', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4 }}>
+        <TetherLogo />
+        <Text style={{ color: colors.ink, fontWeight: '700' }}>USDT (Tether)</Text>
+      </View>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#F3F0FF', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4 }}>
+        <PolygonLogo />
+        <Text style={{ color: colors.ink, fontWeight: '700' }}>Polygon (POL) network</Text>
+      </View>
     </View>
+    <Text style={{ ...styles.muted, fontSize: 14, lineHeight: 20, marginTop: 8 }}>{t.escrow.networkBadgeCaption}</Text>
     <Text style={styles.heading}>{t.escrow.networkWarningTitle}</Text>
     <Text style={styles.muted}>{t.escrow.networkWarningBody}</Text>
   </View>;
@@ -529,6 +559,10 @@ export default function Tether() {
           {busy === 'connect-wallet' ? <><Text style={styles.muted}>{t.escrow.connectPending}</Text><Pressable onPress={cancelConnect} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.escrow.cancelConnect}</Text></Pressable></> : null}
         {revealedWords !== null ? <View style={styles.card}><Text style={styles.text}>{t.escrow.recoveryWords}</Text><RecoveryWords words={revealedWords} /><Pressable onPress={() => setRevealedWords(null)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{t.close}</Text></Pressable></View> : null}
         {busy === 'remove-wallet' ? <Text style={styles.muted}>{t.loading}</Text> : null}
+        {polGasNotice ? <View style={{ ...styles.card, borderColor: colors.danger, backgroundColor: '#FFF4F2' }}>
+          <View style={styles.row}><PolygonLogo /><Text style={styles.danger}>{t.escrow.needPol(polGasNotice.amount, polGasNotice.address)}</Text></View>
+          <Text selectable style={styles.danger}>{polGasNotice.address}</Text>
+        </View> : null}
         {feedback ? <Text style={feedback.kind === 'success' ? styles.notice : styles.danger}>{feedback.text}</Text> : null}
       </View> : null}
 

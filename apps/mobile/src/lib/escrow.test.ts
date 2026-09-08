@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 vi.mock('expo-crypto', () => ({ getRandomBytesAsync: vi.fn() }));
-import { formatEscrowCountdown, isValidRecoveryPhrase, parseRecoveryPhrase, parseUsdtAmount, pickVerificationWordIndices, shouldApproveAllowance, verifyMnemonicWords, withWalletConnectDeadline } from './escrow';
+import { estimateRequiredPol, formatEscrowCountdown, formatPolAmount, isValidRecoveryPhrase, parseRecoveryPhrase, parseUsdtAmount, pickVerificationWordIndices, shouldApproveAllowance, verifyMnemonicWords, withWalletConnectDeadline } from './escrow';
 
 describe('escrow helpers', () => {
   it('parses decimal USDT without floating point arithmetic', () => {
@@ -15,6 +15,12 @@ describe('escrow helpers', () => {
   it('decides when an approval is required', () => {
     expect(shouldApproveAllowance(1n, 2n)).toBe(true);
     expect(shouldApproveAllowance(2n, 2n)).toBe(false);
+  });
+  it('estimates a buffered POL gas requirement with a minimum and cent rounding', () => {
+    expect(formatPolAmount(estimateRequiredPol(100_000n, 30_000_000_000n))).toBe('0.05');
+    expect(formatPolAmount(estimateRequiredPol(1_000_000n, 100_000_000_000n))).toBe('0.15');
+    expect(formatPolAmount(estimateRequiredPol(1_000_001n, 100_000_000_000n))).toBe('0.16');
+    expect(formatPolAmount(estimateRequiredPol(1n, 1n))).toBe('0.05');
   });
   it('selects two different mnemonic words and verifies them', () => {
     const indices = pickVerificationWordIndices(12, new Uint8Array([2, 2]));
