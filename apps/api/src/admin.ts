@@ -88,6 +88,7 @@ const settingSchema = z.object({
   autoApprovalLimitMicroUsdt: nonNegativeIntegerString,
   requireIdentityForWithdrawal: z.boolean(),
   custodialReservesEnabled: z.boolean(),
+  transakEnabled: z.boolean(),
   identityRequiredCountries: z.array(z.string().regex(/^[A-Za-z]{2}$/, 'country code must be exactly two letters')).transform((countries) => [...new Set(countries.map((country) => country.toUpperCase()))]),
   commissionFloorBps: z.number().int().min(0),
   commissionFloorByCountry: z.array(z.object({ country: z.string().regex(/^[A-Za-z]{2}$/), bps: z.number().int().min(0) })).transform((rows) => rows.map((row) => ({ country: row.country.toUpperCase(), bps: row.bps }))),
@@ -252,7 +253,7 @@ function nextCursor(createdAt: Date, id: string): string {
 }
 
 async function readAdminSettings(prisma: PrismaClient) {
-  const rows = await prisma.systemSetting.findMany({ where: { key: { in: ['WITHDRAWAL_BASE_FEE_BPS', 'WITHDRAWAL_MIN_FEE_USDT', 'MIN_WITHDRAWAL_USDT', 'AUTO_APPROVAL_LIMIT_USDT', 'REQUIRE_IDENTITY_FOR_WITHDRAWAL', 'CUSTODIAL_RESERVES_ENABLED', 'IDENTITY_REQUIRED_COUNTRIES', 'COMMISSION_FLOOR_BPS', 'COMMISSION_FLOOR_BPS_BY_COUNTRY', 'TRAINER_CUT_BPS'] } } });
+  const rows = await prisma.systemSetting.findMany({ where: { key: { in: ['WITHDRAWAL_BASE_FEE_BPS', 'WITHDRAWAL_MIN_FEE_USDT', 'MIN_WITHDRAWAL_USDT', 'AUTO_APPROVAL_LIMIT_USDT', 'REQUIRE_IDENTITY_FOR_WITHDRAWAL', 'CUSTODIAL_RESERVES_ENABLED', 'TRANSAK_ENABLED', 'IDENTITY_REQUIRED_COUNTRIES', 'COMMISSION_FLOOR_BPS', 'COMMISSION_FLOOR_BPS_BY_COUNTRY', 'TRAINER_CUT_BPS'] } } });
   const values = new Map(rows.map((row) => [row.key, row.value]));
   const commissionFloorByCountry = (values.get('COMMISSION_FLOOR_BPS_BY_COUNTRY') ?? 'IR=300').split(',').filter(Boolean).map((entry) => {
     const [country, bps] = entry.split('=');
@@ -265,6 +266,7 @@ async function readAdminSettings(prisma: PrismaClient) {
     autoApprovalLimitMicroUsdt: microUsdtFromDecimal(values.get('AUTO_APPROVAL_LIMIT_USDT') ?? '0').toString(),
     requireIdentityForWithdrawal: requireIdentityForWithdrawal(values.get('REQUIRE_IDENTITY_FOR_WITHDRAWAL')),
     custodialReservesEnabled: values.get('CUSTODIAL_RESERVES_ENABLED') === 'true',
+    transakEnabled: values.get('TRANSAK_ENABLED') === 'true',
     identityRequiredCountries: [...parseIdentityRequiredCountries(values.get('IDENTITY_REQUIRED_COUNTRIES'))],
     commissionFloorBps: Number.parseInt(values.get('COMMISSION_FLOOR_BPS') ?? '300', 10),
     commissionFloorByCountry,
@@ -580,6 +582,7 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
           autoApprovalLimitMicroUsdt: 'AUTO_APPROVAL_LIMIT_USDT',
           requireIdentityForWithdrawal: 'REQUIRE_IDENTITY_FOR_WITHDRAWAL',
           custodialReservesEnabled: 'CUSTODIAL_RESERVES_ENABLED',
+          transakEnabled: 'TRANSAK_ENABLED',
           identityRequiredCountries: 'IDENTITY_REQUIRED_COUNTRIES',
           commissionFloorBps: 'COMMISSION_FLOOR_BPS',
           commissionFloorByCountry: 'COMMISSION_FLOOR_BPS_BY_COUNTRY',
@@ -605,7 +608,7 @@ export function createAdminRouter(dependencies: AdminRouterDependencies): expres
             continue;
           }
           const key = keyMap[field]!;
-          const storedValue = field === 'withdrawalBaseFeeBps' || field === 'requireIdentityForWithdrawal' || field === 'custodialReservesEnabled' || field === 'commissionFloorBps' || field === 'trainerCutBps'
+          const storedValue = field === 'withdrawalBaseFeeBps' || field === 'requireIdentityForWithdrawal' || field === 'custodialReservesEnabled' || field === 'transakEnabled' || field === 'commissionFloorBps' || field === 'trainerCutBps'
             ? String(value)
             : field === 'identityRequiredCountries'
               ? (value as string[]).join(',')

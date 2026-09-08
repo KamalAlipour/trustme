@@ -90,6 +90,7 @@ import { issuePhoneCode, smsRouteFor, verifyPhoneCode, type SmsRoute } from './p
 import { TransakApiError, type TransakClient } from './transak.js';
 import type { VippsIdentityClient } from './vipps-identity.js';
 import { custodialReservesEnabled, requireCustodialReserves } from './custodial-reserves.js';
+import { requireTransak, transakEnabled } from './transak-setting.js';
 
 export type MemberRouterDependencies = {
   config: ApiConfig;
@@ -692,7 +693,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
 
   router.get('/escrow/config', async (_request, response, next) => {
     try {
-      const reservesEnabled = await custodialReservesEnabled(prisma);
+      const [reservesEnabled, isTransakEnabled] = await Promise.all([custodialReservesEnabled(prisma), transakEnabled(prisma)]);
       response.json({
       contractAddress: dependencies.config.escrowContractAddress ?? null,
       chainId: dependencies.config.escrowChainId,
@@ -701,10 +702,11 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
       decimals: 6,
       walletConnectProjectId: dependencies.config.walletConnectProjectId ?? null,
       web3AuthClientId: dependencies.config.web3AuthClientId ?? null,
-      cardTopUpEnabled: reservesEnabled && dependencies.config.transakApiKey !== undefined && dependencies.config.transakApiSecret !== undefined,
-      cardSellEnabled: dependencies.config.transakApiKey !== undefined && dependencies.config.transakApiSecret !== undefined,
+      cardTopUpEnabled: reservesEnabled && isTransakEnabled && dependencies.config.transakApiKey !== undefined && dependencies.config.transakApiSecret !== undefined,
+      cardSellEnabled: isTransakEnabled && dependencies.config.transakApiKey !== undefined && dependencies.config.transakApiSecret !== undefined,
       enabled: dependencies.config.escrowContractAddress !== undefined,
       custodialReservesEnabled: reservesEnabled,
+      transakEnabled: isTransakEnabled,
       });
     } catch (error) {
       next(error);
@@ -713,6 +715,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
 
   router.post('/card-topup/session', async (request, response, next) => {
     try {
+      await requireTransak(prisma);
       await requireCustodialReserves(prisma);
       if (dependencies.transakClient === undefined) throw new HttpError(503, 'card_topup_not_configured');
       const body = cardTopUpSessionSchema.parse(request.body);
@@ -738,6 +741,7 @@ export function createMemberRouter(dependencies: MemberRouterDependencies): expr
 
   router.post('/card-sell/session', async (request, response, next) => {
     try {
+      await requireTransak(prisma);
       if (dependencies.transakClient === undefined) throw new HttpError(503, 'card_sell_not_configured');
       const body = cardSellSessionSchema.parse(request.body);
       const user = await member(prisma, memberClaims(request).sub);

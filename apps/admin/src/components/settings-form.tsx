@@ -10,6 +10,7 @@ type Settings = {
   autoApprovalLimitMicroUsdt: string;
   requireIdentityForWithdrawal: boolean;
   custodialReservesEnabled: boolean;
+  transakEnabled: boolean;
   identityRequiredCountries: string[];
   commissionFloorBps: number;
   commissionFloorByCountry: Array<{ country: string; bps: number }>;
@@ -35,6 +36,10 @@ export function SettingsForm({ settings, errorField, errorMessage }: Readonly<{ 
       <label className="flex items-center gap-3">
         <input type="checkbox" name="custodialReservesEnabled" defaultChecked={settings.custodialReservesEnabled} />
         <span className="text-sm font-medium">Custodial reserves (platform-held USDT: deposit addresses, card top-up, withdrawals, partner deposits)</span>
+      </label>
+      <label className="flex items-center gap-3">
+        <input type="checkbox" name="transakEnabled" defaultChecked={settings.transakEnabled} />
+        <span className="text-sm font-medium">Transak card top-up &amp; sell</span>
       </label>
       <fieldset className="space-y-2">
         <legend className="mb-1 block text-sm font-medium">{labels.identityRequiredBeforeSpending}</legend>
