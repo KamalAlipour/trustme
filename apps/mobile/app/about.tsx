@@ -26,6 +26,10 @@ export default function About() {
         {t.manifesto.capabilities.map((item) => <Text key={item} style={styles.text}>{item}</Text>)}
       </View>
       <Text style={styles.text}>{t.manifesto.closing}</Text>
+      <View style={styles.card}>
+        <Text style={styles.heading}>{t.manifesto.companyTitle}</Text>
+        {t.manifesto.company.map((item) => <Text key={item} style={styles.muted}>{item}</Text>)}
+      </View>
       <Pressable onPress={() => void dismiss()} style={styles.button}><Text style={styles.buttonText}>{t.close}</Text></Pressable>
     </Page>
   );
