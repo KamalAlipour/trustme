@@ -2,6 +2,8 @@ import { getRandomBytesAsync } from 'expo-crypto';
 import { Mnemonic } from 'ethers';
 
 const MICRO_USDT = 1_000_000n;
+const POL_CENT = 10_000_000_000_000_000n;
+const MINIMUM_POL = 5n * POL_CENT;
 
 export type WalletConnectAttempt = { done: Promise<void>; cancel: (error: Error) => void };
 
@@ -34,6 +36,18 @@ export function formatEscrowCountdown(expiresAt: string, now = Date.now()): stri
 
 export function shouldApproveAllowance(allowance: bigint, amount: bigint): boolean {
   return allowance < amount;
+}
+
+export function estimateRequiredPol(gasUnits: bigint, maxFeePerGas: bigint): bigint {
+  if (gasUnits < 0n || maxFeePerGas < 0n) throw new Error('gas values must be non-negative');
+  const bufferedWei = (gasUnits * maxFeePerGas * 3n + 1n) / 2n;
+  const minimumWei = bufferedWei > MINIMUM_POL ? bufferedWei : MINIMUM_POL;
+  return ((minimumWei + POL_CENT - 1n) / POL_CENT) * POL_CENT;
+}
+
+export function formatPolAmount(wei: bigint): string {
+  const cents = wei / POL_CENT;
+  return `${cents / 100n}.${(cents % 100n).toString().padStart(2, '0')}`;
 }
 
 export function pickVerificationWordIndices(wordCount: number, randomBytes: Uint8Array): [number, number] {
