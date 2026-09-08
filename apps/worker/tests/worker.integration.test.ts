@@ -272,7 +272,7 @@ describe('escrow dispatch', () => {
     const provider = new FakeChainProvider({ head: 1 });
     const escrowConfig = { ...dispatchConfig, escrowContractAddress: getAddress(`0x${'06'.repeat(20)}`), escrowSettlerKey: 'test-key', escrowMaxAttempts: 5 };
     await expect(dispatchEscrowPermitDeposit(prisma, provider, signer, escrowConfig, permit.id)).resolves.toMatchObject({ status: 'broadcast' });
-    const parsed = new Interface(trustCouponEscrowAbi).parseTransaction({ data: Transaction.from(provider.sentTransactions[0]!).data });
+    const parsed = new Interface(trustCouponEscrowAbi).parseTransaction({ data: signer.signedRequests[0]?.data as string });
     expect(parsed?.name).toBe('depositWithPermit');
     expect(parsed?.args[0]).toBe(getAddress(`0x${'04'.repeat(20)}`));
 
