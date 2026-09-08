@@ -502,6 +502,8 @@ export const en = (unit: DisplayUnit) => ({
       '🏛️ Social welfare and charity module: Direct connection to social workers and verified charitable organizations for support requests, with document and PDF submission.',
       '🔐 Bank-level biometric security: Instant access with a personal four-digit PIN and biometrics (Touch ID / Face ID).',
     ],
+    companyTitle: 'Operated by',
+    company: ['Komasi AS (Norway)', 'Org.nr: 936962106', 'VAT: NO936962106MVA', 'DUNS: 348364557'],
     closing: '“Real capital is not wealth to hoard; it is the service, goods, and value we provide to our community. Welcome to Trust Coupon.”',
   },
 } as const);
