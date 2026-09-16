@@ -13,17 +13,22 @@ import { styles } from '../styles';
 
 WebBrowser.maybeCompleteAuthSession();
 
-export function SocialAuthButtons({
-  onError,
+function GoogleNativeButton({
+  busy,
+  setBusy,
   onGoogleToken,
-  onAppleToken,
+  onError,
+  googleWebAvailable,
+  signInWithGoogleWeb,
 }: {
-  onError: (message: string) => void;
+  busy: boolean;
+  setBusy: React.Dispatch<React.SetStateAction<boolean>>;
   onGoogleToken: (idToken: string) => Promise<void>;
-  onAppleToken: (idToken: string, displayName?: string) => Promise<void>;
+  onError: (message: string) => void;
+  googleWebAvailable: boolean;
+  signInWithGoogleWeb: () => void;
 }) {
   const { t } = useTranslation();
-  const googleAvailable = isGoogleSignInAvailable();
   const [googleRequest, googleResponse, promptGoogle] = Google.useAuthRequest({
     ...(socialClientIds.web === undefined ? {} : { webClientId: socialClientIds.web }),
     ...(socialClientIds.ios === undefined ? {} : { iosClientId: socialClientIds.ios }),
@@ -31,7 +36,6 @@ export function SocialAuthButtons({
     responseType: ResponseType.IdToken,
     selectAccount: true,
   });
-  const [busy, setBusy] = useState(false);
   const processedGoogleResponse = useRef<typeof googleResponse>(null);
 
   useEffect(() => {
@@ -44,7 +48,40 @@ export function SocialAuthButtons({
     }
     setBusy(true);
     void onGoogleToken(idToken).catch(() => onError(t.socialSignInUnavailable)).finally(() => setBusy(false));
-  }, [googleResponse, onGoogleToken, onError, t.socialSignInUnavailable]);
+  }, [googleResponse, onGoogleToken, onError, setBusy, t.socialSignInUnavailable]);
+
+  return (
+    <Pressable
+      accessibilityLabel={t.signInWithGoogle}
+      disabled={(Platform.OS !== 'web' && googleRequest === null) || busy}
+      onPress={() => {
+        if (busy) return;
+        if (googleWebAvailable) {
+          signInWithGoogleWeb();
+        } else {
+          void promptGoogle();
+        }
+      }}
+      style={[styles.socialAuthButton, styles.socialAuthGoogleButton, busy ? styles.socialAuthButtonBusy : null]}
+    >
+      <GoogleIcon size={20} />
+      <Text numberOfLines={1} style={styles.socialAuthGoogleText}>{t.signInWithGoogleShort}</Text>
+    </Pressable>
+  );
+}
+
+export function SocialAuthButtons({
+  onError,
+  onGoogleToken,
+  onAppleToken,
+}: {
+  onError: (message: string) => void;
+  onGoogleToken: (idToken: string) => Promise<void>;
+  onAppleToken: (idToken: string, displayName?: string) => Promise<void>;
+}) {
+  const { t } = useTranslation();
+  const googleAvailable = isGoogleSignInAvailable();
+  const [busy, setBusy] = useState(false);
 
   const signInWithApple = async () => {
     setBusy(true);
@@ -128,22 +165,14 @@ export function SocialAuthButtons({
       <View style={styles.divider} />
       <Text style={styles.muted}>{t.or}</Text>
       <View style={styles.socialAuthRow}>
-        {googleAvailable ? <Pressable
-          accessibilityLabel={t.signInWithGoogle}
-          disabled={(Platform.OS !== 'web' && googleRequest === null) || busy}
-          onPress={() => {
-            if (busy) return;
-            if (googleWebAvailable) {
-              signInWithGoogleWeb();
-            } else {
-              void promptGoogle();
-            }
-          }}
-          style={[styles.socialAuthButton, styles.socialAuthGoogleButton, busy ? styles.socialAuthButtonBusy : null]}
-        >
-          <GoogleIcon size={20} />
-          <Text numberOfLines={1} style={styles.socialAuthGoogleText}>{t.signInWithGoogleShort}</Text>
-        </Pressable> : null}
+        {googleAvailable ? <GoogleNativeButton
+          busy={busy}
+          setBusy={setBusy}
+          onGoogleToken={onGoogleToken}
+          onError={onError}
+          googleWebAvailable={googleWebAvailable}
+          signInWithGoogleWeb={signInWithGoogleWeb}
+        /> : null}
         {appleAvailable ? <Pressable
           accessibilityLabel={t.signInWithApple}
           disabled={busy}
