@@ -1,5 +1,5 @@
-import { appleWebStateKey } from './apple-web';
-import { googleWebStateKey } from './google-web';
+import { appleWebHumanTokenKey, appleWebStateKey } from './apple-web';
+import { googleWebHumanTokenKey, googleWebStateKey } from './google-web';
 
 type SocialCallback = {
   provider: 'google' | 'apple';
@@ -37,6 +37,17 @@ export function validateWebRedirectState(
     return expectedState !== null && callbackState === expectedState;
   } catch {
     return false;
+  }
+}
+
+export function readWebRedirectHumanToken(provider: SocialCallback['provider'], storage: WebRedirectStateStorage): string | null {
+  const key = provider === 'apple' ? appleWebHumanTokenKey : googleWebHumanTokenKey;
+  try {
+    const token = storage.getItem(key);
+    storage.removeItem(key);
+    return token;
+  } catch {
+    return null;
   }
 }
 

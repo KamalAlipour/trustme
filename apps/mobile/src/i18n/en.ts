@@ -245,6 +245,11 @@ export const en = (unit: DisplayUnit) => ({
   signInWithApple: 'Sign in with Apple',
   signInWithAppleShort: 'Apple',
   socialSignInUnavailable: 'Social sign-in is unavailable right now.',
+  humanCheck: {
+    title: "Confirm you're not a robot",
+    failed: 'Verification failed. Please try again.',
+    required: 'Complete the check above to continue',
+  },
   or: 'Or',
   unlockTitle: 'Unlock Trust Coupon',
   unlockInstructions: 'Use Face ID, fingerprint, or your device passcode to unlock your session.',

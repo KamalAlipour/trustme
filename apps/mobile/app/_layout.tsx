@@ -2,12 +2,14 @@ import React, { useEffect, useRef } from 'react';
 import { router, Stack } from 'expo-router';
 import { I18nManager, Platform } from 'react-native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { ApiError } from '../src/api/client';
 import { SessionProvider, useSession } from '../src/auth/session';
 import { LanguageProvider } from '../src/i18n';
 import {
   getWebRedirectHandlingMode,
   readSocialCallbackFromUrl,
   readSocialCallbackStateFromUrl,
+  readWebRedirectHumanToken,
   validateWebRedirectState,
 } from '../src/auth/web-redirect';
 import { installWalletPolyfills } from '../src/lib/wallet-polyfills';
@@ -46,9 +48,13 @@ function WebRedirectHandler() {
         router.replace({ pathname: '/(auth)/login', params: { error: 'social' } });
         return;
       }
-      void signInWithSocial(callback.provider, callback.idToken)
+      const humanToken = readWebRedirectHumanToken(callback.provider, window.sessionStorage);
+      void signInWithSocial(callback.provider, callback.idToken, undefined, humanToken ?? undefined)
         .then(() => router.replace('/'))
-        .catch(() => router.replace({ pathname: '/(auth)/login', params: { error: 'social' } }));
+        .catch((cause) => router.replace({
+          pathname: '/(auth)/login',
+          params: { error: cause instanceof ApiError && cause.status === 403 && cause.body.error === 'human_verification_failed' ? 'human' : 'social' },
+        }));
     };
     if (handlingMode === 'deferred') {
       if (!scheduledRedirect.current) {

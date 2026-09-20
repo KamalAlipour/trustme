@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Link, router, useLocalSearchParams } from 'expo-router';
 import { Pressable, Text, TextInput, View } from 'react-native';
-import { ApiError, LockedError } from '../../src/api/client';
+import { ApiError, fetchHumanVerification, LockedError, type HumanVerificationConfig } from '../../src/api/client';
 import { useSession } from '../../src/auth/session';
 import { PinPad } from '../../src/components/PinPad';
 import { Logo } from '../../src/components/Logo';
@@ -10,6 +10,7 @@ import { useTranslation } from '../../src/i18n';
 import { isWebPlatform } from '../../src/lib/platform';
 import { styles } from '../../src/styles';
 import { SocialAuthButtons } from '../../src/components/SocialAuthButtons';
+import { HumanVerification } from '../../src/components/HumanVerification';
 
 export default function Login() {
   const { t, language, setLanguage } = useTranslation();
@@ -21,6 +22,9 @@ export default function Login() {
   const [lockedUntil, setLockedUntil] = useState<number | null>(null);
   const [now, setNow] = useState(Date.now());
   const [languageNotice, setLanguageNotice] = useState('');
+  const [humanConfig, setHumanConfig] = useState<HumanVerificationConfig | null>(null);
+  const [humanToken, setHumanToken] = useState<string | null>(null);
+  const [humanWidgetKey, setHumanWidgetKey] = useState(0);
   const previousLanguage = useRef(language);
 
   useEffect(() => {
@@ -33,26 +37,46 @@ export default function Login() {
   }, [member, ready]);
   useEffect(() => {
     if (routeError === 'social') setError(t.socialSignInUnavailable);
-  }, [routeError, t.socialSignInUnavailable]);
+    if (routeError === 'human') {
+      setHumanToken(null);
+      setHumanWidgetKey((key) => key + 1);
+      setError(t.humanCheck.failed);
+    }
+  }, [routeError, t.humanCheck.failed, t.socialSignInUnavailable]);
   useEffect(() => {
     if (previousLanguage.current !== language) {
       setLanguageNotice(t.languageRestartNotice(language));
       previousLanguage.current = language;
     }
   }, [language, t]);
+  useEffect(() => {
+    let active = true;
+    void fetchHumanVerification().then((result) => {
+      if (active) setHumanConfig(result);
+    }).catch(() => {
+      if (active) setHumanConfig({ enabled: false, siteKey: null });
+    });
+    return () => { active = false; };
+  }, []);
 
   const submit = async () => {
     setError('');
     try {
-      await signIn(phone, pin);
+      await signIn(phone, pin, humanToken ?? undefined);
       router.replace('/');
     } catch (cause) {
       if (cause instanceof LockedError) {
         setLockedUntil(Date.now() + cause.retryAfter * 1000);
         setError(`${cause.message} (${t.lockedFor(Math.max(1, Math.ceil(cause.retryAfter / 60)))})`);
+      } else if (cause instanceof ApiError && cause.status === 403 && cause.body.error === 'human_verification_failed') {
+        setHumanToken(null);
+        setHumanWidgetKey((key) => key + 1);
+        setError(t.humanCheck.failed);
       } else setError(cause instanceof ApiError ? cause.message : t.unknownError);
     }
   };
+  const humanRequired = humanConfig?.enabled === true;
+  const submitEnabled = humanConfig !== null && (!humanRequired || humanToken !== null);
   const remaining = lockedUntil === null ? 0 : Math.max(0, lockedUntil - now);
   return (
     <Page>
@@ -64,11 +88,24 @@ export default function Login() {
       {isWebPlatform() ? <Text style={styles.muted}>{t.browserSessionNotice}</Text> : null}
       <SocialAuthButtons
         onError={setError}
-        onGoogleToken={async (idToken) => { await signInWithSocial('google', idToken); router.replace('/'); }}
-        onAppleToken={async (idToken, displayName) => { await signInWithSocial('apple', idToken, displayName); router.replace('/'); }}
+        humanToken={humanToken}
+        disabled={!submitEnabled}
+        onHumanVerificationFailure={() => {
+          setHumanToken(null);
+          setHumanWidgetKey((key) => key + 1);
+        }}
+        onGoogleToken={async (idToken) => { await signInWithSocial('google', idToken, undefined, humanToken ?? undefined); router.replace('/'); }}
+        onAppleToken={async (idToken, displayName) => { await signInWithSocial('apple', idToken, displayName, humanToken ?? undefined); router.replace('/'); }}
       />
       <TextInput value={phone} onChangeText={setPhone} placeholder={t.phone} style={styles.input} keyboardType="phone-pad" textContentType="telephoneNumber" autoComplete="tel" />
-      <PinPad value={pin} onChange={setPin} {...(remaining === 0 ? { onSubmit: submit } : {})} />
+      {humanRequired && humanConfig.siteKey !== null ? (
+        <>
+          <Text style={styles.muted}>{t.humanCheck.title}</Text>
+          <HumanVerification key={humanWidgetKey} siteKey={humanConfig.siteKey} onToken={setHumanToken} />
+          {humanToken === null ? <Text style={styles.muted}>{t.humanCheck.required}</Text> : null}
+        </>
+      ) : null}
+      <PinPad value={pin} onChange={setPin} {...(remaining === 0 && submitEnabled ? { onSubmit: submit } : {})} />
       {biometric ? <Text style={styles.muted}>{t.biometricSessionNotice}</Text> : null}
       {error ? <Text style={styles.danger}>{error}</Text> : null}
       {remaining > 0 ? <Text style={styles.muted}>{t.unlockIn(Math.ceil(remaining / 1000))}</Text> : null}

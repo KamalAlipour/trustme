@@ -4,6 +4,7 @@ import { deviceLabelFrom } from '../lib/device-label';
 import type { AuthResponse, SecuritySetup, Tokens } from './types';
 
 export const API_BASE_URL = (process.env.EXPO_PUBLIC_API_URL ?? 'https://api-trustme.komasi.as').replace(/\/$/, '');
+export const APP_WEB_ORIGIN = 'https://app-trustcoupon.komasi.as';
 const DEVICE_LABEL = deviceLabelFrom(Platform.OS, Platform.Version ?? null, typeof navigator === 'undefined' ? null : navigator.userAgent);
 
 export class ApiError extends Error {
@@ -139,6 +140,12 @@ export async function authenticate(path: '/v1/auth/login' | '/v1/auth/register' 
   const result = await request<AuthResponse>(path, { method: 'POST', auth: 'none', body });
   accessToken = result.tokens.accessToken;
   return result;
+}
+
+export type HumanVerificationConfig = { enabled: boolean; siteKey: string | null };
+
+export function fetchHumanVerification(): Promise<HumanVerificationConfig> {
+  return request<HumanVerificationConfig>('/v1/auth/human-verification', { auth: 'none' });
 }
 
 export async function logout(): Promise<void> {

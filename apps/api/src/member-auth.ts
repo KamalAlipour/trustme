@@ -10,6 +10,8 @@ import { HttpError } from './http-error.js';
 import { createUserWithAccounts, isBarcodeUniqueViolation, isEmailUniqueViolation, provisionUser } from './user-provisioning.js';
 import type { ApiConfig } from './config.js';
 import { verifyAppleIdToken, verifyGoogleIdToken, type VerifiedSocialClaims } from './social-auth.js';
+import { deleteEmptyAccount } from './account-retention.js';
+import { humanVerificationFailed, turnstileVerifier, type HumanVerifier } from './human-verification.js';
 
 export type EmailSender = {
   send(to: string, subject: string, body: string): Promise<void>;
@@ -23,6 +25,7 @@ export type MemberAuthDependencies = {
   logEmailCode?: (email: string, code: string) => void;
   verifyGoogleIdToken?: (idToken: string, audiences: readonly string[]) => Promise<VerifiedSocialClaims>;
   verifyAppleIdToken?: (idToken: string, audiences: readonly string[]) => Promise<VerifiedSocialClaims>;
+  verifyHumanToken?: HumanVerifier;
 };
 
 const dummyPinHash = bcrypt.hash(randomBytes(32).toString('hex'), 12);
@@ -34,8 +37,9 @@ const registerSchema = z.object({
   pin: fourDigitCodeSchema,
   displayName: z.string().trim().min(1).max(128).optional(),
   email: z.string().email().optional(),
+  humanToken: z.string().min(1).max(4096).optional(),
 });
-const loginSchema = z.object({ phone: phoneNumberSchema, pin: fourDigitCodeSchema });
+const loginSchema = z.object({ phone: phoneNumberSchema, pin: fourDigitCodeSchema, humanToken: z.string().min(1).max(4096).optional() });
 
 function emailValue(value: unknown): string {
   if (typeof value !== 'string' || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value.trim())) throw new HttpError(400, 'invalid email');
@@ -404,6 +408,39 @@ export function createMemberAuthRouter(dependencies: MemberAuthDependencies): ex
   const sender = injectedSender ?? smtpSender(config);
   const router = express.Router();
   const limiter = rateLimit({ windowMs: 60_000, limit: 100, standardHeaders: true, legacyHeaders: false });
+  const verifyHuman = dependencies.verifyHumanToken ??
+    (config.turnstileSecretKey !== undefined && config.turnstileSiteKey !== undefined
+      ? turnstileVerifier(config.turnstileSecretKey)
+      : undefined);
+  const recordHumanEvent = async (route: string, outcome: string, request: express.Request, userId?: string) => {
+    if (verifyHuman === undefined) return;
+    try {
+      await prisma.humanVerificationEvent.create({
+        data: {
+          route,
+          outcome,
+          ...(userId === undefined ? {} : { userId }),
+          ...(request.ip === undefined ? {} : { remoteIp: request.ip }),
+        },
+      });
+    } catch (error) {
+      console.warn('[human-verification] event recording failed', error instanceof Error ? error.message : String(error));
+    }
+  };
+  const challenge = async (request: express.Request, token: string | undefined): Promise<boolean> =>
+    verifyHuman === undefined || (token !== undefined && await verifyHuman(token, request.ip));
+  const findExistingIdentityUserId = async (provider: 'GOOGLE' | 'APPLE', subject: string): Promise<string | undefined> => {
+    const identity = await prisma.userIdentity.findUnique({
+      where: {
+        provider_subject: {
+          provider: provider === 'GOOGLE' ? IdentityProvider.GOOGLE : IdentityProvider.APPLE,
+          subject,
+        },
+      },
+      select: { userId: true },
+    });
+    return identity?.userId;
+  };
   const register = (value: unknown) => {
     const input = registerSchema.parse(value);
     if (isWeakPin(input.pin)) throw new HttpError(400, 'PIN is too weak');
@@ -414,6 +451,10 @@ export function createMemberAuthRouter(dependencies: MemberAuthDependencies): ex
   router.post('/register', limiter, async (request, response, next) => {
     try {
       const body = register(request.body);
+      if (!await challenge(request, body.humanToken)) {
+        await recordHumanEvent('/register', 'failed', request);
+        throw humanVerificationFailed;
+      }
       if (await prisma.user.findUnique({ where: { phoneNumber: body.phone } })) throw new HttpError(409, 'phone already registered');
       const pinUpdatedAt = new Date();
       const user = await provisionUser(prisma, config, {
@@ -426,6 +467,7 @@ export function createMemberAuthRouter(dependencies: MemberAuthDependencies): ex
       if (body.email !== undefined && config.emailDelivery !== 'none') {
         await issueEmailCode(prisma, config, sender, logEmailCode, user.id, body.email, EmailVerificationPurpose.VERIFY_EMAIL);
       }
+      await recordHumanEvent('/register', 'passed', request, user.id);
       response.status(201).json(await tokenResponse(prisma, config, user.id, request.header('x-device-label') ?? 'Unknown device', installationIdFrom(request)));
     } catch (error) { next(isBarcodeUniqueViolation(error) ? new HttpError(409, 'could not allocate member barcode') : error); }
   });
@@ -435,6 +477,12 @@ export function createMemberAuthRouter(dependencies: MemberAuthDependencies): ex
       const user = await prisma.user.findUnique({ where: { phoneNumber: body.phone } });
       if (!user) { await bcrypt.compare(body.pin, await dummyPinHash); throw genericLoginError; }
       await verifyMemberPin(prisma, user.id, body.pin);
+      if (!await challenge(request, body.humanToken)) {
+        const deleted = await deleteEmptyAccount(prisma, user.id, 'login_challenge_failed');
+        await recordHumanEvent('/login', deleted ? 'failed_deleted' : 'failed_kept', request, user.id);
+        throw humanVerificationFailed;
+      }
+      await recordHumanEvent('/login', 'passed', request, user.id);
       response.json(await tokenResponse(prisma, config, user.id, request.header('x-device-label') ?? 'Unknown device', installationIdFrom(request)));
     } catch (error) { next(error); }
   });
@@ -443,6 +491,7 @@ export function createMemberAuthRouter(dependencies: MemberAuthDependencies): ex
       const body = z.object({
         idToken: z.string().min(1),
         displayName: z.string().trim().min(1).max(128).optional(),
+        humanToken: z.string().min(1).max(4096).optional(),
       }).parse(request.body);
       const audiences = provider === 'GOOGLE' ? (config.googleOAuthClientIds ?? []) : (config.appleOAuthAudiences ?? []);
       if (audiences.length === 0) {
@@ -453,18 +502,32 @@ export function createMemberAuthRouter(dependencies: MemberAuthDependencies): ex
         ? (dependencies.verifyGoogleIdToken ?? verifyGoogleIdToken)
         : (dependencies.verifyAppleIdToken ?? verifyAppleIdToken);
       const claims = await verifier(body.idToken, audiences);
-      response.status(200).json(await socialTokenResponse(
+      const existingUserId = await findExistingIdentityUserId(provider, claims.subject);
+      if (!await challenge(request, body.humanToken)) {
+        const deleted = existingUserId === undefined
+          ? false
+          : await deleteEmptyAccount(prisma, existingUserId, `${provider.toLowerCase()}_challenge_failed`);
+        await recordHumanEvent(`/${provider.toLowerCase()}`, deleted ? 'failed_deleted' : existingUserId === undefined ? 'failed' : 'failed_kept', request, existingUserId);
+        throw humanVerificationFailed;
+      }
+      const result = await socialTokenResponse(
         dependencies,
         provider,
         claims,
         provider === 'APPLE' ? body.displayName : undefined,
         request.header('x-device-label') ?? 'Unknown device',
         installationIdFrom(request),
-      ));
+      );
+      await recordHumanEvent(`/${provider.toLowerCase()}`, 'passed', request, result.member.id);
+      response.status(200).json(result);
     } catch (error) { next(error); }
   };
   router.post('/google', limiter, socialLogin('GOOGLE'));
   router.post('/apple', limiter, socialLogin('APPLE'));
+  router.get('/human-verification', limiter, (_request, response) => {
+    const enabled = config.turnstileSecretKey !== undefined && config.turnstileSiteKey !== undefined;
+    response.json({ enabled, siteKey: enabled ? config.turnstileSiteKey : null });
+  });
   router.post('/refresh', limiter, async (request, response, next) => {
     try {
       const value = request.body?.refreshToken;

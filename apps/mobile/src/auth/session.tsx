@@ -15,9 +15,9 @@ type SessionContextValue = {
   unlockRequired: boolean;
   unlocking: boolean;
   unlockError: boolean;
-  signIn: (phone: string, pin: string) => Promise<void>;
-  signUp: (phone: string, pin: string, displayName?: string, email?: string) => Promise<AuthResponse>;
-  signInWithSocial: (provider: 'google' | 'apple', idToken: string, displayName?: string) => Promise<void>;
+  signIn: (phone: string, pin: string, humanToken?: string) => Promise<void>;
+  signUp: (phone: string, pin: string, displayName?: string, email?: string, humanToken?: string) => Promise<AuthResponse>;
+  signInWithSocial: (provider: 'google' | 'apple', idToken: string, displayName?: string, humanToken?: string) => Promise<void>;
   refreshSetup: () => Promise<SecuritySetup>;
   signOut: () => Promise<void>;
   getStepUpPin: () => Promise<string | null>;
@@ -117,19 +117,20 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     unlockRequired,
     unlocking,
     unlockError,
-    signIn: async (phone, pin) => {
-      const result = await authenticate('/v1/auth/login', { phone, pin });
+    signIn: async (phone, pin, humanToken) => {
+      const result = await authenticate('/v1/auth/login', { phone, pin, ...(humanToken === undefined ? {} : { humanToken }) });
       await saveCredentials(result.tokens.refreshToken, pin);
       setMember(result.member);
       setSetup(await request<SecuritySetup>('/v1/me/security-setup'));
       setUnlockRequired(false);
     },
-    signUp: async (phone, pin, displayName, email) => {
+    signUp: async (phone, pin, displayName, email, humanToken) => {
       const result = await authenticate('/v1/auth/register', {
         phone,
         pin,
         ...(displayName === undefined ? {} : { displayName }),
         ...(email === undefined ? {} : { email }),
+        ...(humanToken === undefined ? {} : { humanToken }),
       });
       await saveCredentials(result.tokens.refreshToken, pin);
       setMember(result.member);
@@ -137,10 +138,11 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       setUnlockRequired(false);
       return result;
     },
-    signInWithSocial: async (provider, idToken, displayName) => {
+    signInWithSocial: async (provider, idToken, displayName, humanToken) => {
       const result = await authenticate(`/v1/auth/${provider}`, {
         idToken,
         ...(displayName === undefined ? {} : { displayName }),
+        ...(humanToken === undefined ? {} : { humanToken }),
       });
       await saveCredentialsWithoutPin(result.tokens.refreshToken);
       setMember(result.member);

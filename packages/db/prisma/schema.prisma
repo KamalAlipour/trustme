@@ -1053,6 +1053,17 @@ model AdminAuditLog {
   @@index([entityType, entityId])
 }
 
+model HumanVerificationEvent {
+  id        String   @id @default(uuid()) @db.Uuid
+  route     String
+  outcome   String
+  userId    String?  @db.Uuid
+  remoteIp  String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
 model ApiKey {
   id          String       @id @default(uuid()) @db.Uuid
   name        String

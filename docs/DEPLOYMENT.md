@@ -49,6 +49,9 @@ settler key is worker-only and belongs in the root-owned, mode 0600
 never be copied into API configuration, logs, or responses. All other TrustMe
 settings remain in `/etc/trustme/trustme.env`, which every service reads. The
 deployer key is used only by the deployment script.
+`TURNSTILE_SECRET_KEY` configures server-side Cloudflare Turnstile verification.
+`TURNSTILE_SITE_KEY` is the public site key returned to the mobile/web client.
+Both must be set to enable the human-verification gate.
 `WALLETCONNECT_PROJECT_ID` enables external-wallet connection on web through
 the QR modal and on native through a deep link into the installed wallet. The
 allowed-domains list in WalletConnect Cloud must include

@@ -2,6 +2,7 @@ import type { Platform } from 'react-native';
 
 export const appleWebClientId = process.env.EXPO_PUBLIC_APPLE_WEB_CLIENT_ID || undefined;
 export const appleWebStateKey = 'trustme.appleWebState';
+export const appleWebHumanTokenKey = 'trustme.appleWebHumanToken';
 
 export function isAppleWebSignInAvailable(platform: typeof Platform['OS'], clientId: string | undefined): boolean {
   return platform === 'web' && typeof clientId === 'string' && clientId.trim().length > 0;
