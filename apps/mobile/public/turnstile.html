@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Human verification</title>
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"></script>
+    <style>
+      html, body { margin: 0; min-height: 70px; background: transparent; }
+      body { display: flex; align-items: center; justify-content: center; overflow: hidden; }
+    </style>
+  </head>
+  <body>
+    <div id="turnstile"></div>
+    <script>
+      (() => {
+        const parameters = new URLSearchParams(window.location.search);
+        const rawSiteKey = parameters.get('sitekey') || '';
+        const siteKey = /^[A-Za-z0-9_-]+$/.test(rawSiteKey) ? rawSiteKey : '';
+        const theme = parameters.get('theme') === 'dark' ? 'dark' : 'light';
+        const post = (message) => {
+          const value = JSON.stringify(message);
+          window.ReactNativeWebView?.postMessage(value);
+          window.parent?.postMessage(message, '*');
+        };
+        const render = () => {
+          if (!siteKey || !window.turnstile) {
+            post({ type: 'turnstile-error' });
+            return;
+          }
+          window.turnstile.render(document.getElementById('turnstile'), {
+            sitekey: siteKey,
+            theme,
+            callback: (token) => post({ type: 'turnstile', token }),
+            'expired-callback': () => post({ type: 'turnstile-error' }),
+            'error-callback': () => post({ type: 'turnstile-error' }),
+          });
+        };
+        if (window.turnstile) render();
+        else window.addEventListener('load', render, { once: true });
+      })();
+    </script>
+  </body>
+</html>

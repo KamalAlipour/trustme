@@ -246,6 +246,11 @@ export const fa = (unit: DisplayUnit): Translations => ({
   signInWithApple: 'ورود با اپل',
   signInWithAppleShort: 'اپل',
   socialSignInUnavailable: 'ورود اجتماعی در حال حاضر در دسترس نیست.',
+  humanCheck: {
+    title: 'تأیید کنید ربات نیستید',
+    failed: 'تأیید ناموفق بود؛ دوباره تلاش کنید.',
+    required: 'برای ادامه، بررسی بالا را کامل کنید',
+  },
   or: 'یا',
   unlockTitle: 'باز کردن قفل تراست کوپن',
   unlockInstructions: 'برای باز کردن نشست، از Face ID، اثر انگشت یا رمز دستگاه استفاده کنید.',

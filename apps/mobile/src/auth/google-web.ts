@@ -2,6 +2,7 @@ import type { Platform } from 'react-native';
 
 export const googleWebClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || undefined;
 export const googleWebStateKey = 'trustme.googleWebState';
+export const googleWebHumanTokenKey = 'trustme.googleWebHumanToken';
 
 export function isGoogleWebSignInAvailable(platform: typeof Platform['OS'], clientId: string | undefined): boolean {
   return platform === 'web' && typeof clientId === 'string' && clientId.trim().length > 0;

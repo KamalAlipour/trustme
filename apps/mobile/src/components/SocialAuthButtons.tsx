@@ -6,8 +6,9 @@ import * as Google from 'expo-auth-session/providers/google';
 import * as WebBrowser from 'expo-web-browser';
 import { useTranslation } from '../i18n';
 import { isAppleSignInAvailable, isGoogleSignInAvailable, socialClientIds } from '../auth/social';
-import { appleWebClientId, appleWebStateKey, buildAppleAuthorizeUrl, isAppleWebSignInAvailable } from '../auth/apple-web';
-import { buildGoogleAuthorizeUrl, googleWebClientId, googleWebStateKey, isGoogleWebSignInAvailable } from '../auth/google-web';
+import { appleWebClientId, appleWebHumanTokenKey, appleWebStateKey, buildAppleAuthorizeUrl, isAppleWebSignInAvailable } from '../auth/apple-web';
+import { buildGoogleAuthorizeUrl, googleWebClientId, googleWebHumanTokenKey, googleWebStateKey, isGoogleWebSignInAvailable } from '../auth/google-web';
+import { ApiError } from '../api/client';
 import { AppleIcon, GoogleIcon } from './BrandIcons';
 import { styles } from '../styles';
 
@@ -20,6 +21,8 @@ function GoogleNativeButton({
   onError,
   googleWebAvailable,
   signInWithGoogleWeb,
+  disabled,
+  onHumanVerificationFailure,
 }: {
   busy: boolean;
   setBusy: React.Dispatch<React.SetStateAction<boolean>>;
@@ -27,6 +30,8 @@ function GoogleNativeButton({
   onError: (message: string) => void;
   googleWebAvailable: boolean;
   signInWithGoogleWeb: () => void;
+  disabled: boolean;
+  onHumanVerificationFailure: () => void;
 }) {
   const { t } = useTranslation();
   const [googleRequest, googleResponse, promptGoogle] = Google.useAuthRequest({
@@ -47,13 +52,16 @@ function GoogleNativeButton({
       return;
     }
     setBusy(true);
-    void onGoogleToken(idToken).catch(() => onError(t.socialSignInUnavailable)).finally(() => setBusy(false));
-  }, [googleResponse, onGoogleToken, onError, setBusy, t.socialSignInUnavailable]);
+    void onGoogleToken(idToken).catch((cause) => {
+      if (cause instanceof ApiError && cause.status === 403 && cause.body.error === 'human_verification_failed') onHumanVerificationFailure();
+      onError(cause instanceof ApiError && cause.status === 403 && cause.body.error === 'human_verification_failed' ? t.humanCheck.failed : t.socialSignInUnavailable);
+    }).finally(() => setBusy(false));
+  }, [googleResponse, onGoogleToken, onError, onHumanVerificationFailure, setBusy, t.humanCheck.failed, t.socialSignInUnavailable]);
 
   return (
     <Pressable
       accessibilityLabel={t.signInWithGoogle}
-      disabled={(Platform.OS !== 'web' && googleRequest === null) || busy}
+      disabled={(Platform.OS !== 'web' && googleRequest === null) || busy || disabled}
       onPress={() => {
         if (busy) return;
         if (googleWebAvailable) {
@@ -74,10 +82,16 @@ export function SocialAuthButtons({
   onError,
   onGoogleToken,
   onAppleToken,
+  humanToken,
+  disabled = false,
+  onHumanVerificationFailure = () => undefined,
 }: {
   onError: (message: string) => void;
   onGoogleToken: (idToken: string) => Promise<void>;
   onAppleToken: (idToken: string, displayName?: string) => Promise<void>;
+  humanToken?: string | null;
+  disabled?: boolean;
+  onHumanVerificationFailure?: () => void;
 }) {
   const { t } = useTranslation();
   const googleAvailable = isGoogleSignInAvailable();
@@ -99,8 +113,9 @@ export function SocialAuthButtons({
         return;
       }
       await onAppleToken(credential.identityToken, displayName);
-    } catch {
-      onError(t.socialSignInUnavailable);
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 403 && cause.body.error === 'human_verification_failed') onHumanVerificationFailure();
+      onError(cause instanceof ApiError && cause.status === 403 && cause.body.error === 'human_verification_failed' ? t.humanCheck.failed : t.socialSignInUnavailable);
     } finally {
       setBusy(false);
     }
@@ -123,6 +138,7 @@ export function SocialAuthButtons({
       const state = `google:${randomBytes(16)}`;
       const nonce = randomBytes(16);
       window.sessionStorage.setItem(googleWebStateKey, state);
+      if (humanToken !== undefined && humanToken !== null) window.sessionStorage.setItem(googleWebHumanTokenKey, humanToken);
       window.location.assign(buildGoogleAuthorizeUrl({
         clientId: googleWebClientId as string,
         redirectUri: window.location.origin,
@@ -147,6 +163,7 @@ export function SocialAuthButtons({
       const state = `apple:${randomBytes(16)}`;
       const nonce = randomBytes(16);
       window.sessionStorage.setItem(appleWebStateKey, state);
+      if (humanToken !== undefined && humanToken !== null) window.sessionStorage.setItem(appleWebHumanTokenKey, humanToken);
       window.location.assign(buildAppleAuthorizeUrl({
         clientId: appleWebClientId as string,
         redirectUri: window.location.origin,
@@ -172,10 +189,12 @@ export function SocialAuthButtons({
           onError={onError}
           googleWebAvailable={googleWebAvailable}
           signInWithGoogleWeb={signInWithGoogleWeb}
+          disabled={disabled}
+          onHumanVerificationFailure={onHumanVerificationFailure}
         /> : null}
         {appleAvailable ? <Pressable
           accessibilityLabel={t.signInWithApple}
-          disabled={busy}
+          disabled={busy || disabled}
           onPress={() => {
             if (busy) return;
             if (appleWebAvailable) {
