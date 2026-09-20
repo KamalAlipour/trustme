@@ -130,6 +130,7 @@ export type ApiDependencies = {
   logSmsCode?: (phone: string, code: string) => void;
   verifyGoogleIdToken?: import('./social-auth.js').MemberIdTokenVerifier;
   verifyAppleIdToken?: import('./social-auth.js').MemberIdTokenVerifier;
+  verifyHumanToken?: import('./human-verification.js').HumanVerifier;
   checkShahkarMatch?: typeof import('./shahkar.js').checkShahkarMatch;
   checkIbanMatch?: typeof import('./shahkar.js').checkIbanMatch;
   partnerChainReader?: import('./partner-router.js').ChainReader;
@@ -249,6 +250,7 @@ export function createApp(dependencies: ApiDependencies): express.Express {
     logEmailCode,
     ...(dependencies.verifyGoogleIdToken === undefined ? {} : { verifyGoogleIdToken: dependencies.verifyGoogleIdToken }),
     ...(dependencies.verifyAppleIdToken === undefined ? {} : { verifyAppleIdToken: dependencies.verifyAppleIdToken }),
+    ...(dependencies.verifyHumanToken === undefined ? {} : { verifyHumanToken: dependencies.verifyHumanToken }),
   }));
   const memberDependencies = {
     config,

@@ -293,8 +293,31 @@ export const openapiDocument = {
         responses: { '200': { description: 'Private reserve figures' }, '401': { description: 'Unauthorized' }, '403': { description: 'Insufficient scope' } },
       },
     },
-    '/v1/auth/register': { post: { responses: { '201': { description: 'Registered member and tokens' }, '409': { description: 'Phone already registered' } } } },
-    '/v1/auth/login': { post: { responses: { '200': { description: 'Member and tokens' }, '401': { description: 'Invalid phone or PIN' }, '423': { description: 'PIN temporarily locked' } } } },
+    '/v1/auth/register': {
+      post: {
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['phone', 'pin'], properties: { phone: { type: 'string' }, pin: { type: 'string', pattern: '^\\d{4}$' }, displayName: { type: 'string' }, email: { type: 'string', format: 'email' }, humanToken: { type: 'string', maxLength: 4096 } } } } } },
+        responses: { '201': { description: 'Registered member and tokens' }, '403': { description: 'Human verification failed' }, '409': { description: 'Phone already registered' } },
+      },
+    },
+    '/v1/auth/login': {
+      post: {
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['phone', 'pin'], properties: { phone: { type: 'string' }, pin: { type: 'string', pattern: '^\\d{4}$' }, humanToken: { type: 'string', maxLength: 4096 } } } } } },
+        responses: { '200': { description: 'Member and tokens' }, '401': { description: 'Invalid phone or PIN' }, '403': { description: 'Human verification failed' }, '423': { description: 'PIN temporarily locked' } },
+      },
+    },
+    '/v1/auth/google': {
+      post: {
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['idToken'], properties: { idToken: { type: 'string' }, displayName: { type: 'string' }, humanToken: { type: 'string', maxLength: 4096 } } } } } },
+        responses: { '200': { description: 'Member and tokens' }, '403': { description: 'Human verification failed' }, '503': { description: 'Provider disabled' } },
+      },
+    },
+    '/v1/auth/apple': {
+      post: {
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['idToken'], properties: { idToken: { type: 'string' }, displayName: { type: 'string' }, humanToken: { type: 'string', maxLength: 4096 } } } } } },
+        responses: { '200': { description: 'Member and tokens' }, '403': { description: 'Human verification failed' }, '503': { description: 'Provider disabled' } },
+      },
+    },
+    '/v1/auth/human-verification': { get: { responses: { '200': { description: 'Human-verification configuration', content: { 'application/json': { schema: { type: 'object', required: ['enabled', 'siteKey'], properties: { enabled: { type: 'boolean' }, siteKey: { type: 'string', nullable: true } } } } } } } } },
     '/v1/auth/refresh': { post: { responses: { '200': { description: 'Rotated tokens' }, '401': { description: 'Unauthorized' } } } },
     '/v1/auth/pin-reset/request': { post: { responses: { '202': { description: 'Reset requested' }, '503': { description: 'Email delivery unavailable' } } } },
     '/v1/auth/pin-reset/confirm': { post: { responses: { '200': { description: 'Reset PIN and tokens' }, '401': { description: 'Invalid code' } } } },
