@@ -77,6 +77,7 @@ export default function Login() {
   };
   const humanRequired = humanConfig?.enabled === true;
   const submitEnabled = humanConfig !== null && (!humanRequired || humanToken !== null);
+  const phoneSubmitEnabled = humanConfig !== null;
   const remaining = lockedUntil === null ? 0 : Math.max(0, lockedUntil - now);
   return (
     <Page>
@@ -105,7 +106,7 @@ export default function Login() {
           {humanToken === null ? <Text style={styles.muted}>{t.humanCheck.required}</Text> : null}
         </>
       ) : null}
-      <PinPad value={pin} onChange={setPin} {...(remaining === 0 && submitEnabled ? { onSubmit: submit } : {})} />
+      <PinPad value={pin} onChange={setPin} {...(remaining === 0 && phoneSubmitEnabled ? { onSubmit: submit } : {})} />
       {biometric ? <Text style={styles.muted}>{t.biometricSessionNotice}</Text> : null}
       {error ? <Text style={styles.danger}>{error}</Text> : null}
       {remaining > 0 ? <Text style={styles.muted}>{t.unlockIn(Math.ceil(remaining / 1000))}</Text> : null}

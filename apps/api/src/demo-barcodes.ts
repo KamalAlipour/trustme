@@ -90,8 +90,9 @@ async function purge(args: string[]): Promise<void> {
   const countValue = option(args, '--count');
   if (all === (countValue !== undefined)) throw new Error('purge requires exactly one of --count N or --all');
   const count = all ? undefined : positiveInteger(countValue, '--count');
+  const reviewPhones = (process.env.REVIEW_LOGIN_PHONES ?? '').split(',').map((phone) => phone.trim()).filter(Boolean);
   const users = await prisma.user.findMany({
-    where: { isDemo: true },
+    where: { isDemo: true, ...(reviewPhones.length === 0 ? {} : { OR: [{ phoneNumber: null }, { phoneNumber: { notIn: reviewPhones } }] }) },
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     ...(count === undefined ? {} : { take: count }),
     select: { id: true },
