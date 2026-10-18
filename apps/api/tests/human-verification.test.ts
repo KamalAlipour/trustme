@@ -150,6 +150,31 @@ describe('human verification gate', () => {
     expect(await prisma.humanVerificationEvent.findFirstOrThrow({ where: { outcome: 'failed_kept' } })).toMatchObject({ userId: created.id });
   });
 
+  it('lets a configured demo review phone log in without a challenge token', async () => {
+    const created = await user('+15550001020', true);
+    const app = createApp({ config: { ...config, reviewLoginPhones: ['+15550001020', '+15550001021'] }, prisma, ...dependencies, verifyHumanToken: async () => false });
+    const response = await request(app).post('/v1/auth/login').send({ phone: created.phoneNumber, pin: '2468' });
+    expect(response.status).toBe(200);
+    expect(await prisma.humanVerificationEvent.findFirstOrThrow({ where: { outcome: 'review_bypass' } })).toMatchObject({ userId: created.id });
+    const wrongPin = await request(app).post('/v1/auth/login').send({ phone: created.phoneNumber, pin: '4321' });
+    expect(wrongPin.status).toBe(401);
+  });
+
+  it('does not bypass the challenge for a non-demo account on a review phone', async () => {
+    const created = await user('+15550001021');
+    const app = createApp({ config: { ...config, reviewLoginPhones: ['+15550001021'] }, prisma, ...dependencies, verifyHumanToken: async () => false });
+    const response = await request(app).post('/v1/auth/login').send({ phone: created.phoneNumber, pin: '2468' });
+    expect(response.status).toBe(403);
+    expect(await prisma.user.findUnique({ where: { id: created.id } })).not.toBeNull();
+  });
+
+  it('does not delete a fresh account when the challenge token is missing', async () => {
+    const created = await user('+15550001022');
+    const response = await request(fixture({ verifyHumanToken: async () => false })).post('/v1/auth/login').send({ phone: created.phoneNumber, pin: '2468' });
+    expect(response.status).toBe(403);
+    expect(await prisma.user.findUnique({ where: { id: created.id } })).not.toBeNull();
+  });
+
   it('does not delete on a wrong PIN', async () => {
     const created = await user('+15550001010');
     const response = await request(fixture({ verifyHumanToken: async () => false })).post('/v1/auth/login').send({ phone: created.phoneNumber, pin: '4321', humanToken: 'bad' });

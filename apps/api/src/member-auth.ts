@@ -477,6 +477,12 @@ export function createMemberAuthRouter(dependencies: MemberAuthDependencies): ex
       const user = await prisma.user.findUnique({ where: { phoneNumber: body.phone } });
       if (!user) { await bcrypt.compare(body.pin, await dummyPinHash); throw genericLoginError; }
       await verifyMemberPin(prisma, user.id, body.pin);
+      if (user.isDemo && user.phoneNumber !== null && (config.reviewLoginPhones ?? []).includes(user.phoneNumber)) {
+        await recordHumanEvent('/login', 'review_bypass', request, user.id);
+        response.json(await tokenResponse(prisma, config, user.id, request.header('x-device-label') ?? 'Unknown device', installationIdFrom(request)));
+        return;
+      }
+      if (verifyHuman !== undefined && body.humanToken === undefined) throw humanVerificationFailed;
       if (!await challenge(request, body.humanToken)) {
         const deleted = await deleteEmptyAccount(prisma, user.id, 'login_challenge_failed');
         await recordHumanEvent('/login', deleted ? 'failed_deleted' : 'failed_kept', request, user.id);
