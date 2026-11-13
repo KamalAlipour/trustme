@@ -1,0 +1,23 @@
+version: 2
+updates:
+  # npm workspaces: the root lockfile covers apps/* and packages/*.
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "03:00"
+      timezone: Europe/Oslo
+    open-pull-requests-limit: 10
+    groups:
+      next-react:
+        patterns: ["next", "react", "react-dom", "eslint-config-next", "@next/*"]
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "03:00"
+      timezone: Europe/Oslo
