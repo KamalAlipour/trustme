@@ -78,6 +78,24 @@ install_trustme_ops() {
     /opt/trustme/ops/env/
 }
 
+# The admin UI runs as its own user with only non-secret settings, so a
+# compromise of the Next.js process cannot read trustme.env or other
+# trustme processes' environments.
+install_trustme_admin_env() {
+  if ! id trustme-admin >/dev/null 2>&1; then
+    useradd --system --no-create-home --shell /usr/sbin/nologin \
+      --gid trustme trustme-admin
+  fi
+  (
+    umask 0077
+    printf 'TRUSTME_API_URL=%s\nADMIN_PUBLIC_URL=%s\nADMIN_GOOGLE_CLIENT_ID=%s\n' \
+      "${TRUSTME_API_URL:-}" "${ADMIN_PUBLIC_URL:-}" "${ADMIN_GOOGLE_CLIENT_ID:-}" \
+      > /etc/trustme/admin.env
+  )
+  chown root:root /etc/trustme/admin.env
+  chmod 0600 /etc/trustme/admin.env
+}
+
 install_trustme_units() {
   local pg_unit="$1"
   local unit source destination
